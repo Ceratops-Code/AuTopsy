@@ -96,28 +96,6 @@ deliverables:
                 - "{build_dir}"
                 - --inno-compiler
                 - "{inno_compiler}"
-        exercise-media-editing:
-          requires:
-            capabilities: [uv]
-          parameters: [build_dir]
-          steps:
-            - run:
-                - uv
-                - run
-                - --project
-                - scripts
-                - --locked
-                - --python
-                - "3.12"
-                - --with
-                - cmake==3.31.10
-                - python
-                - scripts/build/windows/build_video_installer.py
-                - --test-existing-build
-                - --build-dir
-                - "{build_dir}"
-                - --test-name
-                - "^fork-media$"
         test:
           requires:
             capabilities: []

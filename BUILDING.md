@@ -489,10 +489,11 @@ Portable model and installer-producer tests run in the repository test operation
 source-only CI does not require an already-built Windows application.
 The package build operation takes explicit `build_dir` and `inno_compiler`
 inputs, so local builds can reuse their task-owned build and compiler paths.
-The separate `exercise-media-editing` operation takes `build_dir` and runs the
-existing guarded `fork-media` desktop case only when explicitly selected. It
-checks linked-media splits across video tracks and trims with unrelated audio
-before time zero, together with the saved-link, flag and export cases.
+Setting both `AUTOPSY_VIDEO_BUILD_DIR` and `AUTOPSY_VIDEO_TEST_NAME` adds an
+explicit native session to the repository test operation. For example,
+`^fork-media$` runs the existing guarded desktop case for linked-media splits
+across video tracks, trims with unrelated audio before zero, saved links, flags
+and exports. Reconfiguration without the selector removes that desktop session.
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
 an existing native build, defaulting to
 `.build/_windows-installer`. For a separate desktop test session,
