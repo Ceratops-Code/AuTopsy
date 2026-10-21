@@ -12,8 +12,8 @@ import sys
 
 if( sys.platform  == 'win32' ):
     print( "get-gui-structure.py, running on windows" )
-    toname = '\\\\.\\pipe\\ToSrvPipe'
-    fromname = '\\\\.\\pipe\\FromSrvPipe'
+    toname = '\\\\.\\pipe\\AuTopsyToSrvPipe'
+    fromname = '\\\\.\\pipe\\AuTopsyFromSrvPipe'
     EOL = '\r\n\0'
 else:
     print( "get-gui-structure.py, running on linux or mac" )

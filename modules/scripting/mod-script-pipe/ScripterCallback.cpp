@@ -47,7 +47,9 @@ DEFINE_VERSION_CHECK
 extern "C" DLL_API int ModuleDispatch(ModuleDispatchTypes type)
 {
    switch (type) {
-   case ModuleInitialize:
+   // Module loading precedes the first project. Publish the pipe only after
+   // command handlers have a project to serve, rather than dropping early calls.
+   case AppInitialized:
       ScriptCommandRelay::StartScriptServer(RegScriptServerFunc);
       break;
    default:

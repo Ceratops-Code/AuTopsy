@@ -98,6 +98,13 @@ public:
    bool Import(const FilePath& fileName, bool addToHistory = true);
    bool Import(wxArrayString fileNames, bool addToHistory = true);
 
+   // A soundtrack must retain its timing relative to the video. Reuse normal
+   // audio import and Undo handling, bypassing music tempo analysis/stretching.
+   bool ImportVideoAudio(const FilePath& fileName)
+   {
+      return ImportWithoutTempoDetection({ fileName }, false);
+   }
+
    void Compact();
 
    void AddImportedTracks(const FilePath &fileName,

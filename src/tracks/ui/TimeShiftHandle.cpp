@@ -18,6 +18,7 @@ Paul Licameli split from TrackPanel.cpp
 #include "../../RefreshCode.h"
 #include "Snap.h"
 #include "SyncLock.h"
+#include "../../clip-groups/GroupAudioClips.h"
 #include "Track.h"
 #include "../../TrackArt.h"
 #include "../../TrackArtist.h"
@@ -333,6 +334,8 @@ void ClipMoveState::Init(
       }
    }
 
+   ClipGroups::ExpandMovingClipGroups(state, trackList);
+
    // Sync lock propagation of unfixing of intervals
    if ( syncLocked ) {
       bool change = true;
@@ -370,6 +373,7 @@ void ClipMoveState::Init(
             }
          }
 
+         change = ClipGroups::ExpandMovingClipGroups(state, trackList) || change;
          // ... and repeat if any other interval became unfixed in a
          // shifter that propagates
       }

@@ -16,6 +16,7 @@ Paul Licameli split from TrackControls.cpp
 #include "../../RefreshCode.h"
 #include "Project.h"
 #include "ProjectHistory.h"
+#include "ProjectAudioIO.h"
 #include "../../ProjectWindows.h"
 #include "../../TrackArtist.h"
 #include "CommonTrackInfo.h"
@@ -73,6 +74,8 @@ enum
    OnMoveDownID,
    OnMoveTopID,
    OnMoveBottomID,
+   OnAddTrackBeforeID,
+   OnAddTrackAfterID,
 };
 
 class TrackMenuTable
@@ -90,6 +93,7 @@ public:
 private:
    void OnSetName(wxCommandEvent &);
    void OnMoveTrack(wxCommandEvent &event);
+   void OnInsertAudioTrack(wxCommandEvent &event);
 
    void InitUserData(void *pUserData) override;
 
@@ -114,6 +118,10 @@ void TrackMenuTable::InitUserData(void *pUserData)
 }
 
 BEGIN_POPUP_MENU(TrackMenuTable)
+   static const auto enableWhenIdle = [](PopupMenuHandler &handler, wxMenu &menu, int id) {
+      const auto *data = static_cast<TrackMenuTable &>(handler).mpData;
+      menu.Enable(id, !ProjectAudioIO::Get(data->project).IsAudioActive());
+   };
    static const auto enableIfCanMove = [](bool up){ return
       [up]( PopupMenuHandler &handler, wxMenu &menu, int id ){
          auto pData = static_cast<TrackMenuTable&>( handler ).mpData;
@@ -124,7 +132,14 @@ BEGIN_POPUP_MENU(TrackMenuTable)
       };
    };
       //First section in the menu doesn't need BeginSection/EndSection
-      AppendItem( "Name", OnSetNameID, XXO("Re&name Track..."), POPUP_MENU_FN( OnSetName ) );
+       AppendItem( "Name", OnSetNameID, XXO("Re&name Track..."), POPUP_MENU_FN( OnSetName ) );
+
+   BeginSection("InsertAudioTrack");
+      AppendItem("AddTrackBefore", OnAddTrackBeforeID, XXO("Add Audio Track &Before This Track"),
+         POPUP_MENU_FN(OnInsertAudioTrack), enableWhenIdle);
+      AppendItem("AddTrackAfter", OnAddTrackAfterID, XXO("Add Audio Track &After This Track"),
+         POPUP_MENU_FN(OnInsertAudioTrack), enableWhenIdle);
+   EndSection();
 
    BeginSection( "Move" );
       AppendItem( "Up",
@@ -259,6 +274,13 @@ void TrackMenuTable::OnMoveTrack(wxCommandEvent &event)
    // MoveTrack already refreshed TrackPanel, which means repaint will happen.
    // This is a harmless redundancy:
    mpData->result = RefreshCode::RefreshAll;
+}
+
+void TrackMenuTable::OnInsertAudioTrack(wxCommandEvent &event)
+{
+   if (TrackUtilities::InsertAudioTrackRelativeTo(mpData->project, mpData->track,
+      event.GetId() == OnAddTrackBeforeID))
+      mpData->result = RefreshCode::RefreshAll;
 }
 
 unsigned CommonTrackControls::DoContextMenu(

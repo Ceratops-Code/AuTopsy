@@ -15,6 +15,34 @@
 #include "TrackFocus.h"
 #include "TrackPanel.h"
 #include "Viewport.h"
+#include "ProjectAudioIO.h"
+#include "ProjectRate.h"
+#include "QualitySettings.h"
+#include "SelectUtilities.h"
+#include "WaveTrack.h"
+
+bool TrackUtilities::InsertAudioTrackRelativeTo(
+   AudacityProject &project, Track &anchor, bool before)
+{
+   auto &tracks = TrackList::Get(project);
+   auto position = tracks.Find(&anchor);
+   if (position == tracks.end() || ProjectAudioIO::Get(project).IsAudioActive()) return false;
+   const Track *next = before ? &anchor : *++position;
+   const auto *wave = dynamic_cast<const WaveTrack *>(&anchor);
+   auto track = WaveTrackFactory::Get(project).Create(wave ? wave->NChannels() : 1,
+      QualitySettings::SampleFormatChoice(), ProjectRate::Get(project).GetRate());
+   track->SetName(tracks.MakeUniqueTrackName(WaveTrack::GetDefaultAudioTrackNamePreference()));
+   tracks.Insert(next, track, true);
+   SelectUtilities::SelectNone(project);
+   track->SetSelected(true);
+   ProjectHistory::Get(project).PushState(
+      before ? XO("Added audio track before the selected track") : XO("Added audio track after the selected track"),
+      XO("Add Audio Track"));
+   TrackFocus::Get(project).Set(track.get(), true);
+   Viewport::Get(project).ShowTrack(*track);
+   Viewport::Get(project).HandleResize();
+   return true;
+}
 
 void TrackUtilities::DoRemoveTracks(AudacityProject &project) {
    auto &tracks = TrackList::Get(project);

@@ -427,9 +427,9 @@ void OnImportRaw(const CommandContext &context)
 
 void OnExit(const CommandContext &WXUNUSED(context) )
 {
-   // Simulate the application Exit menu item
+   // Do not destroy projects while their scripting/batch command is unwinding.
    wxCommandEvent evt{ wxEVT_MENU, wxID_EXIT };
-   wxTheApp->ProcessEvent( evt );
+   wxPostEvent(wxTheApp, evt);
 }
 
 void OnExportFLAC(const CommandContext &context)
@@ -558,7 +558,7 @@ auto FileMenu()
          // pull it out
          // and put it in the Audacity menu for us based on its ID.
          /* i18n-hint: (verb) It's item on a menu. */
-         Command( wxT("Exit"), XXO("&Quit Audacity"), OnExit,
+         Command( wxT("Exit"), XXO("&Quit AuTopsy"), OnExit,
             AlwaysEnabledFlag, wxT("Ctrl+Q") )
       )
    ) };

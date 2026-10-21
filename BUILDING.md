@@ -1,4 +1,4 @@
-# Building Audacity
+# Building AuTopsy
 
 ## Prerequisites
 
@@ -82,17 +82,12 @@ You will also be able to change to the scripts directory and run ./graph.pl to g
 
 1. Ensure the Python installer option `Add Python 3.x to PATH` is checked. Go to Windows Settings "Add or Remove Programs" and check the `Add Python to environment variables` in Python settings if Python is not in `PATH`.
   
-2. Clone Audacity from the Audacity GitHub project. 
-  
-   For example, in the **git-bash** run:
-
-    ```
-    $ git clone https://github.com/audacity/audacity/
-    ```
+2. Use this AuTopsy source checkout, which includes the video extension
+   and is based on the upstream audacity3 branch.
 
 2. Open CMake GUI. 
    
-   Set the **Where is the source code** to the location where Audacity was cloned. 
+   Set the **Where is the source code** to the location of this AuTopsy checkout.
    
    Set **Where to build the binaries** to the location you want to place your build in. It is preferred that this location is not within the directory with the source code.
 
@@ -322,3 +317,76 @@ Set one of the following environment variables to the path to the VST3 SDK (i.e.
 or copy the VST3 SDK to `vst3sdk` directory in the Audacity source tree.
 
 Pass `-Daudacity_use_vst3sdk=system` to CMake. CMake will build the SDK during the configuration.
+
+## Video reference preview (Windows fork)
+
+The video module is opt-in, so the base build does not require video SDKs.
+The configuration below enables the AuTopsy video features explicitly.
+
+Use the C++ workload and Windows SDK from Visual Studio 2022, and an extracted
+64-bit libmpv development package matching the build architecture. The package
+must contain include/mpv/client.h and libmpv-2.dll at its top level.
+Windows package links are listed on [mpv's installation page](https://mpv.io/installation/).
+Also provide the Windows x64 FFmpeg 8.1 shared runtime, available from
+[BtbN's FFmpeg builds](https://github.com/BtbN/FFmpeg-Builds/releases).
+Keep ffmpeg.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
+swresample-6.dll, swscale-9.dll, avfilter-11.dll, avdevice-62.dll, and the
+distribution's LICENSE.txt together in the selected runtime directory.
+The command-line encoder is shipped beside AuTopsy and runs without a
+console window. libmpv requires the C numeric runtime locale; Windows language
+setup keeps that locale stable after capturing the regional display separator.
+
+Configure the normal Audacity build with these additional options:
+
+    cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -Daudacity_has_tests=ON -Daudacity_has_video_preview=ON -Daudacity_video_mpv_sdk="<extracted-mpv-sdk>" -Daudacity_video_ffmpeg_runtime="<ffmpeg-runtime>"
+    cmake --build _build --config Release --parallel 4
+    ctest --test-dir _build -C Release -R "^(video-playback|video-timeline|fork-groups|fork-tracks|fork-video|fork-preview)$" --output-on-failure
+    cmake --install _build --config Release --prefix "$env:ProgramFiles/AuTopsy"
+
+The executable is AuTopsy.exe; internal CMake target names remain upstream's.
+Build the default target before running the app integration cases: it includes
+the runtime modules, including modules that link to the application executable.
+Building only the main executable after renaming it leaves those modules stale.
+The install command is shown for PowerShell and may need an elevated terminal.
+Set audacity_has_video_preview=OFF to build without the video feature or SDKs.
+The preview code is currently Windows-only; other platforms keep their existing
+build behavior. The transport CTest case covers transport ownership, repeated
+calls, interruptions before and after each player command, asynchronous seeks,
+loop boundaries, frame quantization, and invalid clock values.
+The timeline case exercises the owned value model without a host editor.
+The fork cases use public scripting commands against synthetic media in a
+marked temporary work directory. Python 3, Pillow (for the owned-window screenshot),
+and the runtime distribution's ffprobe.exe are needed for those cases;
+ffprobe is a test tool, not an installed
+runtime dependency. Cases check project round trips, group motion, track order,
+picture copying/rendering, silence, rejected edits and overwrite protection.
+The runner owns its marked case directories and shared preview cache under
+the selected test work root. Fresh runs replace case scratch data. Completed
+result records retain their original run, executable and check identities in
+_accepted, with at most three records per case/input and 36 records overall;
+playback observations are included. Receipts do not resume or skip test work.
+Portable Settings is removed when the owned app exits.
+
+The SDK remains at the caller-selected path and is read during the build.
+CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
+ffmpeg.exe and
+FFmpeg-LICENSE.txt beside the built executable. It
+copies these files on every app build, restoring missing files and replacing
+them when building with another SDK or compatible FFmpeg package. Build outputs belong to the chosen
+build directory; no version copies or recovery checkpoints are created by this
+feature. The decoder reads the selected video without writing player
+configuration, logs or cache files. The project owns its video source reference
+and clip metadata in its existing .aup3 XML storage. No media copy or separate
+database is introduced. Soundtrack audio uses the existing project audio storage,
+Undo history, and cleanup. Closing the project releases its player and window.
+
+For isolated test preferences, use the existing portable-settings mode: the
+literal directory name Portable Settings is required beside the executable.
+AuTopsy owns that profile and its configured temporary audio directory.
+Installation excludes this test profile and test executables. Installed
+preferences use autopsy.cfg under the user's AuTopsy data directory;
+temporary project audio uses its SessionData directory. Audacity's profile is
+separate.
+
+Keep the libmpv package's applicable license and corresponding-source material
+with any distributed build, alongside Audacity's existing license material.

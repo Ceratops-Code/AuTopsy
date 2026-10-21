@@ -27,11 +27,47 @@ code out of ModuleManager.
 #include "AppCommandEvent.h"
 #include "Project.h"
 #include <wx/app.h>
+#include <exception>
+#include <future>
+#include <string>
 #include <thread>
+#include <utility>
 
 /// This is the function which actually obeys one command.
 static int ExecCommand(wxString *pIn, wxString *pOut, bool fromMain)
 {
+   if (!fromMain) {
+      // Project references, command construction, and their final destruction
+      // belong to the GUI thread. Transfer only UTF-8 values across threads;
+      // otherwise Close can make the worker the last owner of a GUI project.
+      const auto requestBytes = pIn->ToUTF8();
+      std::string request = requestBytes
+         ? std::string{ requestBytes.data(), requestBytes.length() } : std::string{};
+      auto completion = std::make_shared<std::promise<std::string>>();
+      auto response = completion->get_future();
+      wxTheApp->CallAfter([request = std::move(request), completion] {
+         try {
+            wxString command = wxString::FromUTF8(request.c_str(), request.size());
+            wxString reply;
+            ExecCommand(&command, &reply, true);
+            const auto replyBytes = reply.ToUTF8();
+            completion->set_value(replyBytes
+               ? std::string{ replyBytes.data(), replyBytes.length() } : std::string{});
+         }
+         catch (const std::exception &error) {
+            completion->set_value(std::string{ "Scripting dispatch failed: " } +
+               error.what() + "\nBatchCommand finished: Failed!\n");
+         }
+         catch (...) {
+            completion->set_value("Scripting dispatch failed with an unknown exception.\n"
+               "BatchCommand finished: Failed!\n");
+         }
+      });
+      const auto reply = response.get();
+      *pOut = wxString::FromUTF8(reply.c_str(), reply.size());
+      return 0;
+   }
+
    if (auto pProject = ::GetActiveProject().lock()) {
       CommandBuilder builder(*pProject, *pIn);
       if (builder.WasValid())
@@ -41,24 +77,15 @@ static int ExecCommand(wxString *pIn, wxString *pOut, bool fromMain)
          AppCommandEvent ev;
          ev.SetCommand(cmd);
 
-         if (fromMain)
-         {
-            // Use SafelyProcessEvent, which stops exceptions, because this is
-            // expected to be reached from within the XLisp runtime
-            wxTheApp->SafelyProcessEvent(ev);
-         }
-         else
-         {
-            // Send the event to the main thread
-            wxTheApp->AddPendingEvent(ev);
-         }
+         // Both script entry points now execute commands on the GUI thread.
+         wxTheApp->SafelyProcessEvent(ev);
       }
 
       // Wait for and retrieve the response
       *pOut = builder.GetResponse();
    }
    else
-      *pOut = wxString{};
+      *pOut = wxT("No project is open.\nBatchCommand finished: Failed!\n");
 
    return 0;
 }

@@ -57,8 +57,8 @@ INFILE = os.path.splitext(INFILE)[0]
 # Platform specific constants
 if sys.platform == 'win32':
     print("recording-test.py, running on windows")
-    PIPE_TO_AUDACITY = '\\\\.\\pipe\\ToSrvPipe'
-    PIPE_FROM_AUDACITY = '\\\\.\\pipe\\FromSrvPipe'
+    PIPE_TO_AUDACITY = '\\\\.\\pipe\\AuTopsyToSrvPipe'
+    PIPE_FROM_AUDACITY = '\\\\.\\pipe\\AuTopsyFromSrvPipe'
     EOL = '\r\n\0'
 else:
     print("recording-test.py, running on linux or mac")

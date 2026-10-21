@@ -585,11 +585,11 @@ if( NOT CMAKE_INSTALL_LIBDIR STREQUAL "lib" AND NOT EXISTS "${CMAKE_BINARY_DIR}/
    file( CREATE_LINK "${CMAKE_BINARY_DIR}/lib" "${CMAKE_BINARY_DIR}/lib64" SYMBOLIC )
 endif()
 
-# Define Audacity's name
+# Define this fork's executable name
 if( CMAKE_SYSTEM_NAME MATCHES "Darwin|Windows" )
-   set( AUDACITY_NAME "Audacity" )
+   set( AUDACITY_NAME "AuTopsy" )
 else()
-   set( AUDACITY_NAME "audacity" )
+   set( AUDACITY_NAME "autopsy" )
 endif()
 
 # Create short and full version strings

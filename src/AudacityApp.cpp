@@ -161,6 +161,8 @@ It handles initialization and termination by subclassing wxApp.
 
 
 #include "../images/Audacity-splash.xpm"
+#include <wx/ffile.h>
+#include <cstdio>
 
 #include <thread>
 
@@ -815,7 +817,7 @@ static wxArrayString ofqueue;
 // of Audacity.
 //
 
-#define IPC_APPL wxT("audacity")
+#define IPC_APPL wxT("autopsy")
 #define IPC_TOPIC wxT("System")
 
 class IPCConn final : public wxConnection
@@ -1325,7 +1327,7 @@ void AudacityApp::ShowSplashScreen() {
    mSplashScreen->SetPosition(wndRect.GetTopLeft());
    // Centered on whichever screen it is on.
    mSplashScreen->Center();
-   mSplashScreen->SetTitle(_("Audacity is starting up..."));
+   mSplashScreen->SetTitle(_("AuTopsy is starting up..."));
    SetTopWindow(mSplashScreen.get());
    mSplashScreen->Raise();
 }
@@ -1589,7 +1591,7 @@ bool AudacityApp::InitPart2()
 
    if (parser->Found(wxT("v")))
    {
-      wxPrintf("Audacity v%s\n", AUDACITY_VERSION_STRING);
+      wxPrintf("AuTopsy v%s\n", AUDACITY_VERSION_STRING);
       exit(0);
    }
 
@@ -1992,7 +1994,27 @@ bool AudacityApp::InitTempDir()
 
 bool AudacityApp::CreateSingleInstanceChecker(const wxString &dir)
 {
-   wxString name = wxString::Format(wxT("audacity-lock-%s"), wxGetUserId());
+   wxString name = wxString::Format(wxT("autopsy-lock-%s"), wxGetUserId());
+   wxString service = IPC_APPL;
+   wxString testRoot;
+   if (wxGetEnv("AUTOPSY_BEHAVIOR_ROOT", &testRoot)) {
+      // A test process may coexist only with its own portable profile and
+      // audio directory. Never relax locking for ordinary installed sessions.
+      auto portable = wxFileName::DirName(wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath());
+      portable.AppendDir("Portable Settings");
+      auto settings = wxFileName::DirName(FileNames::DataDir());
+      auto temporary = wxFileName::DirName(dir); temporary.MakeAbsolute();
+      auto root = wxFileName::DirName(testRoot); root.MakeAbsolute();
+      wxFFile marker(settings.GetPathWithSep() + "_autopsy_tests", "rb");
+      wxString owner;
+      if (!settings.SameAs(portable) || !marker.IsOpened() || !marker.ReadAll(&owner) || owner != testRoot ||
+          !temporary.GetPathWithSep().Lower().StartsWith(root.GetPathWithSep().Lower())) {
+         std::fprintf(stderr, "AuTopsy behavior tests require their owned portable profile and private audio directory.\n");
+         return false;
+      }
+      name = wxString::Format("autopsy-behavior-tests-lock-%s", wxGetUserId());
+      service = "autopsy-behavior-tests";
+   }
    mChecker.reset();
    auto checker = std::make_unique<wxSingleInstanceChecker>();
 
@@ -2026,7 +2048,7 @@ bool AudacityApp::CreateSingleInstanceChecker(const wxString &dir)
 
       if (parser->Found(wxT("v")))
       {
-         wxPrintf("Audacity v%s\n", AUDACITY_VERSION_STRING);
+         wxPrintf("AuTopsy v%s\n", AUDACITY_VERSION_STRING);
          return false;
       }
 
@@ -2058,7 +2080,7 @@ bool AudacityApp::CreateSingleInstanceChecker(const wxString &dir)
       // where the server may not have been fully initialized.
       for (int i = 0; i < 50; i++)
       {
-         std::unique_ptr<wxConnectionBase> conn{ client.MakeConnection(wxEmptyString, IPC_APPL, IPC_TOPIC) };
+         std::unique_ptr<wxConnectionBase> conn{ client.MakeConnection(wxEmptyString, service, IPC_TOPIC) };
          if (conn)
          {
             bool ok = false;
@@ -2105,7 +2127,7 @@ bool AudacityApp::CreateSingleInstanceChecker(const wxString &dir)
    }
 
    // Create the DDE IPC server
-   mIPCServ = std::make_unique<IPCServ>(IPC_APPL);
+   mIPCServ = std::make_unique<IPCServ>(service);
    mChecker = std::move(checker);
    return true;
 }
@@ -2344,7 +2366,7 @@ bool AudacityApp::CreateSingleInstanceChecker(const wxString &dir)
    // Display Audacity's version if requested
    if (parser->Found(wxT("v")))
    {
-      wxPrintf("Audacity v%s\n", AUDACITY_VERSION_STRING);
+      wxPrintf("AuTopsy v%s\n", AUDACITY_VERSION_STRING);
 
       return false;
    }
@@ -2465,7 +2487,7 @@ std::unique_ptr<wxCmdLineParser> AudacityApp::ParseCommandLine()
    parser->AddSwitch(wxT("t"), wxT("test"), _("run self diagnostics"));
 
    /*i18n-hint: This displays the Audacity version */
-   parser->AddSwitch(wxT("v"), wxT("version"), _("display Audacity version"));
+   parser->AddSwitch(wxT("v"), wxT("version"), _("display AuTopsy version"));
 
    /*i18n-hint: This is a list of one or more files that Audacity
     *           should open upon startup */

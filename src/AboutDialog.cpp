@@ -74,7 +74,9 @@ hold information about one contributor to Audacity.
 // To substitute into many other translatable strings
 static const auto ProgramName =
    //XO("Audacity");
-   Verbatim("Audacity");
+   Verbatim("AuTopsy");
+// Credits, the upstream website, and trademark notices retain their real owner.
+static const auto UpstreamProgramName = Verbatim("Audacity");
 
 void AboutDialog::CreateCreditsList()
 {
@@ -384,7 +386,7 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
       << wxString(AUDACITY_VERSION_STRING)
       << wxT("</center></h3>")
       /* i18n-hint: The program's name substitutes for %s */
-      << XO("%s the free, open source, cross-platform software for recording and editing sounds.")
+       << XO("%s is a Windows fork of Audacity with synchronized video reference preview.")
             .Format(ProgramName)
 
       << wxT("<h3>")
@@ -393,7 +395,7 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
 
       << wxT("<p><b>")
       /* i18n-hint: The program's name substitutes for %s */
-      << XO("%s Team Members").Format( ProgramName )
+       << XO("%s Team Members").Format( UpstreamProgramName )
       << wxT("</b><br>")
       << GetCreditsByRole(roleTeamMember)
 
@@ -401,8 +403,8 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
       << XO("Emeritus:")
       << wxT("</b><br>")
       /* i18n-hint: The program's name substitutes for %s */
-      << XO("Distinguished %s Team members, not currently active")
-         .Format( ProgramName )
+       << XO("Distinguished %s Team members, not currently active")
+          .Format( UpstreamProgramName )
       << wxT("<br><br>")
       << GetCreditsByRole(roleEmeritusTeam)
 
@@ -440,7 +442,7 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
 
       << wxT("<p><br>")
       /* i18n-hint: The program's name substitutes for %s */
-      << XO("%s website: ").Format( ProgramName )
+       << XO("%s website: ").Format( UpstreamProgramName )
       << wxT("[[https://www.audacityteam.org/|https://www.audacityteam.org/]]")
 
       << wxT("<p><br>&nbsp; &nbsp; ")
@@ -448,15 +450,15 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
        and a "copyright" symbol for the second */
       << XO("%s software is copyright %s 1999-2026 %s Team.")
          .Format(
-            Verbatim("<b>%s<sup>&reg;</sup></b>").Format( ProgramName ),
-            wxT("&copy;"),
-            ProgramName )
+             Verbatim("<b>%s<sup>&reg;</sup></b>").Format( UpstreamProgramName ),
+             wxT("&copy;"),
+             UpstreamProgramName )
       << wxT("<br>")
 
       << wxT("&nbsp; &nbsp; ")
       /* i18n-hint Audacity's name substitutes for %s */
       << XO("The name %s is a registered trademark.")
-         .Format( Verbatim("<b>%s</b>").Format( ProgramName ) )
+          .Format( Verbatim("<b>%s</b>").Format( UpstreamProgramName ) )
       << wxT("<br><br>")
       << wxT("</center>")
    ;

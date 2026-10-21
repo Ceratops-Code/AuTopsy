@@ -27,6 +27,8 @@
 #include "../commands/Command.h"
 #include "Viewport.h"
 
+#include <algorithm>
+
 CommandHandler::CommandHandler()
 {
 }
@@ -40,7 +42,7 @@ void CommandHandler::OnReceiveCommand(AppCommandEvent &event)
    // First retrieve the actual command from the event 'envelope'.
    OldStyleCommandPointer cmd = event.GetCommand();
 
-   if (const auto pProject = GetActiveProject().lock()) {
+   if (const auto pProject = cmd->mProject.weak_from_this().lock()) {
       // Then apply it to current application & project.  Note that the
       // command may change the context - for example, switching to a
       // different project.
@@ -50,7 +52,11 @@ void CommandHandler::OnReceiveCommand(AppCommandEvent &event)
       });
       wxUnusedVar(result);
 
-      // Redraw the project
-      Viewport::Get(context.project).Redraw();
+      // Keep the original redraw target when a command switches projects,
+      // but never redraw its window after Close or Quit has removed it.
+      const auto openProjects = AllProjects{};
+      if (std::find(openProjects.begin(), openProjects.end(), pProject)
+            != openProjects.end())
+         Viewport::Get(*pProject).Redraw();
    }
 }

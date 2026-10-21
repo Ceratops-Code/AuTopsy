@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "rules": [
+        "*"
+      ],
+      "decision": "Add repository-scoped guidance that keeps AudaciTops features and behavior tests maintainable across Audacity audacity3 updates.",
+      "reason": "The user explicitly requested this policy before continuing feature work and plans to accept future upstream updates; unnecessary upstream edits and incidental test assumptions add avoidable upgrade work.",
+      "regression": "Preserve requested feature behavior and global authorization gates; permit necessary small upstream hooks with their coupling documented."
+    },
+    {
+      "rules": [
+        "FORK-01",
+        "FORK-02"
+      ],
+      "decision": "Require AudaciTops changes to minimize upstream edits and review changed behavior for unnecessary upgrade coupling and brittle tests.",
+      "reason": "The user plans a maintained Audacity audacity3 fork. Existing extension points and isolated features reduce conflict work without forbidding necessary upstream hooks.",
+      "regression": "Preserve feature behavior and global authorization gates. Necessary small hooks remain permitted with their coupling documented. Public behavior tests and capability-based failure fixtures remain permitted; source-layout checks and blanket repeated tests are not required."
+    },
+    {
+      "rules": [
+        "FORK-01",
+        "FORK-02"
+      ],
+      "decision": "Rename the fork AuTopsy and supersede the prior decision 'Require AudaciTops changes to minimize upstream edits and review changed behavior for unnecessary upgrade coupling and brittle tests.' with owned grouping/video timing and explicit Audacity adapter contracts.",
+      "reason": "The user clarified resilience to upstream evolution rather than edit count as the required objective.",
+      "regression": "Keep native attachment, command, history, mixer and drag integration; feature tests depend on public behavior and required contracts, not unrelated UI layout or source text."
+    }
+  ]
+}

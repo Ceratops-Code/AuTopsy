@@ -82,8 +82,9 @@ if sys.version_info[0] < 3 and sys.version_info[1] < 7:
 
 # Platform specific constants
 if sys.platform == 'win32':
-    WRITE_NAME = '\\\\.\\pipe\\ToSrvPipe'
-    READ_NAME = '\\\\.\\pipe\\FromSrvPipe'
+    _pipe_app = 'AuTopsyTest' if os.environ.get('AUTOPSY_BEHAVIOR_ROOT') else 'AuTopsy'
+    WRITE_NAME = '\\\\.\\pipe\\' + _pipe_app + 'ToSrvPipe'
+    READ_NAME = '\\\\.\\pipe\\' + _pipe_app + 'FromSrvPipe'
     EOL = '\r\n\0'
 else:
     # Linux or Mac
@@ -187,16 +188,18 @@ class PipeClient():
         """
         self.timer = timer
         print('Sending command:', command)
-        self._write_pipe.write(command + EOL)
         # Check that read pipe is alive
-        if PipeClient.reader_pipe_broken.isSet():
+        if PipeClient.reader_pipe_broken.is_set():
             sys.exit('PipeClient: Read-pipe error.')
+        # Reset before publishing the command: a fast server can reply before
+        # flush returns, and that new reply must not be cleared afterwards.
+        self.reply = ''
+        PipeClient.reply_ready.clear()
+        if self.timer:
+            self._start_time = time.time()
         try:
+            self._write_pipe.write(command + EOL)
             self._write_pipe.flush()
-            if self.timer:
-                self._start_time = time.time()
-            self.reply = ''
-            PipeClient.reply_ready.clear()
         except IOError as err:
             if err.errno == errno.EPIPE:
                 sys.exit('PipeClient: Write-pipe error.')
@@ -226,11 +229,14 @@ class PipeClient():
                     # (Audacity may have crashed).
                     PipeClient.reader_pipe_broken.set()
                     pipe_ok = False
-            if self.timer:
-                xtime = (stop_time - self._start_time) * 1000
-                message += 'Execution time: {0:.2f}ms'.format(xtime)
-            self.reply = message
-            PipeClient.reply_ready.set()
+            # Blank framing lines and EOF must not signal an empty response or
+            # overwrite a completed response before the caller has read it.
+            if message:
+                if self.timer:
+                    xtime = (stop_time - self._start_time) * 1000
+                    message += 'Execution time: {0:.2f}ms'.format(xtime)
+                self.reply = message
+                PipeClient.reply_ready.set()
             message = ''
         read_pipe.close()
 
@@ -245,7 +251,7 @@ class PipeClient():
             is still processing the last command.
 
         """
-        if not PipeClient.reply_ready.isSet():
+        if not PipeClient.reply_ready.is_set():
             return ''
         return self.reply
 

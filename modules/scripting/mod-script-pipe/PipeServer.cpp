@@ -15,7 +15,9 @@ void PipeServer()
    HANDLE hPipeToSrv;
    HANDLE hPipeFromSrv;
 
-   static const TCHAR pipeNameToSrv[] = _T("\\\\.\\pipe\\ToSrvPipe");
+   const bool testing = GetEnvironmentVariableW(L"AUTOPSY_BEHAVIOR_ROOT", nullptr, 0) != 0;
+   const TCHAR *pipeNameToSrv = testing ? _T("\\\\.\\pipe\\AuTopsyTestToSrvPipe")
+      : _T("\\\\.\\pipe\\AuTopsyToSrvPipe");
 
    hPipeToSrv = CreateNamedPipe( 
       pipeNameToSrv ,
@@ -29,7 +31,8 @@ void PipeServer()
    if( hPipeToSrv == INVALID_HANDLE_VALUE)
       return;
 
-   static const TCHAR pipeNameFromSrv[] = __T("\\\\.\\pipe\\FromSrvPipe");
+   const TCHAR *pipeNameFromSrv = testing ? _T("\\\\.\\pipe\\AuTopsyTestFromSrvPipe")
+      : _T("\\\\.\\pipe\\AuTopsyFromSrvPipe");
 
    hPipeFromSrv = CreateNamedPipe( 
       pipeNameFromSrv ,

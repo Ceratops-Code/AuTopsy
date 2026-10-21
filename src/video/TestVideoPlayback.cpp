@@ -1,0 +1,331 @@
+/**********************************************************************
+
+  Audacity: A Digital Audio Editor
+
+  TestVideoPlayback.cpp
+
+  Behavioral checks for audio-clock following, including interruption just
+  before and after each externally visible player effect.
+
+**********************************************************************/
+
+#include "SyncVideoPlayback.h"
+#include "EditVideoTimeline.h"
+
+#include <catch2/catch.hpp>
+#include <limits>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+using namespace VideoPreview;
+
+namespace {
+
+struct Interrupted : std::runtime_error {
+   Interrupted() : std::runtime_error{ "simulated interruption" } {}
+};
+
+class FakePlayer {
+public:
+   PlayerSnapshot state{ true, true, false, 0.0, 10.0, 30.0, 1.0 };
+   std::vector<std::string> effects;
+   std::optional<size_t> interruptBoundary;
+   size_t boundary{};
+   bool asynchronousSeek{};
+   double seekTarget{};
+
+   PlayerSnapshot ReadState() const { return state; }
+
+   void SetPaused(bool value)
+   {
+      AtBoundary();
+      state.paused = value;
+      effects.push_back(value ? "pause" : "play");
+      AtBoundary();
+   }
+
+   void Seek(double value)
+   {
+      REQUIRE(state.paused);
+      REQUIRE_FALSE(state.seeking);
+      AtBoundary();
+      seekTarget = value;
+      if (asynchronousSeek)
+         state.seeking = true;
+      else
+         state.position = value;
+      effects.push_back("seek");
+      AtBoundary();
+   }
+
+   void SetSpeed(double value)
+   {
+      REQUIRE(state.paused);
+      AtBoundary();
+      state.speed = value;
+      effects.push_back("speed");
+      AtBoundary();
+   }
+
+private:
+   void AtBoundary()
+   {
+      if (interruptBoundary && boundary++ == *interruptBoundary) {
+         interruptBoundary.reset();
+         throw Interrupted{};
+      }
+   }
+};
+
+void RunFreshCalls(FakePlayer &player, const TransportSnapshot &audio)
+{
+   for (int i = 0; i != 12; ++i) {
+      try {
+         SynchronizeVideoPlayback(player, audio);
+      }
+      catch (const Interrupted &) {
+         // A new normal call uses observed state, without replaying commands.
+      }
+   }
+}
+
+void CheckInterruptionBoundaries(const PlayerSnapshot &initial,
+   const TransportSnapshot &audio, double expectedPosition, bool expectedPaused)
+{
+   FakePlayer accepted;
+   accepted.state = initial;
+   RunFreshCalls(accepted, audio);
+   REQUIRE(accepted.state.position == Approx(expectedPosition));
+   REQUIRE(accepted.state.paused == expectedPaused);
+   const auto acceptedEffects = accepted.effects;
+   REQUIRE_FALSE(acceptedEffects.empty());
+
+   for (size_t boundary = 0; boundary != acceptedEffects.size() * 2; ++boundary) {
+      CAPTURE(boundary);
+      FakePlayer interrupted;
+      interrupted.state = initial;
+      interrupted.interruptBoundary = boundary;
+      RunFreshCalls(interrupted, audio);
+      REQUIRE_FALSE(interrupted.interruptBoundary);
+      REQUIRE(interrupted.state.position == Approx(expectedPosition));
+      REQUIRE(interrupted.state.paused == expectedPaused);
+      REQUIRE(interrupted.state.speed == Approx(accepted.state.speed));
+      REQUIRE(interrupted.effects == acceptedEffects);
+
+      const auto effects = interrupted.effects;
+      RunFreshCalls(interrupted, audio);
+      REQUIRE(interrupted.effects == effects);
+   }
+}
+
+} // namespace
+
+TEST_CASE("Video follows only its own project's transport", "[video-preview]")
+{
+   auto otherProject = TransportSnapshot::ForProjectPlayback(false, false, 8.0, 2.0);
+   REQUIRE_FALSE(otherProject.playing);
+   REQUIRE(otherProject.position == 2.0);
+   auto owner = TransportSnapshot::ForProjectPlayback(true, false, 8.0, 2.0);
+   REQUIRE(owner.playing);
+   REQUIRE(owner.position == 8.0);
+   auto paused = TransportSnapshot::ForProjectPlayback(true, true, 8.0, 2.0);
+   REQUIRE_FALSE(paused.playing);
+   REQUIRE(paused.position == 8.0);
+}
+
+TEST_CASE("Video play pause stop seek loop and speed survive interruption",
+   "[video-preview][interruption]")
+{
+   PlayerSnapshot initial{ true, true, false, 0.0, 10.0, 30.0, 1.0 };
+   SECTION("play") {
+      CheckInterruptionBoundaries(initial, { 0.0, 1.0, true }, 0.0, false);
+   }
+   SECTION("pause") {
+      initial.paused = false;
+      initial.position = 2.0;
+      CheckInterruptionBoundaries(initial, { 2.0, 1.0, false }, 2.0, true);
+   }
+   SECTION("stop returns to selection") {
+      initial.paused = false;
+      initial.position = 3.0;
+      CheckInterruptionBoundaries(initial, { 0.0, 1.0, false }, 0.0, true);
+   }
+   SECTION("seek while playing") {
+      initial.paused = false;
+      initial.position = 2.0;
+      CheckInterruptionBoundaries(initial, { 7.0, 1.0, true }, 7.0, false);
+   }
+   SECTION("loop wraps backwards") {
+      initial.paused = false;
+      initial.position = 9.0;
+      CheckInterruptionBoundaries(initial, { 2.0, 1.0, true }, 2.0, false);
+   }
+   SECTION("speed change") {
+      initial.paused = false;
+      CheckInterruptionBoundaries(initial, { 0.0, 2.0, true }, 0.0, false);
+   }
+   SECTION("beyond video end holds last frame") {
+      initial.paused = false;
+      CheckInterruptionBoundaries(initial, { 20.0, 1.0, true }, 9.999, true);
+   }
+   SECTION("negative audio time holds first frame") {
+      initial.paused = false;
+      initial.position = 3.0;
+      CheckInterruptionBoundaries(initial, { -2.0, 1.0, true }, 0.0, true);
+   }
+}
+
+TEST_CASE("An unfinished seek cannot resume video or submit another seek",
+   "[video-preview]")
+{
+   FakePlayer player;
+   player.asynchronousSeek = true;
+   player.state.paused = false;
+   SynchronizeVideoPlayback(player, { 4.0, 1.0, true });
+   REQUIRE((player.effects == std::vector<std::string>{ "pause", "seek" }));
+   REQUIRE(player.state.seeking);
+   const auto effects = player.effects;
+   RunFreshCalls(player, { 4.0, 1.0, true });
+   REQUIRE(player.effects == effects);
+
+   player.state.position = player.seekTarget;
+   player.state.seeking = false; // The player reports completion.
+   RunFreshCalls(player, { 4.0, 1.0, true });
+   REQUIRE_FALSE(player.state.paused);
+   REQUIRE(player.effects.back() == "play");
+}
+
+TEST_CASE("Frame quantization and small clock drift do not cause seek loops",
+   "[video-preview]")
+{
+   FakePlayer player;
+   player.state.frameRate = 1.0;
+   player.state.position = 2.0;
+   RunFreshCalls(player, { 2.9, 1.0, false });
+   REQUIRE(player.effects.empty());
+   player.state.frameRate = 30.0;
+   player.state.paused = false;
+   RunFreshCalls(player, { 2.04, 1.0, true });
+   REQUIRE(player.effects.empty());
+   RunFreshCalls(player, { 2.5, 1.0, true });
+   REQUIRE(player.state.position == 2.5);
+   REQUIRE_FALSE(player.state.paused);
+}
+
+TEST_CASE("Video waits for loading and rejects invalid clock values safely",
+   "[video-preview]")
+{
+   FakePlayer player;
+   player.state.ready = false;
+   RunFreshCalls(player, { 3.0, 1.0, true });
+   REQUIRE(player.effects.empty());
+   player.state.ready = true;
+   player.state.paused = false;
+   RunFreshCalls(player,
+      { std::numeric_limits<double>::quiet_NaN(), 1.0, true });
+   REQUIRE(player.state.paused);
+   REQUIRE((player.effects == std::vector<std::string>{ "pause" }));
+}
+
+TEST_CASE("Video splits produce persistent independent identities without changing picture timing",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoReference("movie.mp4", 4.0, 30.0);
+   REQUIRE(KeepsOriginalPicture(timeline));
+   REQUIRE(SplitClipAt(timeline, 2.0));
+   REQUIRE(timeline.clips.size() == 2);
+   REQUIRE(timeline.clips[0].id == 1);
+   REQUIRE(timeline.clips[1].id == 2);
+   REQUIRE(timeline.clips[0].duration == 2.0);
+   REQUIRE(timeline.clips[1].sourceStart == 2.0);
+   REQUIRE(KeepsOriginalPicture(timeline));
+   REQUIRE_FALSE(SplitClipAt(timeline, 2.0));
+   REQUIRE(timeline.nextId == 3);
+   REQUIRE_FALSE(SplitClipAt(timeline, 0.0));
+   REQUIRE_FALSE(SplitClipAt(timeline, 4.0));
+   REQUIRE(timeline.clips.size() == 2);
+}
+
+TEST_CASE("Owned video timing maps moved clips and black gaps independently of a host track",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoReference("movie.mp4", 4.0, 30.0);
+   SplitClipAt(timeline, 2.0);
+   REQUIRE(MoveClipTo(timeline, 2, 3.0));
+   REQUIRE_FALSE(MoveClipTo(timeline, 2, 3.0));
+   REQUIRE_FALSE(KeepsOriginalPicture(timeline));
+   REQUIRE(timeline.End() == 5.0);
+   REQUIRE_FALSE(PictureAt(timeline, -1.0).visible);
+   REQUIRE_FALSE(PictureAt(timeline, 2.5).visible);
+   REQUIRE_FALSE(PictureAt(timeline, 5.0).visible);
+   const auto picture = PictureAt(timeline, 3.25);
+   REQUIRE(picture.visible);
+   REQUIRE(picture.clipId == 2);
+   REQUIRE(picture.sourceTime == 2.25);
+   REQUIRE(RemoveClip(timeline, 1));
+   REQUIRE_FALSE(RemoveClip(timeline, 1));
+   REQUIRE_FALSE(PictureAt(timeline, 0.5).visible);
+   REQUIRE(PictureAt(timeline, 3.25).sourceTime == 2.25);
+}
+
+TEST_CASE("Rejected video edits leave the complete prior timeline intact",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoReference("movie.mp4", 4.0, 30.0);
+   SplitClipAt(timeline, 2.0);
+   const auto checkOriginal = [&] {
+      REQUIRE(timeline.sourcePath == "movie.mp4");
+      REQUIRE(timeline.nextId == 3);
+      REQUIRE(timeline.clips.size() == 2);
+      REQUIRE(timeline.clips[0].start == 0.0);
+      REQUIRE(timeline.clips[1].start == 2.0);
+      REQUIRE(timeline.clips[1].sourceStart == 2.0);
+      REQUIRE(timeline.clips[1].duration == 2.0);
+   };
+   checkOriginal(); // interruption before the single model publication
+   REQUIRE_THROWS(MoveClipTo(timeline, 2, 1.0)); checkOriginal();
+   REQUIRE_THROWS(MoveClipTo(timeline, 1, -1.0)); checkOriginal();
+   REQUIRE_THROWS(MoveClipTo(timeline, 999, 10.0)); checkOriginal();
+   REQUIRE_THROWS(SplitClipAt(timeline, std::numeric_limits<double>::quiet_NaN())); checkOriginal();
+   REQUIRE_FALSE(SplitClipAt(timeline, 2.0)); checkOriginal(); // fresh call after publication
+}
+
+TEST_CASE("Saved video model contracts reject malformed source ranges and duplicate identities",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   REQUIRE_THROWS(CreateVideoReference("movie.mp4", -1, 30));
+   REQUIRE_THROWS(CreateVideoReference("movie.mp4", 4, 0));
+   auto timeline = CreateVideoReference("movie.mp4", 4, 30);
+   timeline.clips[0].sourceStart = 1;
+   REQUIRE_THROWS(RequireWellFormedTimeline(timeline));
+   timeline = CreateVideoReference("movie.mp4", 4, 30);
+   SplitClipAt(timeline, 2);
+   timeline.clips[1].id = 1;
+   REQUIRE_THROWS(RequireWellFormedTimeline(timeline));
+   timeline.clips[1].id = 2;
+   timeline.clips[1].start = 1.5;
+   REQUIRE_THROWS(RequireWellFormedTimeline(timeline));
+}
+
+TEST_CASE("Video split boundaries follow source frames and empty timelines remain explicit",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoReference("movie.mp4", 4, 30);
+   REQUIRE(SplitClipAt(timeline, 1.01));
+   REQUIRE(timeline.clips[0].duration == 1.0);
+   REQUIRE(timeline.clips[1].sourceStart == 1.0);
+   REQUIRE(RemoveClip(timeline, 1));
+   REQUIRE(RemoveClip(timeline, 2));
+   REQUIRE(timeline.End() == 0);
+   REQUIRE_FALSE(KeepsOriginalPicture(timeline));
+   REQUIRE_FALSE(SplitClipAt(timeline, 1.0));
+   REQUIRE_FALSE(PictureAt(timeline, 1.0).visible);
+   REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
+}

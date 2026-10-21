@@ -16,6 +16,11 @@ class Track;
 
 namespace TrackUtilities {
 
+   //! Insert one empty audio track beside an existing track as one Undo action.
+   //! Stereo audio anchors produce stereo tracks; other anchors produce mono.
+   AUDACITY_DLL_API bool InsertAudioTrackRelativeTo(
+      AudacityProject &project, Track &anchor, bool before);
+
    enum MoveChoice {
       OnMoveUpID, OnMoveDownID, OnMoveTopID, OnMoveBottomID
    };

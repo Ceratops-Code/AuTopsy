@@ -948,6 +948,8 @@ bool WaveClip::HandleXMLTag(const std::string_view& tag, const AttributesList &a
 {
    if (tag == WaveClip_tag)
    {
+      // XML extension listeners must exist before attributes are dispatched.
+      Attachments::BuildAll();
       double dblValue;
       long longValue;
       for (auto pair : attrs)

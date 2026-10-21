@@ -20,6 +20,63 @@ Paul Licameli split from TrackMenus.cpp
 #include "CommandContext.h"
 #include "MenuRegistry.h"
 #include "QualitySettings.h"
+#include "TrackUtilities.h"
+#include "commands/AudacityCommand.h"
+#include "commands/CommandDispatch.h"
+#include "commands/LoadCommands.h"
+#include "SettingsVisitor.h"
+
+namespace {
+class AddRelativeAudioTrackCommand : public AudacityCommand {
+   int mTrack{};
+   bool mBefore;
+protected:
+   explicit AddRelativeAudioTrackCommand(bool before) : mBefore(before) {}
+public:
+   TranslatableString GetDescription() const override
+   { return XO("Insert an empty audio track before or after an existing track."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor)
+   { visitor.Define(mTrack, wxT("Track"), 0, 0, 100000); return true; }
+   bool VisitSettings(SettingsVisitor &visitor) override { return Settings(visitor); }
+   bool VisitSettings(ConstSettingsVisitor &visitor) override { return Settings(visitor); }
+   bool PromptUser(AudacityProject &project) override
+   {
+      const auto *focused = TrackFocus::Get(project).Get();
+      mTrack = 0;
+      for (const auto *track : TrackList::Get(project)) {
+         if (track == focused) return true;
+         ++mTrack;
+      }
+      return false;
+   }
+   bool Apply(const CommandContext &context) override
+   {
+      int index{};
+      for (auto *track : TrackList::Get(context.project)) {
+         if (index++ == mTrack)
+            return TrackUtilities::InsertAudioTrackRelativeTo(context.project, *track, mBefore);
+      }
+      context.Error(_("The anchor track does not exist."));
+      return false;
+   }
+};
+class AddAudioTrackBeforeCommand final : public AddRelativeAudioTrackCommand {
+public:
+   AddAudioTrackBeforeCommand() : AddRelativeAudioTrackCommand(true) {}
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+class AddAudioTrackAfterCommand final : public AddRelativeAudioTrackCommand {
+public:
+   AddAudioTrackAfterCommand() : AddRelativeAudioTrackCommand(false) {}
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+const ComponentInterfaceSymbol AddAudioTrackBeforeCommand::Symbol{ XO("AddAudioTrackBefore") };
+const ComponentInterfaceSymbol AddAudioTrackAfterCommand::Symbol{ XO("AddAudioTrackAfter") };
+BuiltinCommandsModule::Registration<AddAudioTrackBeforeCommand> sAddBefore;
+BuiltinCommandsModule::Registration<AddAudioTrackAfterCommand> sAddAfter;
+}
 
 namespace {
 using namespace MenuRegistry;
@@ -76,7 +133,11 @@ AttachedItem sAttachment{
       Command( wxT("NewMonoTrack"), XXO("&Mono Track"), OnNewWaveTrack,
          AudioIONotBusyFlag(), wxT("Ctrl+Shift+N") ),
       Command( wxT("NewStereoTrack"), XXO("&Stereo Track"),
-         OnNewStereoTrack, AudioIONotBusyFlag() )
+         OnNewStereoTrack, AudioIONotBusyFlag() ),
+      Command("AddAudioTrackBefore", XXO("Audio Track Before Focused Track"),
+         CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() | TracksExistFlag()),
+      Command("AddAudioTrackAfter", XXO("Audio Track After Focused Track"),
+         CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() | TracksExistFlag())
    ),
    wxT("Tracks/Add/Add")
 };

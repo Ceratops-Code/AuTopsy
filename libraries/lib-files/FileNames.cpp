@@ -382,7 +382,7 @@ FilePath FileNames::PlugInDir()
 
 FilePath FileNames::Configuration()
 {
-   return wxFileName( ConfigDir(), wxT("audacity.cfg") ).GetFullPath();
+   return wxFileName( ConfigDir(), wxT("autopsy.cfg") ).GetFullPath();
 }
 
 FilePath FileNames::PluginRegistry()

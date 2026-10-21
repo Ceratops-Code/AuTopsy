@@ -10,5 +10,5 @@
 
 #include "ModuleConstants.h"
 
-// We want Audacity with a capital 'A'
-const std::wstring AppName = L"Audacity";
+// Shared application identity also keeps settings separate from upstream.
+const std::wstring AppName = L"AuTopsy";

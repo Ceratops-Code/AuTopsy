@@ -1411,11 +1411,15 @@ if( "${CMAKE_GENERATOR}" MATCHES "Xcode|Visual Studio*" )
       PATTERN "*.pdb" EXCLUDE
       PATTERN "*.ilk" EXCLUDE
       PATTERN "*.dSYM" EXCLUDE
+      PATTERN "Portable Settings" EXCLUDE
+      PATTERN "*-test.exe" EXCLUDE
       PATTERN "image-compiler" EXCLUDE
       PATTERN "image-compiler.exe" EXCLUDE
       PATTERN "riff-test-util" EXCLUDE
       PATTERN "riff-test-util.exe" EXCLUDE
    )
+   install(FILES "${CMAKE_SOURCE_DIR}/LICENSE.txt" "${CMAKE_SOURCE_DIR}/README.md"
+      DESTINATION ".")
 else()
    if( CMAKE_SYSTEM_NAME MATCHES "Darwin" )
       install( TARGETS ${TARGET}
@@ -1467,3 +1471,11 @@ endforeach()
 
 #propagate collected edgets to root CMakeLists.txt
 set( GRAPH_EDGES "${GRAPH_EDGES}" PARENT_SCOPE )
+
+# Video decoding and the preview window are isolated from the audio engine.
+if(WIN32)
+   add_subdirectory(video)
+endif()
+
+# Fork-owned clip metadata and commands use one native drag adapter.
+target_sources(Audacity PRIVATE clip-groups/GroupAudioClips.cpp clip-groups/GroupAudioClips.h)

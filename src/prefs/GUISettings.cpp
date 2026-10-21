@@ -30,10 +30,16 @@ wxString GUISettings::SetLang( const wxString & lang )
       Internat::SetCeeNumberFormat();
 #endif
 
+#if defined(__WXMSW__) && defined(AUTOPSY_HAS_VIDEO_PREVIEW)
+   // libmpv requires the C numeric locale for its entire lifetime. SetLang
+   // already captured the regional separator in Internat for displayed numbers;
+   // keep the C runtime locale stable, including after a language change.
+   wxSetlocale(LC_NUMERIC, "C");
+#endif
+
 #ifdef __WXMAC__
       wxApp::s_macHelpMenuTitleName = _("&Help");
 #endif
 
    return result;
 }
-

@@ -1614,15 +1614,15 @@ void ProjectFileIO::SetProjectTitle(int number)
    {
       name =
       /* i18n-hint: The %02i is the project number, the %s is the project name.*/
-      XO("[Project %02i] Audacity \"%s\"")
+      XO("[Project %02i] AuTopsy \"%s\"")
          .Format( number + 1,
                  name.empty() ? XO("<untitled>") : Verbatim((const char *)name))
          .Translation();
    }
-   // If we are not showing numbers, then <untitled> shows as 'Audacity'.
+   // If we are not showing numbers, use the application name for an empty project.
    else if (name.empty())
    {
-      name = _TS("Audacity");
+      name = _TS("AuTopsy");
    }
 
    if (mRecovered)
