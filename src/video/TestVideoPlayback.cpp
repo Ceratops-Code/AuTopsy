@@ -457,6 +457,58 @@ TEST_CASE("Native video track order composes upper pictures while exposing lower
    REQUIRE(ComposeVideoTracks({}).clips.empty());
 }
 
+TEST_CASE("Preview evaluation and export choose the same source frames across layered edits",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto lower = CreateVideoTimeline("lower.mp4", 6, 30, 1920, 1080);
+   SplitClipAt(lower, 3);
+   MoveClipTo(lower, 2, 4);
+   auto upper = CreateVideoTimeline("upper.mp4", 2, 25, 720, 1280);
+   TrimVideoClip(upper, 1, .4, 1.6);
+   MoveClipTo(upper, 1, 2);
+   const std::vector<const Timeline*> layers{&upper, &lower};
+   const auto exported = ComposeVideoTracks(layers);
+   struct Sample { double projectTime; const char *source; double sourceTime; };
+   const std::vector<Sample> samples{
+      {0, "lower.mp4", 0}, {.5, "lower.mp4", .5},
+      {2, "upper.mp4", .4}, {3, "upper.mp4", 1.4},
+      {3.5, "", 0}, {4, "lower.mp4", 3}, {6.5, "lower.mp4", 5.5},
+      {-1, "", 0}, {7, "", 0}
+   };
+   for (int repeat = 0; repeat != 12; ++repeat) for (const auto &sample : samples) {
+      const auto preview = EvaluateVideoLayers(layers, sample.projectTime);
+      const auto output = PictureAt(exported, sample.projectTime);
+      const bool visible = sample.source[0] != 0;
+      REQUIRE(bool(preview.clip) == visible);
+      REQUIRE(output.visible == visible);
+      if (!visible) continue;
+      REQUIRE(preview.sourceTime == Approx(sample.sourceTime));
+      REQUIRE(output.sourceTime == Approx(sample.sourceTime));
+      const auto previewSource = SourceFor(*preview.timeline, *preview.clip);
+      const auto outputSource = SourceFor(exported, *ClipAt(exported, sample.projectTime));
+      REQUIRE(previewSource.path == sample.source);
+      REQUIRE(outputSource.path == sample.source);
+      REQUIRE(outputSource.frameRate == previewSource.frameRate);
+      REQUIRE(outputSource.width == previewSource.width);
+      REQUIRE(outputSource.height == previewSource.height);
+   }
+   // These are borrowed queries: original identity, source handles and track
+   // membership survive both successful composition and rejected inputs.
+   REQUIRE(lower.clips[1].id == 2);
+   REQUIRE(lower.clips[1].sourceStart == 3);
+   REQUIRE(lower.clips[1].start == 4);
+   REQUIRE(upper.clips[0].sourceStart == Approx(.4));
+   REQUIRE(upper.clips[0].duration == Approx(1.2));
+   REQUIRE(EvaluateVideoLayers(layers, 4).clip == &lower.clips[1]);
+   REQUIRE_FALSE(EvaluateVideoLayers({}, 1).clip);
+   REQUIRE_FALSE(EvaluateVideoLayers(layers,
+      std::numeric_limits<double>::quiet_NaN()).clip);
+   REQUIRE_THROWS(EvaluateVideoLayers({&upper, nullptr}, 2));
+   REQUIRE_THROWS(ComposeVideoTracks({&upper, nullptr}));
+   REQUIRE(ComposeVideoTracks(layers).End() == 7);
+}
+
 TEST_CASE("Export settings preserve stream copy only when picture settings are unchanged")
 {
    VideoExport::ExportSettings settings;

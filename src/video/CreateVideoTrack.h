@@ -42,6 +42,13 @@ public:
 ENUMERATE_TRACK_TYPE(AuTopsyVideoTrack);
 
 namespace VideoTimeline {
+// Native project operations stay at this boundary, outside the owned model.
+Timeline GetProjectTimeline(const AudacityProject &project);
+bool SplitProjectVideo(AudacityProject &project, double at);
+bool MoveProjectVideoClip(AudacityProject &project, uint64_t id, double start);
+bool RemoveProjectVideoClip(AudacityProject &project, uint64_t id);
+void ShowProjectVideoPreview(AudacityProject &project, bool raise = false);
+
 // Inserts into the real TrackList, optionally relative to any audio/video track.
 // An import attaches its prepared track before native audio import commits Undo.
 std::shared_ptr<AuTopsyVideoTrack> CreateProjectVideoTrack(AudacityProject &project,

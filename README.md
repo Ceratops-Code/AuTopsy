@@ -87,15 +87,10 @@ can be removed using Windows Installed Apps.
 
 ## Video backlog
 
-These are planned ideas, not features included in the current release.
-
-| Priority | Feature | Practical result |
-| --- | --- | --- |
-| Next | Collect project media | Copy referenced videos into a portable project folder. |
-| Later | Ripple edits and magnetic snapping | Close gaps and align video/audio edges while preserving later timing. |
-| Later | Background proxy preparation | Keep editing while lightweight previews are prepared; show progress and cache controls. |
-| Later | Video fades, dissolves, crop, and rotation | Handle basic picture transitions and framing. |
-| Later | Titles and subtitle tracks | Add captions and simple overlays without leaving the project. |
+[BACKLOG.md](BACKLOG.md) owns the complete audio/video operation inventory,
+current delivery status and implementation sequence, including joins, retiming,
+mute/solo and preview transport. [The design](docs/design.md) explains the shared
+editing model, native adapter boundaries and preview/export contracts.
 
 ## Developers
 
