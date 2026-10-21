@@ -119,10 +119,14 @@ deliverables:
           requires:
             capabilities: []
           no-op: Installer payload checks belong to the windows-installer package; there is no separate application scan.
+        test:
+          requires:
+            capabilities: []
+          no-op: The prerequisite windows-installer package tests cover this application payload before installation.
         install:
           requires:
             capabilities: []
-          parameters: [installer_path]
+          parameters: [installer_path, build_dir, test_name]
           steps:
             - run:
                 - "{installer_path}"

@@ -480,6 +480,8 @@ CTest selection, for example `^fork-media$`. An empty selection fails.
 The application's install operation takes `installer_path` from the accepted build
 manifest and runs that installer silently. It installs into Program Files/AuTopsy;
 close the application first. Deployment never copies a source/build tree.
+Its `build_dir` and `test_name` inputs also supply the package checks that gate
+promotion and installation; the installer command consumes only `installer_path`.
 The media case covers linked video/audio movement and trim/split behavior,
 saved clip flags, relinking, source frame stepping and modern software exports.
 
