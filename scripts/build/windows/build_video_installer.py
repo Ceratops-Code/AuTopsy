@@ -97,7 +97,8 @@ def remove_owned_tree(path: Path, root: Path) -> None:
 
 
 def run_command(arguments: list[str], source: Path, diagnostics: Path, *,
-                operation: str = "Windows installer build", missing_ok: bool = False) -> str:
+                operation: str = "Windows installer build", missing_ok: bool = False,
+                target: str | None = None) -> str:
     """Retain child failures; a selected GitHub GET may report expected absence."""
     print("Running " + subprocess.list2cmdline(arguments), flush=True)
     try:
@@ -105,7 +106,7 @@ def run_command(arguments: list[str], source: Path, diagnostics: Path, *,
         result = subprocess.run(arguments, cwd=source, text=True, capture_output=True, check=False,
                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except (OSError, RuntimeError) as error:
-        record = {"operation": operation, "target": str(source),
+        record = {"operation": operation, "target": target or str(source),
                   "argv": arguments, "exit": None, "stdout": "<absent>", "stderr": str(error)}
         write_json(diagnostics, record)
         raise RuntimeError(f"Cannot start build command; details: {diagnostics}") from error
@@ -116,7 +117,7 @@ def run_command(arguments: list[str], source: Path, diagnostics: Path, *,
             if arguments[:3] == ["gh", "release", "view"] and result.stderr.strip() == "release not found":
                 return ""
         write_json(diagnostics, {
-            "operation": operation, "target": str(source), "argv": arguments,
+            "operation": operation, "target": target or str(source), "argv": arguments,
             "exit": result.returncode, "stdout": result.stdout or "<absent>",
             "stderr": result.stderr or "<absent>",
         })
@@ -411,7 +412,8 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
 
         def execute(arguments, *, missing=False):
             return run_command(arguments, source, diagnostics,
-                               operation="Windows installer publication", missing_ok=missing)
+                               operation="Windows installer publication", missing_ok=missing,
+                               target=repository + "@" + tag)
 
         def read(endpoint, *, missing=False):
             value = execute(["gh", "api", endpoint], missing=missing)
@@ -506,8 +508,12 @@ def main() -> None:
     if args.publish_installer:
         if args.test_existing_build or not args.release_tag or not args.release_notes:
             parser.error("Publication requires a release tag and notes, with no test-only mode.")
-        print(json.dumps(publish_installer(args.source_dir, args.build_dir, args.repository,
-                                           args.release_tag, args.release_notes)))
+        try:
+            result = publish_installer(args.source_dir, args.build_dir, args.repository,
+                                       args.release_tag, args.release_notes)
+        except Exception as error:
+            raise RuntimeError(f"Preview publication {args.repository}@{args.release_tag} failed: {error}") from error
+        print(json.dumps(result))
         return
     if args.test_existing_build:
         print(json.dumps(test_existing_installer_build(args.source_dir, args.build_dir, args.test_name)))
