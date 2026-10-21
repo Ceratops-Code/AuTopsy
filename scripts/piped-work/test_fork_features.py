@@ -74,6 +74,34 @@ def check_groups(client, root):
     client.send("Save")
 
 
+def check_history_view(client, root):
+    """History restores content while retaining the user's current viewport."""
+    for _ in range(12):
+        client.file("Import2", root / "tone-a.wav")
+    # Insertion uses the normal native command to bring the bottom track into
+    # view. The following selection commands do not choose another viewport.
+    client.send("AddAudioTrackAfter: Track=11")
+    client.send("SelectAll")
+    client.send("SelectTime: Start=0.25 End=1")
+    client.send("ZoomSel")
+    for operation in ("Split", "Trim"):
+        client.send(operation)
+        expected = client.data("GetInfo: Type=View Format=JSON")
+        assert expected["verticalOffset"] > 0, expected
+        assert expected["horizontalStart"] > 0, expected
+        assert expected["pixelsPerSecond"] > 0, expected
+        # Each command is one intentional history transition. Repeating the
+        # Undo/Redo pair exercises both directions without replaying a lost UI
+        # command or assuming that another Undo is the same user action.
+        for _ in range(3):
+            client.send("Undo")
+            actual = client.data("GetInfo: Type=View Format=JSON")
+            assert actual == expected, ("Undo", operation, expected, actual)
+            client.send("Redo")
+            actual = client.data("GetInfo: Type=View Format=JSON")
+            assert actual == expected, ("Redo", operation, expected, actual)
+
+
 def check_tracks(client, root):
     for name in ("tone-a.wav", "tone-b.wav", "tone-stereo.wav"):
         client.file("Import2", root / name)
@@ -860,6 +888,8 @@ def worker(args, root):
         check_groups(client, root)
     elif args.case == "tracks":
         check_tracks(client, root)
+    elif args.case == "history-view":
+        check_history_view(client, root)
     elif args.case == "video":
         check_video(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "media":
@@ -967,6 +997,7 @@ def main():
         choices=(
             "groups",
             "tracks",
+            "history-view",
             "video",
             "media",
             "preview",

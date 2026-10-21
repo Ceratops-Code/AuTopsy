@@ -267,6 +267,14 @@ can be added through `NewVideoTrack`, `AddVideoTrackBefore: Track=1`, and
 `AddVideoTrackAfter: Track=1`. Repeating a split at an existing boundary,
 an absolute move to the same start, or deletion of an absent ID makes no change.
 
+## Undo and Redo
+
+Undo and Redo keep the current timeline zoom and scroll position instead of
+jumping to the first selected track. Removing tracks can still constrain the
+scroll range. Scripting clients can observe the current view using
+`GetInfo: Type=View Format=JSON`, which returns `horizontalStart`,
+`verticalOffset` and `pixelsPerSecond` without changing the view.
+
 ## Audio clip groups and track insertion
 
 The fork adds **Edit > Clips > Group Clips...** and
