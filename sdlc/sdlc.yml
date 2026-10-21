@@ -109,3 +109,11 @@ deliverables:
                 - -R
                 - "{test_name}"
                 - --no-tests=error
+        install:
+          parameters: [installer_path]
+          steps:
+            - run:
+                - "{installer_path}"
+                - /VERYSILENT
+                - /SUPPRESSMSGBOXES
+                - /NORESTART
