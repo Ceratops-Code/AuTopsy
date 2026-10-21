@@ -11,7 +11,6 @@ until their delivery status says otherwise. Owner: AuTopsy maintainers.
   "owners": ["AuTopsy maintainers"],
   "source_of_truth": [
     {"path": "AGENTS.md", "role": "upstream independence constraints"},
-    {"path": "BACKLOG.md", "role": "requested operation inventory and delivery status"},
     {"path": "src/video/EditVideoTimeline.h", "role": "implemented owned timing and composition model"},
     {"path": "src/video/CreateVideoTrack.cpp", "role": "implemented native track and persistence adapter"},
     {"path": "src/clip-groups/LinkMediaClips.cpp", "role": "implemented mixed-media editing adapter"},
@@ -46,7 +45,8 @@ until their delivery status says otherwise. Owner: AuTopsy maintainers.
 AuTopsy is a GPL audio/video editor fork. Users need picture clips to behave as
 ordinary editable objects beside audio, including joins, trims, retiming,
 relationships, flags and visibility. The complete requested operation inventory
-belongs to [BACKLOG.md](../BACKLOG.md); the README is the user entry point.
+is maintained outside the source repository; this document records architectural
+scope and the README is the user entry point.
 
 This document serves maintainers implementing that inventory and reviewing
 upstream updates. Readers need basic clip/timeline terminology; no knowledge of
@@ -422,7 +422,7 @@ Implementation order:
    the complex-preview spike before advanced time maps or picture effects.
 4. **Picture processing:** opacity/automation, transitions, transforms, generators,
    captions and analyses, using the same evaluator/render contracts.
-5. **Breadth:** remaining [backlog](../BACKLOG.md) operations, media collection,
+5. **Breadth:** remaining planned operations, media collection,
    region/multiple export and equivalent commands/keyboard workflows.
 
 For every new operation, add cases to existing suites where suitable. Cover normal

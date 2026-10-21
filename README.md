@@ -85,12 +85,11 @@ features. The Windows release build disables inherited application networking;
 opening help or repository links uses the user's browser. Installed components
 can be removed using Windows Installed Apps.
 
-## Video backlog
+## Development design
 
-[BACKLOG.md](BACKLOG.md) owns the complete audio/video operation inventory,
-current delivery status and implementation sequence, including joins, retiming,
-mute/solo and preview transport. [The design](docs/design.md) explains the shared
-editing model, native adapter boundaries and preview/export contracts.
+[The design](docs/design.md) describes the planned editing model, native adapter
+boundaries and preview/export contracts. The detailed product backlog is
+maintained outside this source repository.
 
 ## Developers
 
