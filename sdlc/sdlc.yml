@@ -78,6 +78,7 @@ deliverables:
           requires:
             capabilities:
               - uv
+          parameters: [build_dir, inno_compiler]
           steps:
             - run:
                 - uv
@@ -92,7 +93,9 @@ deliverables:
                 - python
                 - scripts/build/windows/build_video_installer.py
                 - --build-dir
-                - .build/_windows-installer
+                - "{build_dir}"
+                - --inno-compiler
+                - "{inno_compiler}"
         test:
           requires:
             capabilities:
