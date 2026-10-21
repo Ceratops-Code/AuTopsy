@@ -1,8 +1,10 @@
 # AuTopsy software design
 
 Status: current implementation plus target architecture. The preview release is
-implemented; the content/instance model and later operations below are proposed
-until their delivery status says otherwise. Owner: AuTopsy maintainers.
+implemented. The batch planner and crop/embedded-layer evaluator are independent
+core foundations, not yet connected to native commands, saved properties or pixel
+rendering. The content/instance model and later operations remain targets until
+their delivery status says otherwise. Owner: AuTopsy maintainers.
 
 ```design-document
 {
@@ -12,9 +14,14 @@ until their delivery status says otherwise. Owner: AuTopsy maintainers.
   "source_of_truth": [
     {"path": "AGENTS.md", "role": "upstream independence constraints"},
     {"path": "src/video/EditVideoTimeline.h", "role": "implemented owned timing and composition model"},
+    {"path": "src/video/PlanVideoEdits.cpp", "role": "independent batch edit preparation and atomic snapshot publication"},
+    {"path": "src/video/EvaluateVideoTimeline.cpp", "role": "independent ordered composition, crop and embedded-layer geometry"},
     {"path": "src/video/CreateVideoTrack.cpp", "role": "implemented native track and persistence adapter"},
     {"path": "src/clip-groups/LinkMediaClips.cpp", "role": "implemented mixed-media editing adapter"},
     {"path": "src/video/TestVideoPlayback.cpp", "role": "independent behavior evidence"},
+    {"path": "src/video/TestVideoEdits.cpp", "role": "dedicated planner behavior evidence"},
+    {"path": "src/video/TestVideoComposition.cpp", "role": "dedicated composition behavior evidence"},
+    {"path": "scripts/run_affected_tests.py", "role": "portable test impact map and exact-input result reuse"},
     {"path": "sdlc/sdlc.yml", "role": "local and CI check/build/publication entry points"},
     {"path": ".github/workflows/validate.yml", "role": "hosted build environments"}
   ],
@@ -110,16 +117,38 @@ Extend this separation into an editing kernel rather than adding independent
 behavior to each menu, mouse handle and renderer. Reuse the existing source model
 during staged adoption, with one authoritative saved representation at a time.
 
+Use independently testable modules within the desktop process. The useful part
+of a service-like design is explicit ownership and replaceable contracts; a
+network boundary is unnecessary for local edit planning and adds latency,
+packaging, protocol compatibility and partial failure to every gesture. Keep
+decode/proxy/export workers separate where crashes, cancellation or resource
+limits justify it. Do not introduce RPC, a service registry or separate mutable
+project stores merely to resemble microservices.
+
+The kernel accepts owned snapshots and opaque identities and returns complete
+plans. Narrow adapters alone translate native tracks, selection, audio transport,
+history, project storage and media metadata. Prefer semantic extension points to
+class-layout assumptions; reject missing or ambiguous contracts. A changed native
+API should require adapting that boundary, while the host-free behavior cases
+still compile. Contract versions change deliberately when semantics change; an
+interface cannot promise immunity to every future product requirement.
+
 | Decision | Status and reason | Alternative and tradeoff |
 | --- | --- | --- |
 | Owned editing kernel, native adapters | Target. Upstream pointers, track classes, XML hooks and commands stay at boundaries. | Reusing native audio clips as fake picture containers couples video to sample storage and audio-only transformations. |
 | Content separate from placement | Target. Joining and retiming should not destroy trims, sources or flags. | One source/start/duration tuple is sufficient today but cannot represent an editable multi-source join. |
 | One edit plan and one native history transaction | Target. All linked members are checked before any visible change. | Separate per-track commands expose half-edited picture/sound on failure. |
-| One evaluation policy for preview/export | Initial foundation. Both paths must choose the same eligible picture. | Two visibility implementations drift when mute, solo and compounds are added. |
+| One evaluation policy for preview/export | Current simple paths share picture selection. Rich composition planning exists independently; native adoption remains next. | Two visibility implementations drift when mute, solo and compounds are added. |
+| In-process kernel, isolated media workers | Selected. Transactions and the native audio clock stay synchronous; expensive media work can be replaced separately. | Network microservices increase deployment and partial-failure work without improving local editing. |
 | Existing mpv and FFmpeg | Retained. They already decode/render the supported media. | Writing a decoder or compositor duplicates mature libraries and increases maintenance. |
 | OpenTimelineIO | Assessed, not selected as the internal engine. Useful later for interchange. | Its editorial schemas do not supply native edit transactions, source-bound enforcement, preview or rendering; adopting the whole model now adds another adapter and format lifecycle. |
 | MLT | Assessed, reserve option for complex preview. | A full playback/render engine can cover more composition, but replaces current clock/player/packaging integration. Compare after the measured spike, not as a speculative dependency. |
 | Native project extensions | Target for project settings/catalog/history. Existing track XML remains current. | A parallel sidecar introduces conflicting source-of-truth and recovery behavior. |
+
+FFmpeg already provides [crop](https://ffmpeg.org/ffmpeg-filters.html#crop) and
+[overlay](https://ffmpeg.org/ffmpeg-filters.html#overlay); reuse those maintained
+operations behind the render adapter rather than inventing pixel processors.
+Measure their preview behavior before choosing a larger engine.
 
 The official [OTIO architecture](https://opentimelineio.readthedocs.io/en/latest/tutorials/architecture.html),
 [OTIO timeline structure](https://opentimelineio.readthedocs.io/en/latest/tutorials/otio-timeline-structure.html),
@@ -149,7 +178,9 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 
 | Location | Current ownership | Intended responsibility |
 | --- | --- | --- |
-| `src/video/EditVideoTimeline.h` | Plain timeline values and pure edits | Owned types and simple edits; remove native declarations into the existing adapter header |
+| `src/video/EditVideoTimeline.h` | Host-free simple timelines and pure edits | Retain simple supported clip behavior during staged adoption |
+| `src/video/PlanVideoEdits.h/.cpp` | Host-free batch planner and one-swap snapshot application | Native coordinator consumes complete plans in one history transaction |
+| `src/video/EvaluateVideoTimeline.h/.cpp` | Host-free ordered layers, crop, mute/solo and embedded rectangles | Native preview/export consume the same composition semantics |
 | `src/video/EditVideoTimeline.cpp` | Native project commands and earlier project-format reader | Boundary commands and saved-format support |
 | `src/video/CreateVideoTrack.h/.cpp` | Native track, clipboard, XML, history and picture lookup | Track/project adapters, authoritative states, transactional publication |
 | `src/clip-groups/LinkMediaClips.h/.cpp` | Mixed picture/sound links and edits | Native audio adapter and one linked edit coordinator |
@@ -160,14 +191,16 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan |
 | `src/video/ChooseVideoExport.h/.cpp` | Export preset values and chooser | Explicit codec/size/FPS/quality policy |
 | `src/video/RelinkVideoMedia.h/.cpp` | Source replacement and native chooser | Catalog relinking through a complete edit plan |
-| `src/video/TestVideoPlayback.cpp` | Independent timing/playback/flags/export tests | Model/evaluator/planning cases without native objects |
+| `src/video/TestVideoPlayback.cpp` | Independent timing/playback/flags/export tests | Preserve current simple model contracts |
+| `src/video/TestVideoEdits.cpp` | Dedicated edit-plan and publication cases | Stale-state, rejected-batch, repeated/interrupted and bound-movement contracts |
+| `src/video/TestVideoComposition.cpp` | Dedicated layer/crop/embedded-geometry cases | Picture eligibility and placement without native objects or codecs |
+| `scripts/run_affected_tests.py` and `test_run_affected_tests.py` | One portable input/check map, named execution and bounded receipts | Local/CI affected selection; separate native-acceptance impact |
 | `scripts/piped-work/test_fork_features.py` | Native feature scenarios | Adapter contract cases through public commands |
 
 Later responsibility-based files, whose creation needs separate path approval:
-`PlanVideoEdits.h/.cpp` for edit plans, `EvaluateVideoTimeline.h/.cpp` for rich
-render evaluation, `ControlVideoTransport.h/.cpp` for the native transport facade,
-and `RenderVideoFrames.h/.cpp` for FFmpeg plan translation/complex preview.
-Begin with the existing files and extract coherent responsibilities when needed;
+`ControlVideoTransport.h/.cpp` for the native transport facade and
+`RenderVideoFrames.h/.cpp` for FFmpeg plan translation/complex preview.
+Extend existing adapters and extract coherent responsibilities when needed;
 do not create empty scaffolding or an all-purpose feature manager.
 
 ## 6. Owned data model and persistence
@@ -176,6 +209,22 @@ Current simple clips have a track-local integer ID, project start, source in,
 duration, optional source override, link group and content-relative flags. Tracks
 own clips, a default source and visibility. The current model is intentionally
 limited to ordered non-overlapping, non-negative picture ranges at ordinary speed.
+
+The first planner uses transient `VideoProjectSnapshot` / `VideoTrackSnapshot`
+values: opaque track identity, revision, current simple timeline and optional
+parent identity. `PlanVideoEdits` prepares move, trim, split, removal and bound-group
+movement batches without publishing. `ApplyVideoEditPlan` compares the complete
+expected state, allocates the completed replacement before its one nonthrowing
+swap, and treats an already-applied exact plan as a no-op. Stale states, collisions,
+invalid ranges and exhausted revisions reject the whole plan. Bound movements use
+one exact delta across source frame rates. Native mixed audio/video publication
+and one Undo entry still require coordinator adoption; video-only snapshot
+atomicity does not establish that wider contract.
+
+Composition settings are likewise immutable inputs, not a second saved/live
+project. Track/clip presentation values reference existing identities and reject
+duplicates or orphan properties. New crop/embedding properties must enter the
+owned saved schema and native history together before their UI is enabled.
 
 Target objects:
 
@@ -203,6 +252,15 @@ Target objects:
   candidate track replacements, expected base state and declared failure result.
 - **RenderPlan:** ordered eligible layers/segments, source-time mappings, gaps,
   transforms and output settings shared by preview and export.
+- **FrameCrop:** retained left/top/right/bottom margins as fractions of the oriented
+  original source. Removing borders is spatial crop; changing clip start/end is
+  temporal trim. Crop changes neither source bytes nor clip duration. Cropping
+  precedes placement, while project canvas dimensions remain independent.
+- **Embedded relationship / FrameRectangle:** stable parent track identity and
+  parent-relative rectangle. The child stays an ordinary native video track with
+  a parent badge and explicit detach. Bound groups move together; hierarchy never
+  depends on pane positions. Missing parents, self-parenting and cycles reject the
+  state. Split/copy/join/history must retain or explicitly remap these properties.
 
 Do not silently replace the current serializer with this target model. Introduce
 an explicit owned schema version and readers/defaults for existing simple clips.
@@ -269,6 +327,15 @@ repeated absolute request for the already achieved state is a no-op; a second
 intentional Duplicate click has fresh new identities and creates another copy.
 No saved execution checkpoint or log decides which edit steps to skip.
 
+General Undo/Redo now retains the current scroll position and zoom. Track focus
+restoration does not scroll to the first selected track. During native history
+restoration, track additions can synchronously request scrollbar recalculation;
+`ProjectHistory::IsRestoringState` defers those requests until the complete track
+list exists. Otherwise a partial one-track list clamps away the prior vertical
+position before the rest is restored. Normal document-boundary clamping remains
+allowed. This narrow host change is required for audio, video and other edits;
+putting it only in video code would leave the general bug intact.
+
 Playback: the native audio engine remains the only project clock. The evaluator
 maps project time to source content. Ordinary single-source playback retains mpv
 and the existing low-resolution proxy. Gap/visibility changes select lower layers
@@ -294,16 +361,36 @@ No authentication is needed inside the local edit kernel; scripting pipes retain
 the local application's access boundary. Service credentials belong to release
 infrastructure, not project or media payloads.
 
-Layer evaluation is pure and shared: highest eligible track wins; a muted track or
-clip is transparent; when any track is soloed only soloed tracks are eligible;
-mute wins over solo. A gap exposes lower eligible content. Hidden clips still
-contribute to declared project duration and source-protection lists. Audio mute,
-solo and gain remain independent operations on separate audio tracks.
+Current preview/export share `EvaluateVideoLayers`: the highest visible simple
+track wins, with lower pictures exposed through gaps. The new independent
+`EvaluateVideoTimeline` returns an owned bottom-to-top `VideoFramePlan`, retaining
+multiple simultaneous samples rather than flattening them to one winner. Each
+sample carries source/clip identity, source time, retained crop and resolved canvas
+rectangle. Full-frame layers keep ordinary upper-track precedence; embedded
+children are ordered above their own parent regardless of pane-row positions.
+
+The composition foundation treats muted clips/tracks as transparent. A parent gap
+or mute hides its descendants; a child gap exposes its parent. Solo applies to a
+bound parent/child group, with mute winning inside the group, so soloing a child
+does not create an orphan overlay. A root group's stacking follows native root
+track order. Rectangles currently fit inside their parent; out-of-frame placement
+is a future explicit policy. Reject nonfinite geometry, empty crops, duplicate
+properties and invalid parent graphs before producing a frame plan.
+
+Crop margins remain fractions of original oriented source dimensions. Proxy
+resolution and relinking to a different resolution cannot change the intended
+framing. Placement maps the retained crop into its rectangle; letterboxing/aspect
+controls belong to the render settings rather than altering those margins. The
+first UI should offer frame handles, numeric margins and reset for the whole clip.
+It must retain crop/embedding through copy, split, compatible joins, save/reopen
+and Undo/Redo before release. Hidden clips still contribute to project duration
+and source protection. Audio mute/solo/gain remain separate native operations.
 
 The current export flattens eligible simple layers only at its boundary and
 passes source ranges to FFmpeg. Rich RenderPlan evaluation will replace that
 translation gradually, with paired preview/export cases before enabling a new
-content type. All-muted output is black for the explicit project duration and
+content type. The new geometry evaluator does not yet render pixels or change
+the installed feature set. All-muted output is black for the explicit project duration and
 still includes the edited audio. Project canvas/FPS are independent of whichever
 source happens to be visible at time zero. Output FPS conversion preserves
 duration; interpreting source FPS is a separate retiming edit.
@@ -327,6 +414,7 @@ user's responsibility; the product must not delete them to repair a cache.
 | Active settings `_video-previews` | `PrepareVideoPreview.cpp`: proxy/thumbnail pairs by source identity | Startup and completed preparation prune orphans; leases protect live readers; current plus two predecessors per source, 36 entries total |
 | `_autopsy-video-export-*` beside chosen output | `ExportVideoMix.cpp`: owner marker, mix, filter instructions and pending result | Startup and each export remove abandoned owned work; live owner lock prevents deletion; success/cancel removes staging; one atomic same-volume publication |
 | `.build/_core` | CMake/CTest: portable checks and generated executables | Updated in place on each normal test call; disposable build cache, not an install or product version |
+| `.build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
 | Installer build `package` | `build_video_installer.py`: completed installer and build manifest | Deterministic builder retains its accepted matching output, cleans pending owned build work; a new candidate receives its own content identity |
 | Test work roots | `run_fork_test_harness.py`: owned processes, generated neutral footage and result records | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
 | Future complex-preview chunks | `PrepareVideoPreview` orchestration with renderer | Same source/plan version grouping and leases; finite cache bound before enabling; no unbounded per-play history |
@@ -387,6 +475,8 @@ These are proposed thresholds, not measured release guarantees.
 | Ten seconds ordinary 30-fps playback, prepared low-resolution proxy, supported test host | Preview follows native clock smoothly | At least 98% displayed frames, drift at most two project frames; timestamp/drop counters on synthetic footage |
 | Several sources/FPS, gaps, mute/solo and compounds | Preview/export choose identical content at sampled project times | Same source occurrence/frame and background; evaluator plus rendered fixture checks |
 | All picture muted with sound still present | Export retains declared canvas/duration and audio | Black frames for full declared duration; probe and decoded-frame/audio checks |
+| Crop/PiP, source/proxy resolution changes and nested parents | Composition retains original framing and resolves parent-relative placement | Exact fractional geometry and source time; model cases pass, rendered/native round-trip still required |
+| Any audio/video edit followed by Undo/Redo at fixed zoom, horizontally and vertically scrolled | Native history retains viewport or clamps only to document bounds | No zoom change or gratuitous jump; `fork-history-view` passed twelve transitions on the corrected build |
 | Seek/edit/cancel during background preparation | Preview ignores obsolete work, cache protects live readers | No stale publication, bounded retained files; worker cancellation and lease cases |
 | Native API contract changes | Only adapter contract case fails, model cases still run | Independent core build plus supported-host adapter build/tests |
 
@@ -403,11 +493,51 @@ flags, relinking and preset bounds. Native scenarios in
 `scripts/piped-work/test_fork_features.py` exercise public commands, project save
 and media outputs. `fork-fixtures` checks generated video without opening the app.
 
+Dedicated `TestVideoEdits.cpp` cases cover all-or-nothing plans, stale expected
+states, interruption before/after publication, repeated absolute requests, bound
+movement, invalid parent graphs, retained trims and flags. Dedicated
+`TestVideoComposition.cpp` cases cover ordered sources/gaps, spatial crop, nested
+parent geometry, mute/solo, all-black duration and owned results. These suites
+compile with standard C++ and Catch2 without native editor or media SDKs.
+
+`run_affected_tests.py` is the single portable impact-map/runner owner. The SDLC
+test action and CI call it; individual checks never call the aggregate. CTest
+discovers actual compiled Catch2 names, so selection does not parse source text.
+The map expands changed shared inputs to dependent groups, builds only their
+targets and executes only named checks without matching acceptance. Changed
+tracked, staged/unstaged, renamed/deleted and untracked files are considered.
+Unknown executable inputs within portable ownership block until mapped or an
+explicit all-check scope is chosen. An unavailable shallow comparison base selects
+the full portable scope rather than guessing that nothing changed.
+
+Receipts retain original result IDs and exact source/test/fixture/lock, executable,
+runtime, command and environment identities. A newer applicable failed result
+prevents reuse of an older pass. Inputs changing during compilation or execution
+cannot earn acceptance. Hashes identify inputs and detect mismatches; behavior
+tests establish passing results. Three receipts per named check bound retention;
+eviction removes reuse evidence rather than manufacturing a pass. The OS releases
+the store lock on process death; no checkpoint/PID recovery protocol is required.
+
+Native adapter inputs are reported separately. Without an explicit native selector
+the portable runner does not launch the desktop or claim native acceptance. With
+the two documented native inputs, it uses the existing guarded harness and that
+owner's exact executable/check receipts. Changing portable checks or this document
+does not revoke an unchanged installer or schedule its media acceptance again.
+This uses the Ceratops refactor plan's existing-owner/affected-input/result-reuse
+idea; Nx, a new database and a second cache/dependency service are unnecessary.
+
 The hosted v2 build and its fixture check passed. Two latest native link/trim
 regressions passed locally; the larger native case then stopped on held-mouse
 capture. Do not report that as a complete native pass, debug the retained display
 guard here, or transfer those results to a different binary. No NVIDIA hardware
 result is available. Document mechanics do not establish implementation quality.
+
+The urgent general Undo/Redo fix is built separately from the new core foundation:
+source `d43451e1fddfd039eb576b1dd88d30c11fae3927`, installer SHA-256
+`8076e62b3b04165d1e1749dd1b6fa3c8b2e21919527823f6504f91f3df73105e`.
+Its dedicated `fork-history-view` private native session passed twelve transitions
+with unchanged horizontal/vertical position and zoom. No installation was
+performed. Later test-only and foundation changes do not relabel that binary.
 
 Implementation order:
 
@@ -442,9 +572,14 @@ require the applicable approval before creation.
   cross-track/cross-project operations; do not treat IDs as globally unique today.
 - **VFR and precision:** current doubles/nominal FPS are insufficient evidence of
   exact presentation timestamps. Owner: timing model; explicit conversion/indexing.
-- **Multi-track atomicity:** current operations have individually prepared states
-  but need a common transaction contract for broader operations. Owner: coordinator;
-  reject any implementation that can publish only part of a linked plan.
+- **Multi-track atomicity:** the new host-free snapshot planner publishes one
+  complete video state, while existing native operations still need adoption of
+  the common mixed-media transaction. Owner: coordinator; reject an adapter that
+  can publish only part of a linked plan or exposes intermediate view state.
+- **Rich rendering/persistence:** crop/PiP geometry is implemented independently,
+  but native controls, badges, saved properties and shared pixel rendering are
+  still required. Owner: track/storage/render adapters; do not advertise these as
+  installed features or flatten them into an incompatible simple saved clip.
 - **Upstream coupling:** native Track, registry and history contracts can change.
   Owner: adapters; model/evaluator tests must remain independently buildable.
 - **Desktop automation:** held-mouse capture limits existing evidence. Keep the

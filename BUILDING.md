@@ -525,13 +525,36 @@ saved clip flags, relinking, source frame stepping and modern software exports.
 
 ### Independent feature checks
 
-The same CMake/CTest entry point is used by local contributors and GitHub CI:
+The SDLC `repository.actions.test` operation and GitHub CI call the same owning
+runner. Its direct developer entry point is:
 
-    cmake -S src/video -B _core-build -DCMAKE_BUILD_TYPE=Release
-    cmake --build _core-build --config Release --parallel 2
-    ctest --test-dir _core-build -C Release --output-on-failure
+    uv run --project scripts --locked --with cmake==3.31.10 python scripts/run_affected_tests.py
 
-This mode checks the owned video timing, transport, and product-name policy
+The runner compares against the merge base with `origin/main`, including current
+staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use `--base REF`
+for another comparison. CI supplies the event's base revision; an unavailable
+shallow base conservatively selects all portable checks. `--all` explicitly
+selects that full scope. Docs-only changes need no portable tests.
+
+One input map in `run_affected_tests.py` selects dependent groups; unknown owned
+executable inputs require a map entry or an explicit scope decision. CMake builds
+only their targets, and Catch2/CTest discovers individual compiled case names.
+Separate suites cover edit plans, composition geometry, existing playback,
+branding, installer production, harness policy/lifecycle and affected selection.
+Native adapter inputs are reported separately, without implying desktop acceptance.
+
+The runner owns `.build/_core` and `.build/_test-results`. Immutable results retain
+their original IDs and source/test/fixture/lock/executable/runtime/command inputs.
+Matching passing results can be reused unless a newer applicable failure exists;
+source changes during compilation or execution cannot earn a pass. At startup and
+after publication, receipts retain the current and at most two earlier records per
+named check. An OS lock protects active work; its one lock file persists, while
+pending files are removed under exclusive ownership. Other files are untouched.
+The standard-library test interpreter is bound to persistent `sys.base_prefix`,
+so a CMake cache never depends on a discarded temporary `uv --with` environment.
+Later test changes do not rebuild or revoke an unchanged accepted installer.
+
+This mode checks owned video timing, transport, edit plans, crop/PiP geometry and product-name policy
 without the editor or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
 test interface, pinned to its Git commit. CMake owns the current executables,
 dependency checkout, and generated files in the selected build directory.

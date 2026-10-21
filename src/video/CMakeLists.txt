@@ -26,19 +26,36 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       GIT_REPOSITORY https://github.com/catchorg/Catch2.git
       GIT_TAG 6bf41f4f71bf25641befe33365b9d3da4d940920)
    FetchContent_MakeAvailable(Catch2)
+   include("${catch2_SOURCE_DIR}/contrib/Catch.cmake")
    add_executable(video-playback-test TestVideoPlayback.cpp ../../tests/Catch2Main.cpp)
    target_compile_features(video-playback-test PRIVATE cxx_std_17)
    target_link_libraries(video-playback-test PRIVATE Catch2::Catch2)
-   add_test(NAME video-playback COMMAND video-playback-test)
+   catch_discover_tests(video-playback-test TEST_PREFIX "video-playback::"
+      PROPERTIES TIMEOUT 30)
+   add_executable(video-edits-test PlanVideoEdits.cpp TestVideoEdits.cpp ../../tests/Catch2Main.cpp)
+   target_compile_features(video-edits-test PRIVATE cxx_std_17)
+   target_link_libraries(video-edits-test PRIVATE Catch2::Catch2)
+   catch_discover_tests(video-edits-test TEST_PREFIX "video-edits::" PROPERTIES TIMEOUT 30)
+   add_executable(video-composition-test PlanVideoEdits.cpp EvaluateVideoTimeline.cpp
+      TestVideoComposition.cpp ../../tests/Catch2Main.cpp)
+   target_compile_features(video-composition-test PRIVATE cxx_std_17)
+   target_link_libraries(video-composition-test PRIVATE Catch2::Catch2)
+   catch_discover_tests(video-composition-test TEST_PREFIX "video-composition::" PROPERTIES TIMEOUT 30)
    add_executable(product-branding-core-test
       ../../libraries/lib-strings/tests/TestProductBranding.cpp ../../tests/Catch2Main.cpp)
    target_compile_features(product-branding-core-test PRIVATE cxx_std_17)
    target_compile_definitions(product-branding-core-test PRIVATE AUTOPSY_BRANDING_CORE_ONLY=1)
    target_link_libraries(product-branding-core-test PRIVATE Catch2::Catch2)
-   add_test(NAME product-branding-core COMMAND product-branding-core-test)
+   catch_discover_tests(product-branding-core-test TEST_PREFIX "product-branding-core::"
+      PROPERTIES TIMEOUT 30)
    find_package(Python3 QUIET COMPONENTS Interpreter)
    if(Python3_Interpreter_FOUND)
-      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests")
+      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests" "${CMAKE_BINARY_DIR}/_selection-tests")
+      add_test(NAME affected-test-selection COMMAND uv run --project
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
+         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" -p test_run_affected_tests.py)
+      set_tests_properties(affected-test-selection PROPERTIES TIMEOUT 180
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_selection-tests")
       add_test(NAME fork-installer-build COMMAND uv run --project
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
          -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows" -p test_build_video_installer.py)
@@ -94,6 +111,7 @@ endif()
 
 target_sources(Audacity PRIVATE ShowVideoPreview.cpp SyncVideoPlayback.h
    ExportVideoMix.cpp ExportVideoMix.h EditVideoTimeline.cpp EditVideoTimeline.h
+   PlanVideoEdits.cpp PlanVideoEdits.h EvaluateVideoTimeline.cpp EvaluateVideoTimeline.h
    PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h
    CreateVideoTrack.cpp CreateVideoTrack.h ChooseVideoExport.cpp ChooseVideoExport.h RelinkVideoMedia.cpp RelinkVideoMedia.h
    ../clip-groups/LinkMediaClips.cpp ../clip-groups/LinkMediaClips.h
@@ -139,6 +157,8 @@ add_unit_test(
    NAME video-playback
    SOURCES TestVideoPlayback.cpp
 )
+add_unit_test(NAME video-edits SOURCES PlanVideoEdits.cpp TestVideoEdits.cpp)
+add_unit_test(NAME video-composition SOURCES PlanVideoEdits.cpp EvaluateVideoTimeline.cpp TestVideoComposition.cpp)
 if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")
    find_package(Python3 QUIET COMPONENTS Interpreter)

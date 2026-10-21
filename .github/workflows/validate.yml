@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Set up Node.js
@@ -43,6 +45,7 @@ jobs:
       - name: Validate and test through SDLC
         uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@fd2616cac03ef727a0ea96dc778ad15295d05b90
         env:
+          AUTOPSY_TEST_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           CERATOPS_PROJECTS_ROOT: ${{ github.workspace }}/..
           CERATOPS_TASK_TEMP_ROOT: ${{ runner.temp }}
         with:
