@@ -148,6 +148,43 @@ def check_media(client, root, ffmpeg, ffprobe):
     client.send("Undo")
     client.send("Undo")
     assert client.data("GetLinkedMediaClips") == linked
+    # A split must reassign later group members even when their video track
+    # has no clip crossing the cut. Moving that later pair must keep its sound.
+    client.send("SelectAll")
+    client.send("SelectTime: Start=0 End=4.02")
+    client.send("Duplicate")
+    client.send("MoveVideoClip: Track=2 Id=1 Start=6")
+    client.send('LinkMediaClips: Clips="0:0,1:0,2:0,3:0"')
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=2 End=2")
+    client.send("Split")
+    members = client.data("GetLinkedMediaClips")
+    left_groups = {row["group"] for row in members if row["start"] < 2}
+    right_groups = {row["group"] for row in members if row["start"] >= 2}
+    assert len(members) == 6 and len(left_groups) == len(right_groups) == 1, members
+    assert not left_groups.intersection(right_groups), members
+    client.send("MoveVideoClip: Track=2 Id=1 Start=7")
+    moved_members = client.data("GetLinkedMediaClips")
+    assert sorted(round(row["start"], 5) for row in moved_members) == [0, 0, 3, 3, 7, 7], moved_members
+    for _ in range(5):
+        client.send("Undo")
+    assert client.data("GetLinkedMediaClips") == linked
+    # Unrelated native audio may start before zero. It must not prevent a
+    # linked video border trim or move when no actual overlap is introduced.
+    client.send("SelectAll")
+    client.send("SelectTime: Start=0 End=4.02")
+    client.send("Duplicate")
+    client.send('UnlinkMediaClips: Clips="2:0"')
+    client.send("SelectTracks: Track=3 TrackCount=1 Mode=Set")
+    client.send("SetClip: At=1 Start=-2")
+    drag_owned_video_clip(client, 4, 3.5, track=0)
+    negative = client.data("GetLinkedMediaClips")
+    assert all(abs(row["end"] - 3.5) < 0.04 for row in negative if row["track"] < 2), negative
+    assert any(row["track"] == 3 and abs(row["start"] + 2) < 1e-7 for row in negative), negative
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    client.file("ImportVideo", source)
+    linked = client.data("GetLinkedMediaClips")
     for track, text, marker in ((0, "Picture flag", "a" * 32), (1, "Sound flag", "b" * 32)):
         command = f'AddClipMarker: Track={track} At=1 Text="{text}" Id="{marker}"'
         client.send(command)

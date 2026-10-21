@@ -19,6 +19,7 @@
 #include <wx/choicdlg.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
+#include <limits>
 #include <map>
 #include <set>
 namespace {
@@ -134,7 +135,7 @@ void ApplyMediaBounds(AudacityProject &project, const std::vector<MediaBounds> &
    }
    // Extending a linked trim must also leave every other interval intact.
    for (auto *track : TrackList::Get(project).Any<WaveTrack>()) {
-      double end = -1;
+      double end = -std::numeric_limits<double>::infinity();
       for (const auto &clip : track->SortedIntervalArray()) {
          const auto changed = audio.find(clip.get());
          const auto start = changed == audio.end() ? clip->GetPlayStartTime() : changed->second.first;
@@ -409,6 +410,9 @@ bool SplitMediaAtSelection(AudacityProject &project, double from, double to, Tra
          const auto cut = cuts.find(choice.group);
          if (cut == cuts.end() && !(only ? choice.track == only : choice.track->GetSelected())) continue;
          const auto at = cut == cuts.end() ? requested : cut->second;
+         // Later members may live on tracks that do not cross this cut. They
+         // still need the same right-hand group as their linked soundtrack.
+         if (choice.video && cut != cuts.end()) video.emplace(choice.video, choice.video->Timeline());
          if (choice.start + 1e-7 >= at || choice.end - 1e-7 <= at) continue;
          if (choice.audio) audioCuts.emplace(static_cast<WaveTrack*>(choice.track), at);
          else {
