@@ -33,5 +33,5 @@ body:
   - type: markdown
     attributes:
       value: >
-        Please note that Audacity is currently undergoing major restructuring. See the [Roadmap](https://github.com/audacity/audacity/wiki/Roadmap)
+        Please note that AuTopsy is currently undergoing major restructuring. See the [Roadmap](https://github.com/Ceratops-Code/AuTopsy/wiki/Roadmap)
         for further info. Features outside the roadmap may be delayed or postponed significantly. 

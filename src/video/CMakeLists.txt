@@ -1,7 +1,26 @@
 #[[
-Windows video reference preview. The SDK is an external libmpv development
+AuTopsy video tracks and synchronized preview. The SDK is an external libmpv development
 package; its DLL stays beside this build's executable, never in system folders.
 ]]
+
+# The owned timing/transport models can be checked without configuring the
+# upstream application, downloading its audio SDKs, or opening a desktop window.
+# Both CI and local contributors use this same CMake/CTest entry point.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+   cmake_minimum_required(VERSION 3.16)
+   project(AuTopsyVideoCoreChecks LANGUAGES CXX)
+   enable_testing()
+   include(FetchContent)
+   FetchContent_Declare(Catch2
+      GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+      GIT_TAG 6bf41f4f71bf25641befe33365b9d3da4d940920)
+   FetchContent_MakeAvailable(Catch2)
+   add_executable(video-playback-test TestVideoPlayback.cpp ../../tests/Catch2Main.cpp)
+   target_compile_features(video-playback-test PRIVATE cxx_std_17)
+   target_link_libraries(video-playback-test PRIVATE Catch2::Catch2)
+   add_test(NAME video-playback COMMAND video-playback-test)
+   return()
+endif()
 
 option(audacity_has_video_preview "Build video preview and clip editing" OFF)
 if(NOT audacity_has_video_preview)
@@ -86,7 +105,7 @@ if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")
    find_package(Python3 QUIET COMPONENTS Interpreter)
    if(Python3_Interpreter_FOUND)
-      foreach(_case groups tracks video preview)
+      foreach(_case groups tracks video preview branding)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"

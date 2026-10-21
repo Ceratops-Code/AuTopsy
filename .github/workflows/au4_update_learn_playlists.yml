@@ -14,10 +14,11 @@ defaults:
 
 jobs:
   au4_update_playlists:
+    if: github.repository == 'audacity/audacity'
     runs-on: ubuntu-20.04
     steps:
       - name: Clone repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Update info about the get started playlist in s3
         run: |

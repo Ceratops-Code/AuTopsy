@@ -252,10 +252,7 @@ void OnQuickFix(const CommandContext &context)
 
 void OnQuickHelp(const CommandContext &context)
 {
-   auto &project = context.project;
-   HelpSystem::ShowHelp(
-      &GetProjectFrame( project ),
-      L"Quick_Help");
+   OpenInDefaultBrowser("https://github.com/Ceratops-Code/AuTopsy#readme");
 }
 
 void OnManual(const CommandContext &context)
@@ -268,10 +265,7 @@ void OnManual(const CommandContext &context)
 
 void OnAudacitySupport(const CommandContext &context)
 {
-   auto &project = context.project;
-   HelpSystem::ShowHelp(
-      &GetProjectFrame( project ),
-      L"Audacity_Support");
+   OpenInDefaultBrowser("https://github.com/Ceratops-Code/AuTopsy/issues");
 }
 
 void OnAudioDeviceInfo(const CommandContext &context)
@@ -422,11 +416,11 @@ auto HelpMenu()
    static auto menu = std::shared_ptr{
    Menu( wxT("Help"), XXO("&Help"),
       Section( "Basic",
-         Command( wxT("QuickHelp"), XXO("&Quick Help"), OnQuickHelp,
+         Command( wxT("QuickHelp"), XXO("AuTopsy &Guide"), OnQuickHelp,
             AlwaysEnabledFlag ),
-         Command( wxT("Manual"), XXO("&Manual"), OnManual,
+         Command( wxT("Manual"), XXO("Audio &Manual (Upstream)"), OnManual,
             AlwaysEnabledFlag ),
-         Command( wxT("AudacitySupport"), XXO("Audacity &Support"), OnAudacitySupport,
+         Command( wxT("AudacitySupport"), XXO("AuTopsy &Support"), OnAudacitySupport,
             AlwaysEnabledFlag )
       ),
 

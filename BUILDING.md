@@ -12,10 +12,10 @@ For Windows see below for important installer settings.
 Please note that Xcode 14 support on macOS requires CMake 3.24.0 or later.
 ### Conan
 
-Audacity uses [Conan 2](https://conan.io/) to manage dependencies. If `conan` is not already installed, Audacity will download and install it automatically.
+AuTopsy uses [Conan 2](https://conan.io/) to manage dependencies. If `conan` is not already installed, AuTopsy will download and install it automatically.
 
 However, if you want to install Conan manually, you can do so by following the instructions on the [Conan website](https://docs.conan.io/en/latest/installation.html).
-Manual installation can be useful if you want to use Conan to manage dependencies for other projects or if you plan to have multiple builds of Audacity on the 
+Manual installation can be useful if you want to use Conan to manage dependencies for other projects or if you plan to have multiple builds of AuTopsy on the
 same machine.
 
 ### CMake
@@ -28,11 +28,11 @@ On Linux, `cmake` is usually available from the system package manager. Alternat
 
 ### Windows
 
-We build Audacity using [Microsoft Visual Studio](https://visualstudio.microsoft.com/vs/community/) 2022. In order to build Audacity **Desktop development with C++** workload is required.
+We build AuTopsy using [Microsoft Visual Studio](https://visualstudio.microsoft.com/vs/community/) 2022. In order to build AuTopsy **Desktop development with C++** workload is required.
 
 ### macOS
 
-We build Audacity using XCode versions 12 and later. However, it is likely possible to build it with XCode 7.
+We build AuTopsy using XCode versions 12 and later. However, it is likely possible to build it with XCode 7.
 
 ### Linux
 
@@ -71,9 +71,9 @@ $ sudo pip3 install conan
 
 https://graphviz.org/download/
 
-This is not necessary to build and run Audacity. It generates diagrams that aid understanding of the large scale structure of Audacity's source code.
+This is not necessary to build and run AuTopsy. It generates diagrams that aid understanding of the large scale structure of AuTopsy's source code.
 
-If you install Graphviz, then an image file modules.dot.svg is generated in the build directory as a by-product of configuration. It shows the dependencies among the Audacity executable, its optional extension modules, its shared libraries, and third-party libraries.
+If you install Graphviz, then an image file modules.dot.svg is generated in the build directory as a by-product of configuration. It shows the dependencies among the AuTopsy executable, its optional extension modules, its shared libraries, and third-party libraries.
 
 You will also be able to change to the scripts directory and run ./graph.pl to generate a diagram of dependencies among source code files within the executable.
 
@@ -85,23 +85,23 @@ You will also be able to change to the scripts directory and run ./graph.pl to g
 2. Use this AuTopsy source checkout, which includes the video extension
    and is based on the upstream audacity3 branch.
 
-2. Open CMake GUI. 
+3. Open CMake GUI.
    
    Set the **Where is the source code** to the location of this AuTopsy checkout.
    
    Set **Where to build the binaries** to the location you want to place your build in. It is preferred that this location is not within the directory with the source code.
 
-3. Press **Configure**. You can choose which version of Visual Studio to use and the platform to build for in the pop-up. We support **x64** and **Win32** platforms. The **x64** platform is a default option. Press **Finish** to start the configuration process.
+4. Press **Configure**. You can choose which version of Visual Studio to use and the platform to build for in the pop-up. We support **x64** and **Win32** platforms. The **x64** platform is a default option. Press **Finish** to start the configuration process.
 
-4. After successful configuration, you will see `Configuring done` in the last line of the log. Press **Generate** to generate the Visual Studio project. 
+5. After successful configuration, you will see `Configuring done` in the last line of the log. Press **Generate** to generate the Visual Studio project.
 
-5. After you see "Generating done", press **Open Project** to open the project in Visual Studio.
+6. After you see "Generating done", press **Open Project** to open the project in Visual Studio.
    
-6. Select "Build -> Build Solution".
+7. Select "Build -> Build Solution".
    
-7. You can now run and debug Audacity!
+8. You can now run and debug AuTopsy!
       
-Generally, steps 1-5 are only needed the first-time you configure. Then, after you've generated the solution, you can open it in Visual Studio next time. If the project configuration has changed, the IDE will invoke CMake internally. 
+Generally, steps 1-6 are only needed the first-time you configure. Then, after you've generated the solution, you can open it in Visual Studio next time. If the project configuration has changed, the IDE will invoke CMake internally.
 
 ### Building with ASIO support on Windows
 
@@ -109,66 +109,66 @@ To enable ASIO support, please select `audacity_has_asio_support=On` in CMake af
 
 ## macOS
 
-1. Clone Audacity from the Audacity GitHub project. 
+1. Clone AuTopsy from its GitHub project.
   
     ```
-    $ git clone https://github.com/audacity/audacity/
+    $ git clone https://github.com/Ceratops-Code/AuTopsy/
     ```
 
-2. Configure Audacity using CMake:
+2. Configure AuTopsy using CMake:
    ```
    $ mkdir build && cd build
-   $ cmake -GXcode ../audacity
+   $ cmake -GXcode ../AuTopsy
    ```
 
-3. Open Audacity XCode project:
+3. Open AuTopsy XCode project:
    ```
    $ open Audacity.xcodeproj
    ```
-   and build Audacity using the IDE. 
+   and build AuTopsy using the IDE.
 
 Steps 1 and 2 are only required for first-time builds. 
 
-Alternatively, you can use **CLion**. If you chose to do so, open the directory where you have cloned Audacity using CLion and you are good to go.
+Alternatively, you can use **CLion**. If you chose to do so, open the directory where you have cloned AuTopsy using CLion and you are good to go.
 
-Before Audacity 3.2 only **x86_64** builds and XCode "legacy" build system were supported. In order to build older version please use:
+In upstream releases before version 3.2 only **x86_64** builds and XCode "legacy" build system were supported. In order to build older version please use:
 
 ```
    $ mkdir build && cd build
-   $ cmake -GXcode -T buildsystem=1 ../audacity
+   $ cmake -GXcode -T buildsystem=1 ../AuTopsy
 ```
 
-to configure Audacity. 
+to configure AuTopsy.
 
 ## Linux & Other OS
 
-1. Clone Audacity from the Audacity GitHub project. 
+1. Clone AuTopsy from its GitHub project.
   
     ```
-    $ git clone https://github.com/audacity/audacity/
+    $ git clone https://github.com/Ceratops-Code/AuTopsy/
     ```
 
-2. Configure Audacity using CMake:
+2. Configure AuTopsy using CMake:
    ```
    $ mkdir build && cd build
-   $ cmake -G "Unix Makefiles" ../audacity
+   $ cmake -G "Unix Makefiles" ../AuTopsy
    ```
    By default, Debug build will be configured. To change that, pass `-DCMAKE_BUILD_TYPE=Release` to CMake.
 
-3. Build Audacity:
+3. Build AuTopsy:
    ```
    $ make -j`nproc`
    ```
 
 4. Testing the build:
-   Adding a "Portable Settings" folder allows Audacity to ignore the settings of any existing Audacity installation.
+   Adding a "Portable Settings" folder allows AuTopsy to ignore the settings of any existing AuTopsy installation.
    ```
    $ cd Debug/bin
    $ mkdir "Portable Settings"
    $ ./audacity
    ```
 
-5. Installing Audacity
+5. Installing AuTopsy
    ```
    $ cd <build directory>
    $ sudo make install
@@ -182,7 +182,7 @@ You can use `cmake -LH` to get a list of the options available (or use CMake GUI
 
 ### Building using system libraries
 
-On Linux it is possible to build Audacity using (almost) only the libraries provided by the package manager. Please, see the list of required libraries [here](linux/required_libraries.md).
+On Linux it is possible to build AuTopsy using (almost) only the libraries provided by the package manager. Please, see the list of required libraries [here](linux/required_libraries.md).
 
 ```
 $ mkdir build && cd build
@@ -190,27 +190,24 @@ $ cmake -G "Unix Makefiles" \
         -Daudacity_use_ffmpeg=loaded \
         -Daudacity_lib_preference=system \
         -Daudacity_obey_system_dependencies=On \
-         ../audacity
+         ../AuTopsy
 ```
 
 There are a few cases when the local library build is preferred:
 
-1. **wxWidgets**: While Audacity on **Linux** uses vanilla version of wxWidgets, we **require** that version **3.1.3** is used. This version is not available in most of the distributions.
-2. **portaudio-v19**: Audacity currently uses [some private APIs](https://github.com/audacity/audacity/issues/871), so using system portaudio is not yet possible.
+1. **wxWidgets**: While AuTopsy on **Linux** uses vanilla version of wxWidgets, we **require** that version **3.1.3** is used. This version is not available in most of the distributions.
+2. **portaudio-v19**: AuTopsy currently uses [some private APIs](https://github.com/audacity/audacity/issues/871), so using system portaudio is not yet possible.
 3. **vamp-host-sdk**: Development packages are not available in Ubuntu 20.04.
 4. **libnyquist** & **portmixer**: Libraries are not available in Ubuntu 20.04.
 5. **sqlite3** & **libsmbs**: Libraries are very outdated in Ubuntu 20.04.
 
 It is not advised to mix system and local libraries, except for the list above. `ZLib` is a very common dependency; it is possible to mix system and local libraries in one build. However, we advise against doing so.
 
-There is a [`Dockerfile`](linux/build-environment/Dockerfile) that can be used as an example of how to build Audacity using system libraries: 
+The [Linux package definitions](linux/packages) contain container environments
+and dependency setup for the supported distribution packages.
 
-```
-$ docker build -t audacity_linux_env .\linux\build-environment\
-$ docker run --rm -v ${pwd}:/audacity/audacity/ -v ${pwd}/../build/linux-system:/audacity/build -it audacity_linux_env
-```
-
-To find system packages, we rely on `pkg-config`. There are several packages that have broken `*.pc` or do not use `pkg-config` at all. For the docker image - we handle this issue by installing the correct [`pc` files](linux/build-environment/pkgconfig/).
+System package discovery uses `pkg-config`. The distribution-specific setup
+scripts in [linux/packages](linux/packages) describe their package dependencies.
 
 ### Disabling Conan
 
@@ -225,7 +222,7 @@ Additionally, passing `-Daudacity_conan_force_build_dependencies=On` will force 
 
 ### Custom Conan profiles
 
-Audacity will try to detect the host and build profiles automatically. However, `audacity_conan_host_profile` and `audacity_conan_build_profile` CMakes options can be used to specify custom Conan profiles.
+AuTopsy will try to detect the host and build profiles automatically. However, `audacity_conan_host_profile` and `audacity_conan_build_profile` CMakes options can be used to specify custom Conan profiles.
 
 ### Troubleshooting Conan issues
 
@@ -274,33 +271,33 @@ $ conan cache clean "*"
 
 ### Selecting target architecture on macOS
 
-Starting with version 3.2.0, Audacity target architecture on macOS can be selected by passing `MACOS_ARCHITECTURE` to the CMake during the configuration.
+Starting with version 3.2.0, AuTopsy target architecture on macOS can be selected by passing `MACOS_ARCHITECTURE` to the CMake during the configuration.
 
 To build for Intel:
 
 ```
-$ cmake -GXcode -DMACOS_ARCHITECTURE=x86_64 ../audacity
+$ cmake -GXcode -DMACOS_ARCHITECTURE=x86_64 ../AuTopsy
 ```
 
 To build for AppleSilicon:
 
 ```
-$ cmake -GXcode -DMACOS_ARCHITECTURE=arm64 ../audacity
+$ cmake -GXcode -DMACOS_ARCHITECTURE=arm64 ../AuTopsy
 ```
 
 The default build architecture is selected based on `CMAKE_HOST_SYSTEM_PROCESSOR` value.
 
 When cross-compiling from Intel to AppleSilicon, or if *Rosetta 2* is not installed on the AppleSilicon Mac, 
-a native Audacity version build directory is required, as Audacity needs a working `image-compiler`. 
+a native host-architecture build directory is required, as AuTopsy needs a working `image-compiler`.
 
-For example, to build ARM64 version of Audacity on Intel Mac:
+For example, to build ARM64 version of AuTopsy on Intel Mac:
 
 ```
 $ mkdir build.x64
-$ cmake -GXcode -DMACOS_ARCHITECTURE=x86_64 -B build.x64 -S ../audacity
+$ cmake -GXcode -DMACOS_ARCHITECTURE=x86_64 -B build.x64 -S ../AuTopsy
 $ cmake --build build.x64 --config Release --target image-compiler
 $ mkdir build.arm64
-$ cmake -GXcode -DMACOS_ARCHITECTURE=arm64 -DIMAGE_COMPILER_EXECUTABLE=build.x64/utils/RelWithDebInfo/image-compiler -B build.arm64 -S ../audacity
+$ cmake -GXcode -DMACOS_ARCHITECTURE=arm64 -DIMAGE_COMPILER_EXECUTABLE=build.x64/utils/RelWithDebInfo/image-compiler -B build.arm64 -S ../AuTopsy
 $ cmake --build build.arm64 --config Release
 ```
 
@@ -314,7 +311,7 @@ Set one of the following environment variables to the path to the VST3 SDK (i.e.
 * `VST3SDK_PATH`
 * `VST3SDK`
 
-or copy the VST3 SDK to `vst3sdk` directory in the Audacity source tree.
+or copy the VST3 SDK to `vst3sdk` directory in the AuTopsy source tree.
 
 Pass `-Daudacity_use_vst3sdk=system` to CMake. CMake will build the SDK during the configuration.
 
@@ -336,7 +333,7 @@ The command-line encoder and picture probe ship beside AuTopsy and run without a
 console window. libmpv requires the C numeric runtime locale; Windows language
 setup keeps that locale stable after capturing the regional display separator.
 
-Configure the normal Audacity build with these additional options:
+Configure the normal AuTopsy build with these additional options:
 
     cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -Daudacity_has_tests=ON -Daudacity_has_video_preview=ON -Daudacity_video_mpv_sdk="<extracted-mpv-sdk>" -Daudacity_video_ffmpeg_runtime="<ffmpeg-runtime>"
     cmake --build _build --config Release --parallel 4
@@ -344,11 +341,15 @@ Configure the normal Audacity build with these additional options:
     cmake --install _build --config Release --prefix "$env:ProgramFiles/AuTopsy"
 
 The executable is AuTopsy.exe; internal CMake target names remain upstream's.
+The published product branch is `main`; use `--branch main` when cloning.
 Build the default target before running the app integration cases: it includes
 the runtime modules, including modules that link to the application executable.
 Building only the main executable after renaming it leaves those modules stale.
 The install command is shown for PowerShell and may need an elevated terminal.
 Set audacity_has_video_preview=OFF to build without the video feature or SDKs.
+The inherited binary updater is excluded from AuTopsy builds; its service offers
+upstream releases rather than AuTopsy builds. Product help and feedback link to
+this fork's repository. Upstream source updates use the manual process in README.md.
 The preview code is currently Windows-only; other platforms keep their existing
 build behavior. The transport CTest case covers transport ownership, repeated
 calls, interruptions before and after each player command, asynchronous seeks,
@@ -387,8 +388,29 @@ literal directory name Portable Settings is required beside the executable.
 AuTopsy owns that profile and its configured temporary audio directory.
 Installation excludes this test profile and test executables. Installed
 preferences use autopsy.cfg under the user's AuTopsy data directory;
-temporary project audio uses its SessionData directory. Audacity's profile is
+temporary project audio uses its SessionData directory. AuTopsy's profile is
 separate.
 
 Keep the libmpv package's applicable license and corresponding-source material
-with any distributed build, alongside Audacity's existing license material.
+with any distributed build, alongside AuTopsy's existing license material.
+
+### Independent feature checks
+
+The same CMake/CTest entry point is used by local contributors and GitHub CI:
+
+    cmake -S src/video -B _core-build -DCMAKE_BUILD_TYPE=Release
+    cmake --build _core-build --config Release --parallel 2
+    ctest --test-dir _core-build -C Release --output-on-failure
+
+This mode checks the owned video timing and transport models without the editor
+or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
+test interface, pinned to its Git commit. CMake owns the current executables,
+dependency checkout, and generated files in the selected build directory.
+The full Windows cases above cover the native adapters, media, and GUI; the
+independent CI checks do not claim those desktop behaviors were exercised.
+`fork-branding` additionally checks the welcome screen and native Help menu,
+including opening and closing About twice. It uses only its private test process.
+
+Inherited Audacity 4 and upstream release-publishing jobs are restricted to the
+official repository. This fork's workflow checks its own feature models and
+does not fetch or merge upstream updates automatically.

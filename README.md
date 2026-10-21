@@ -1,7 +1,35 @@
 # AuTopsy
 
+<p align="center">
+  <img src="images/AudacityLogo.png" width="960" alt="AuTopsy — green Trixie wearing blue headphones. Audio and video in sync.">
+</p>
 
-**AuTopsy** is a Windows fork of [Audacity](https://www.audacityteam.org), based on its audacity3 branch. It adds synchronized video preview, imports the video's soundtrack into ordinary editable audio tracks, and exports video with the edited audio mix. The upstream audio editor provides:
+<p align="center">
+  <strong>Audio &amp; video in sync.</strong><br>
+  Familiar multitrack audio editing, with video on the same timeline.
+</p>
+
+<p align="center">
+  <a href="#video-tracks-windows-fork">Video guide</a> ·
+  <a href="BUILDING.md">Build AuTopsy</a> ·
+  <a href="https://github.com/Ceratops-Code/AuTopsy/issues">Report a problem</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="LICENSE.txt">GPL license</a>
+</p>
+
+**AuTopsy** is an independent, open-source audio and video editor for Windows,
+forked from [Audacity's `audacity3` branch](https://github.com/audacity/audacity/tree/audacity3).
+It is maintained by [Ceratops-Code](https://github.com/Ceratops-Code).
+
+| Picture | Sound | Timeline |
+| --- | --- | --- |
+| Multiple video tracks, filmstrip clips, split, trim, and cross-track moves | Import each video's soundtrack into separate editable audio tracks | Keep picture and sound together in one scrolling track pane |
+| Smooth, lightweight preview with a separate player window | Mix, mute, add effects, or replace the original soundtrack | Save edits in your project; export MP4 or MKV with the finished mix |
+
+AuTopsy also adds persistent audio clip groups and audio/video track insertion
+before or after an existing track. Its green Trixie mascot wears blue headphones.
+
+The audio engine and its established editing tools come from Audacity:
 
 - **Recording** from any real or virtual audio device that is available to the host system.
 - **Export / Import** a wide range of audio formats, extensible with FFmpeg.
@@ -16,17 +44,50 @@
 
 ## Users
 
-Build AuTopsy using [BUILDING.md](BUILDING.md). A local installation runs from `%ProgramFiles%\AuTopsy\AuTopsy.exe`.
-Upstream help for the audio editor is available [here](https://audacityteam.org/help/).
+Build AuTopsy using [BUILDING.md](BUILDING.md). A local installation runs from
+`%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing
+and [AuTopsy issues](https://github.com/Ceratops-Code/AuTopsy/issues) for support.
+The inherited audio tools are covered by the
+[upstream Audacity manual](https://manual.audacityteam.org/).
+The video extension is currently Windows-only; other platforms retain the
+upstream audio build. Video source files stay external to the saved project.
 
 ## Developers
 Build instructions are available [here](BUILDING.md).
 
-Additional development resources may be found [here](https://audacity.gitbook.io/dev/).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for AuTopsy contributions and
+[upstream development documentation](https://audacity.gitbook.io/dev/) for the
+inherited audio engine.
+
+## Manual upstream updates
+
+The product branch is `main`. `origin` is
+`https://github.com/Ceratops-Code/AuTopsy.git`; `upstream` is
+`https://github.com/audacity/audacity.git`.
+Use **`upstream/audacity3`** when reviewing upstream changes. Upstream updates
+are deliberately manual; no scheduled synchronization or automatic merge is enabled.
+
+```sh
+git remote add upstream https://github.com/audacity/audacity.git  # once per clone
+git fetch upstream audacity3
+```
+
+Review the incoming changes, merge the selected update on a task branch, and
+run the relevant checks in [BUILDING.md](BUILDING.md) before publishing it.
+The feature-owned video and clip-group modules keep upstream integration narrow.
 
 ## License
 
-Audacity is open source software licensed GPLv3. Most code files are GPLv2-or-later, with the notable exceptions being /lib-src (which contains third party libraries), as well as VST3-related code. Documentation is licensed CC-by 3.0 unless otherwise noted. Details can be found in the [license file](LICENSE.txt).
+AuTopsy is distributed under **GPLv3**, retaining Audacity's copyright notices,
+credits, and Git history. Most inherited source files are GPLv2-or-later;
+third-party components and VST3-related code have their own notices.
+Documentation is CC-BY 3.0 unless otherwise stated. See [LICENSE.txt](LICENSE.txt)
+and the notices accompanying each component.
+
+Audacity is a registered trademark of its respective owner. AuTopsy is an
+independent fork and is not an official Audacity release. Upstream names in
+credits, license notices, compatibility identifiers, and technical references
+identify their original projects.
 
 ## Video tracks (Windows fork)
 
@@ -52,8 +113,8 @@ pipes, so it can run alongside an installed copy of Audacity.
 5. Choose **File > Export Video with Audio Mix...** to save MP4 or MKV.
    Unchanged picture timing is copied without re-encoding, including a source
    split into adjacent clips. Moving or deleting picture sections renders the
-    edited picture as MPEG-4 Part 2 at the first visible source's frame rate and
-    oriented picture size. Other sources are scaled and letterboxed. The entire project mix replaces
+   edited picture as MPEG-4 Part 2 at the first visible source's frame rate and
+   oriented picture size. Other sources are scaled and letterboxed. The entire project mix replaces
    the original soundtrack, including mute, solo, gain, pan and effects.
    Export starts at zero and ends at the last video clip; short audio is padded
    with silence and later audio is excluded. The current selection does not
@@ -153,11 +214,11 @@ using the focused track, and as `AddAudioTrackBefore: Track=0` and
 The video timing model in `src/video/EditVideoTimeline.h` uses only standard C++
 values. Its split/move/delete and source-time mapping tests run without Audacity
 objects. `EditVideoTimeline.cpp` adapts that model to the native project XML,
-Undo and command registries; `ShowVideoPreview.cpp` owns the player/clock and
-window adapters. `ShowVideoTrack.cpp` owns the main-window filmstrip and mouse
-drag adapter. It finds the ruler by its native object identity, then uses the
-host's time/pixel mapping; a missing or ambiguous layout is rejected rather
-than attaching the strip to an unrelated row. `PrepareVideoPreview.cpp` owns
+Undo and command registries. `CreateVideoTrack.cpp` owns the native track,
+clipboard, XML, and history adapters. `ShowVideoPreview.cpp` owns the player/clock
+and window adapters. `ShowVideoTrack.cpp` supplies the native track view and
+mouse controls inside the main scrolling track pane, using the host's time/pixel
+mapping and movement contracts. `PrepareVideoPreview.cpp` owns
 the leased preview/thumbnail cache. `ExportVideoMix.cpp` adapts native audio export and translates
 our picture timeline into FFmpeg filters. Export does not depend on a live
 preview window or a native audio-clip implementation.

@@ -1,4 +1,6 @@
-Audacity is released under the GNU General Public License version 3 (GPLv3). 
+AuTopsy is an independent fork of Audacity, released under the GNU General
+Public License version 3 (GPLv3). Audacity's copyright notices and attribution
+are retained; AuTopsy modifications are distributed under the same terms.
 Individual source files may be available under other licenses as specified 
 in those files or an accompanying file. In particular, many source files are 
 available under GPL version 2 (GPLv2) or (at your option) any later version, 

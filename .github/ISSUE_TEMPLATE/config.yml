@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Help forum
-    url: https://forum.audacityteam.org
+  - name: AuTopsy help and questions
+    url: https://github.com/Ceratops-Code/AuTopsy/issues
     about: Please ask questions here.
   - name: Additional help resources
-    url: https://www.audacityteam.org/help/
-    about: Manual, help pages, FAQs etc.
+    url: https://github.com/Ceratops-Code/AuTopsy#readme
+    about: Video guide, build instructions, and links to the upstream audio manual.

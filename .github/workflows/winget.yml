@@ -4,6 +4,7 @@ on:
     types: [released]
 jobs:
   publish:
+    if: github.repository == 'audacity/audacity'
     runs-on: windows-latest # action can only be run on windows
     steps:
       - name: Get version

@@ -1,8 +1,9 @@
 set(CPACK_PACKAGE_VERSION_MAJOR "${AUDACITY_VERSION}") # X
 set(CPACK_PACKAGE_VERSION_MINOR "${AUDACITY_RELEASE}") # Y
 set(CPACK_PACKAGE_VERSION_PATCH "${AUDACITY_REVISION}") # Z
-set(CPACK_PACKAGE_VENDOR "Audacity")
-set(CPACK_PACKAGE_HOMEPAGE_URL "https://audacityteam.org")
+set(CPACK_PACKAGE_NAME "AuTopsy")
+set(CPACK_PACKAGE_VENDOR "Ceratops-Code")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/Ceratops-Code/AuTopsy")
 
 # X.Y.Z-alpha-20210615
 set(CPACK_PACKAGE_VERSION "${AUDACITY_VERSION}.${AUDACITY_RELEASE}.${AUDACITY_REVISION}${AUDACITY_SUFFIX}")
@@ -26,8 +27,8 @@ elseif(CMAKE_SYSTEM_NAME MATCHES "Linux")
 endif()
 
 # audacity-linux-X.Y.Z-alpha-20210615
-set(CPACK_PACKAGE_FILE_NAME "audacity-${os}-${CPACK_PACKAGE_VERSION}")
-set(zsync_name "audacity-${os}-*") # '*' is wildcard (here it means any version)
+set(CPACK_PACKAGE_FILE_NAME "autopsy-${os}-${CPACK_PACKAGE_VERSION}")
+set(zsync_name "autopsy-${os}-*") # '*' is wildcard (here it means any version)
 
 if(DEFINED AUDACITY_ARCH_LABEL)
    # audacity-linux-X.Y.Z-alpha-20210615-x86_64
@@ -74,7 +75,7 @@ endif()
 if( CMAKE_GENERATOR MATCHES "Makefiles|Ninja" )
    set( CPACK_SOURCE_GENERATOR "TGZ" )
 
-   set( CPACK_SOURCE_PACKAGE_FILE_NAME "audacity-sources-${CPACK_PACKAGE_VERSION}" )
+   set( CPACK_SOURCE_PACKAGE_FILE_NAME "autopsy-sources-${CPACK_PACKAGE_VERSION}" )
    list( APPEND CPACK_PRE_BUILD_SCRIPTS "${CMAKE_SOURCE_DIR}/cmake-proxies/cmake-modules/CopySourceVariables.cmake" )
 
    set(CPACK_SOURCE_IGNORE_FILES

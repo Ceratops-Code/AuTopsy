@@ -2,6 +2,7 @@
 * text eol=lf
 #except images and sounds
 *.png -text 
+*.bmp -text
 *.jpg -text 
 *.icns -text 
 *.wav -text 

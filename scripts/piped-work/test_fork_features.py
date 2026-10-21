@@ -607,11 +607,96 @@ def check_video_tracks(client, root, ffmpeg, ffprobe):
     client.file("OpenProject2", root / "video.aup3")
 
 
+def check_branding(client, root):
+    """Read native menus and exercise only the owned child's welcome/about UI."""
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_ssize_t)
+    user.EnumWindows.argtypes = [callback_type, ctypes.c_ssize_t]
+    user.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    user.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    user.GetMenu.argtypes = [ctypes.c_void_p]; user.GetMenu.restype = ctypes.c_void_p
+    user.GetSubMenu.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user.GetSubMenu.restype = ctypes.c_void_p
+    user.GetMenuItemCount.argtypes = [ctypes.c_void_p]
+    user.IsWindowEnabled.argtypes = [ctypes.c_void_p]
+    user.GetMenuItemID.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user.GetMenuStringW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p,
+                                    ctypes.c_int, ctypes.c_uint]
+    user.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                  ctypes.c_size_t, ctypes.c_ssize_t]
+    pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
+
+    def windows():
+        result = {}
+        @callback_type
+        def visit(window, _):
+            owner = ctypes.c_uint32()
+            user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+            if owner.value == pid:
+                text = ctypes.create_unicode_buffer(256)
+                user.GetWindowTextW(window, text, len(text))
+                result[window] = text.value
+            return 1
+        user.EnumWindows(visit, 0)
+        return result
+
+    def wait_title(title):
+        deadline = time.monotonic() + 5
+        while True:
+            found = [window for window, text in windows().items() if text == title]
+            if len(found) == 1: return found[0]
+            if time.monotonic() >= deadline: raise AssertionError(windows())
+            time.sleep(.05)
+
+    welcome = wait_title("Welcome to AuTopsy!")
+    assert user.PostMessageW(welcome, 0x10, 0, 0), ctypes.WinError(ctypes.get_last_error())
+    def entries(menu):
+        result = []
+        for index in range(user.GetMenuItemCount(menu)):
+            text = ctypes.create_unicode_buffer(256)
+            user.GetMenuStringW(menu, index, text, len(text), 0x400)
+            result.append((text.value.replace("&", "").split("\t")[0],
+                           user.GetMenuItemID(menu, index), user.GetSubMenu(menu, index)))
+        return result
+
+    # wx also owns hidden menu-bearing windows. Select the editor through its
+    # Help menu contract, never the enumeration order, and wait for startup UI.
+    deadline = time.monotonic() + 5
+    while True:
+        menu_windows = {window: entries(user.GetMenu(window))
+                        for window in windows() if user.GetMenu(window)}
+        candidates = [(window, child) for window, menu in menu_windows.items()
+                      for text, _, child in menu if text == "Help"
+                      and user.IsWindowEnabled(window)]
+        if len(candidates) == 1:
+            main, help_menu = candidates[0]
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError({"windows": windows(), "menus": menu_windows})
+        time.sleep(.05)
+    help_entries = entries(help_menu)
+    labels = [text for text, _, _ in help_entries]
+    assert {"AuTopsy Guide", "Audio Manual (Upstream)", "AuTopsy Support", "About AuTopsy"} <= set(labels), labels
+    assert not any("Audacity" in text or "Check for Updates" in text for text in labels), labels
+    about_id = next(command for text, command, _ in help_entries if text == "About AuTopsy")
+    for _ in range(2):
+        assert user.PostMessageW(main, 0x111, about_id, 0), ctypes.WinError(ctypes.get_last_error())
+        about = wait_title("About AuTopsy")
+        assert user.PostMessageW(about, 0x10, 0, 0), ctypes.WinError(ctypes.get_last_error())
+        deadline = time.monotonic() + 5
+        while any(text == "About AuTopsy" for text in windows().values()):
+            if time.monotonic() >= deadline: raise AssertionError(windows())
+            time.sleep(.05)
+    (root / "_branding.json").write_text(json.dumps({"help": labels,
+        "welcome": "AuTopsy", "about_open_close_count": 2}, indent=2), encoding="utf-8")
+
+
 def worker(args, root):
     client = ScriptClient()
     if args.case == "groups": check_groups(client, root)
     elif args.case == "tracks": check_tracks(client, root)
     elif args.case == "video": check_video(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "branding": check_branding(client, root)
     else:
         source = args.video_source or root / "source.mp4"
         client.file("ImportVideo", source)
@@ -694,7 +779,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
-    parser.add_argument("--case", choices=("groups", "tracks", "video", "preview"), required=True)
+    parser.add_argument("--case", choices=("groups", "tracks", "video", "preview", "branding"), required=True)
     parser.add_argument("--video-source", type=Path, default=os.environ.get("AUTOPSY_PREVIEW_SOURCE"))
     parser.add_argument("--interrupt-cache", choices=("before-publish", "after-publish"),
                         default=os.environ.get("AUTOPSY_INTERRUPT_PREVIEW"))
@@ -779,7 +864,7 @@ def main():
     stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")
     (profile / "autopsy.cfg").write_text(
         f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
-        f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen=0\n"
+        f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
         "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
         f"[ModuleDateTime]\nmod-script-pipe={stamp}\n", encoding="utf-8")
     environment = dict(os.environ, TEMP=str(gui), TMP=str(gui), PYTHONDONTWRITEBYTECODE="1",

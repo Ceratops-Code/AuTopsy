@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Audacity
+Name=AuTopsy
 GenericName=Sound Editor
 GenericName[ar]=محرر أصوات
 GenericName[ca]=Editor d'àudio
@@ -54,7 +54,7 @@ Comment[zh_CN]=录音和编辑音频文件
 Comment[zh_TW]=錄音和編輯音訊檔案
 
 Icon=@AUDACITY_NAME@
-StartupWMClass=Audacity
+StartupWMClass=AuTopsy
 
 Type=Application
 Categories=AudioVideo;Audio;AudioVideoEditing;

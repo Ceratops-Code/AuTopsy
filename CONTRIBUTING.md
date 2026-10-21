@@ -1,40 +1,56 @@
-There are several ways to contribute to Audacity:
+There are several ways to contribute to [AuTopsy](https://github.com/Ceratops-Code/AuTopsy).
+Use this repository for AuTopsy bugs, questions, and contributions.
 
 ## Developing
 
-Audacity is mostly coded in C++. You'll need to be at least somewhat comfortable in it to start contributing code.
+AuTopsy is mostly coded in C++, with Python integration tests and CMake builds.
 
-If you want to develop Audacity:
+To develop AuTopsy:
 
-* Build instructions can be found in the BUILDING.md
-* [Coding standards](https://audacity.gitbook.io/dev/getting-started/coding-standards) and other info on the process can be found [in the dev resources](https://audacity.gitbook.io/dev/).
-* You will need to [sign the CLA](https://www.audacityteam.org/cla/) to contribute code.
-* If you need help, you can ask in the [Audacity dev discord](https://discord.gg/N3XKxzTrq3).
+* Follow [BUILDING.md](BUILDING.md), including the focused video and editing checks.
+* Open a pull request against `main` in `Ceratops-Code/AuTopsy`.
+* Keep existing copyright and license notices. Contributions use the applicable
+  licenses described in [LICENSE.txt](LICENSE.txt); AuTopsy does not require the
+  separate upstream contributor agreement.
+* See [AGENTS.md](AGENTS.md) for the fork's integration boundaries.
+* The [upstream development resources](https://audacity.gitbook.io/dev/) describe
+  the inherited audio engine. They are useful references, not AuTopsy support channels.
 
 ### Developing Plug-ins
 
-Audacity supports a wide variety of plug-in APIs, namely [Nyquist](https://manual.audacityteam.org/man/nyquist.html), LV2, Audio Units (macOS only) and VST2 effects. These plug-ins generally won't be shipped as part of Audacity, but they still may be a tremendous help for Audacity users.
+AuTopsy retains the audio engine's plug-in APIs, including Nyquist, LV2, VST2,
+VST3, and Audio Units on macOS. Plug-in compatibility follows the inherited host;
+the video extension is currently Windows-only.
 
 ## Testing / Finding bugs
 
-You can download current development builds in the [Actions tab on Github](https://github.com/audacity/audacity/actions). These builds are tied to certain pull requests. As a rule of thumb: If it's not yet merged, report any broken things you find which might be a result of the pull request directly as a comment on the pull request. If the code has been merged, [make a new bug in the issue tracker](https://github.com/audacity/audacity/issues/new/choose).
+Build from the relevant branch using [BUILDING.md](BUILDING.md). Report a problem
+on its pull request, or [open an AuTopsy issue](https://github.com/Ceratops-Code/AuTopsy/issues/new/choose).
+Include the build or commit, reproduction steps, and expected and actual results.
+Use a small public sample when media is needed; keep private footage out of public reports.
 
-When reporting bugs, try to find the most general form of it. For example, if you encounter a bug when amplifying a clip 2 hours into a project, try to see if it also happens when you're using a different effect (Normalize, for example), and if it also happens if the clip is near the beginning.
+Try to reduce the problem to a small project and identify whether it involves
+picture, soundtrack audio, or the inherited audio tools.
 
-Bugs must be reproducible. If you can't find steps to reproduce a bug, try asking if you went wrong somewhere [in the Audacity forum](https://forum.audacityteam.org/) instead.
+Questions are welcome in [AuTopsy issues](https://github.com/Ceratops-Code/AuTopsy/issues).
 
 ## Translating
 
-See [our translators page](https://www.audacityteam.org/community/translators/) for more information on how to translate Audacity.
+The inherited translations remain credited to their authors. Translation fixes
+for this fork can be proposed through an AuTopsy pull request.
 
 ## Feedback & Feature requests
 
-If you have anything you think Audacity can do better, you can voice it in [the relevant section in the forum](https://forum.audacityteam.org/c/feedback-and-discussion-forum/adding-features-to-audacity/22). If you have a very concrete idea something in the code which should be added or changed, you can also [make an enhancement request in the issue tracker](https://github.com/audacity/audacity/issues/new/choose).
+Use [AuTopsy's feature request form](https://github.com/Ceratops-Code/AuTopsy/issues/new/choose).
+Describe the editing task and the result you need.
 
 ## Supporting Users
 
-The most active Audacity user community can be found [in the forum](https://forum.audacityteam.org/), so if you want to help users with their problems, this would be the first stop.
+Help other users in [AuTopsy issues](https://github.com/Ceratops-Code/AuTopsy/issues).
+The [upstream audio manual](https://manual.audacityteam.org/) covers inherited
+audio tools; AuTopsy's video guide is in [README.md](README.md#video-tracks-windows-fork).
 
 ### Making video tutorials
 
-Video tutorials are very helpful to users, as they tend to be easier to follow than written instructions. When you make video tutorials, make sure to mention which version of Audacity you're using, so that users know what the problem might be should they stumble upon your tutorial after a few years and find that their version of Audacity does very different things to yours.
+Mention the AuTopsy version or commit and show which parts are picture and which
+are soundtrack audio, so viewers can reproduce the editing workflow.

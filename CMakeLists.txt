@@ -253,13 +253,9 @@ cmake_dependent_option(
    Off
 )
 
-cmake_dependent_option(
-   ${_OPT}has_updates_check
-   "Build updates checking features into Audacity"
-   On
-   "${_OPT}has_networking"
-   Off
-)
+# The inherited service distributes official Audacity binaries, not this fork.
+# Exclude it even when reconfiguring an older cache with networking enabled.
+set(${_OPT}has_updates_check Off CACHE INTERNAL "Upstream updater excluded from AuTopsy" FORCE)
 
 option(${_OPT}has_vst3
     "Enable support for VST3 plug-ins in Audacity"

@@ -1,15 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop">
-  <developer_name>Muse Group</developer_name>
-  <id>org.audacityteam.Audacity</id>
+  <developer_name>Ceratops-Code</developer_name>
+  <id>io.github.Ceratops_Code.AuTopsy</id>
   <launchable type="desktop-id">audacity.desktop</launchable>
   <project_license>GPL-3.0-only</project_license>
   <metadata_license>CC0-1.0</metadata_license>
-  <name>Audacity</name>
-  <summary>Audacity is the world's most popular audio editing and recording app</summary>
+  <name>AuTopsy</name>
+  <summary>Multitrack audio editing with synchronized video on Windows</summary>
   <description>
-    <p>Audacity is the world's most popular audio editing and recording app.</p>
-    <p>You can use Audacity to:</p>
+    <p>AuTopsy is an independent fork of Audacity's audacity3 audio editor.
+    Its Windows video extension adds native video tracks, smooth preview,
+    split and trim editing, and export with the edited audio mix.</p>
+    <p>You can use AuTopsy to:</p>
     <ul>
       <li>Record live audio</li>
       <li>Convert tapes and records into digital recordings or CDs</li>
@@ -25,18 +27,9 @@
     <category>Audio</category>
   </categories>
   <content_rating type="oars-1.1" />
-  <url type="homepage">https://www.audacityteam.org/</url>
-  <url type="bugtracker">https://github.com/audacity/audacity/issues</url>
-  <url type="faq">https://manual.audacityteam.org/man/faq.html</url>
-  <url type="help">https://support.audacityteam.org/</url>
-  <url type="translate">https://support.audacityteam.org/community/contributing/translating</url>
-  <releases>
-    <release version="3.7.10" date="2026-09-01">
-     <description>
-        <p>The 3.7.x series of releases is primarily for maintenance while we work on Audacity 4.0.</p>
-      </description>
-      <url>https://support.audacityteam.org/additional-resources/changelog/audacity-3.7</url>
-      <url>https://www.audacityteam.org/3.7.0-video</url>
-    </release>
-  </releases>
+  <url type="homepage">https://github.com/Ceratops-Code/AuTopsy</url>
+  <url type="bugtracker">https://github.com/Ceratops-Code/AuTopsy/issues</url>
+  <url type="faq">https://github.com/Ceratops-Code/AuTopsy#readme</url>
+  <url type="help">https://github.com/Ceratops-Code/AuTopsy#video-tracks-windows-fork</url>
+  <url type="translate">https://github.com/Ceratops-Code/AuTopsy/blob/main/CONTRIBUTING.md#translating</url>
 </component>

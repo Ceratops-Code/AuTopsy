@@ -68,8 +68,8 @@ body:
   - type: dropdown
     id: version
     attributes:
-      label: Audacity Version
-      description: What version of Audacity are you running?
+      label: AuTopsy Version
+      description: What version of AuTopsy are you running?
       options:
         - current master / alpha / nightly build
         - latest beta
@@ -113,5 +113,5 @@ body:
   - type: markdown
     attributes:
       value: >
-        Please note that Audacity is currently undergoing major restructuring. See the [Roadmap](https://github.com/audacity/audacity/wiki/Roadmap)
+        Please note that AuTopsy is currently undergoing major restructuring. See the [Roadmap](https://github.com/Ceratops-Code/AuTopsy/wiki/Roadmap)
         for further info. Bug fixes may be delayed or postponed significantly. 

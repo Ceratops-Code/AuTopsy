@@ -25,10 +25,11 @@ env:
 
 jobs:
   au4_build_linux:
+    if: github.repository == 'audacity/audacity'
     runs-on: ubuntu-22.04
     steps:
     - name: Clone repository 
-      uses: actions/checkout@v4  
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: "Configure workflow"
       env:
         pull_request_title: ${{ github.event.pull_request.title }}
@@ -88,7 +89,7 @@ jobs:
 
     - name: Install Conan
       id: conan
-      uses: turtlebrowser/get-conan@main
+      uses: turtlebrowser/get-conan@e41c1e039be765c0ed9d9d38cc2a287566e1d8b3 # main
     - name: Setup environment
       if: env.DO_BUILD == 'true'
       run: |
@@ -117,7 +118,7 @@ jobs:
                    -P ${CI_DIR}/crashdumps/ci_generate_and_upload.cmake
     - name: Upload artifacts on GitHub
       if: env.DO_BUILD == 'true'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ env.UPLOAD_ARTIFACT_NAME }}
         path: ./build.artifacts/      

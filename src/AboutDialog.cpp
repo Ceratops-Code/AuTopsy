@@ -62,7 +62,7 @@ hold information about one contributor to Audacity.
 #endif
 
 #ifdef REV_LONG
-#define REV_IDENT wxString( "[[https://github.com/audacity/audacity/commit/" )+ REV_LONG + "|" + wxString( REV_LONG ).Left(6) + "]] of " +  REV_TIME
+#define REV_IDENT wxString( "[[https://github.com/Ceratops-Code/AuTopsy/commit/" )+ REV_LONG + "|" + wxString( REV_LONG ).Left(6) + "]] of " +  REV_TIME
 #else
 #define REV_IDENT (XO("No revision identifier was provided").Translation())
 #endif
@@ -73,7 +73,6 @@ hold information about one contributor to Audacity.
 
 // To substitute into many other translatable strings
 static const auto ProgramName =
-   //XO("Audacity");
    Verbatim("AuTopsy");
 // Credits, the upstream website, and trademark notices retain their real owner.
 static const auto UpstreamProgramName = Verbatim("Audacity");
@@ -386,8 +385,9 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
       << wxString(AUDACITY_VERSION_STRING)
       << wxT("</center></h3>")
       /* i18n-hint: The program's name substitutes for %s */
-       << XO("%s is a Windows fork of Audacity with synchronized video reference preview.")
-            .Format(ProgramName)
+        << XO("%s is an independent audio and video editor, based on %s's audacity3 branch.")
+             .Format(ProgramName, UpstreamProgramName)
+       << wxT("<p>[[https://github.com/Ceratops-Code/AuTopsy|AuTopsy source, help and contributions]]</p>")
 
       << wxT("<h3>")
       << XO("Credits")
@@ -470,15 +470,11 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
       wxBitmap logo(AudacityLogoWithName_xpm); //v
 
       //Setup to scale the logo larger and smaller as necessary
-      const float fScale = 1.0f;
+       const int displayWidth = LOGOWITHNAME_WIDTH;
+       const int displayHeight = displayWidth * logo.GetHeight() / logo.GetWidth();
       wxImage RescaledImage(logo.ConvertToImage());
-      wxColour MainColour(
-         RescaledImage.GetRed(1,1),
-         RescaledImage.GetGreen(1,1),
-         RescaledImage.GetBlue(1,1));
-      pPage->SetBackgroundColour(MainColour);
       // wxIMAGE_QUALITY_HIGH not supported by wxWidgets 2.6.1, or we would use it here.
-      RescaledImage.Rescale((int)(LOGOWITHNAME_WIDTH * fScale), (int)(LOGOWITHNAME_HEIGHT *fScale));
+       RescaledImage.Rescale(displayWidth, displayHeight);
       wxBitmap RescaledBitmap(RescaledImage);
 
       icon =
@@ -488,7 +484,7 @@ void AboutDialog::PopulateAudacityPage( ShuttleGui & S )
          //v theTheme.Bitmap(bmpAudacityLogoWithName),
          RescaledBitmap,
          wxDefaultPosition,
-         wxSize((int)(LOGOWITHNAME_WIDTH*fScale), (int)(LOGOWITHNAME_HEIGHT*fScale)));
+          wxSize(displayWidth, displayHeight));
    }
    S.Prop(0).AddWindow( icon );
 

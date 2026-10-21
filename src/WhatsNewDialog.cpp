@@ -11,98 +11,23 @@
 
 #include "WhatsNewDialog.h"
 
-#include <wx/fs_mem.h>
-#include <wx/image.h>
-#include <wx/settings.h>
-#include <wx/mstream.h>
-#include <wx/sstream.h>
-#include <wx/txtstrm.h>
-#include <wx/hyperlink.h>
 #include <wx/checkbox.h>
-#include <wx/frame.h>
 #include <wx/statbmp.h>
-#include <wx/stattext.h>
-
 #include "HelpSystem.h"
-#include "HelpText.h"
-#include "ModuleManager.h"
-#include "PluginProvider.h"
-#include "menus/GetEffectsHelper.h"
-#include "ProjectWindows.h"
-#include "RoundedStaticBitmap.h"
-#include "ShuttleGui.h"
-#include "Theme.h"
-#include "AllThemeResources.h"
-#include "GradientButton.h"
-#include "ImageCarousel.h"
 #include "HyperLink.h"
-
-#include "../images/Cloud.xpm"
-#include "../images/Cloud_low_res.xpm"
-
-#include "../images/Audacity40Video.h"
-#include "../images/AudacityMerchStore.h"
-#include "../images/AudioDotComPromo.h"
-#include "../images/AudioDotComPromoLight.h"
-#include "../images/AudioDotComPromoDark.h"
-#include "../images/AudacityPromo.h"
-#include "../images/AudacityFeatureSurvey.h"
-#include "../images/MuseHubPromo.h"
-#include "../images/MuseHubSoapPromo.h"
-#include "menus/CloudLoginHelper.h"
+#include "Prefs.h"
+#include "ProjectWindows.h"
+#include "ShuttleGui.h"
+#include "../images/Audacity-splash.xpm"
 
 namespace
 {
-
-#if defined (__WXOSX__) || defined(__WXMSW__)
-#define SHOW_MUSEHUB true
-#else
-#define SHOW_MUSEHUB false
-#endif
-
-#if defined(HAS_AUDIOCOM_UPLOAD)
-#define SHOW_CLOUD_PROMO true
-#else
-#define SHOW_CLOUD_PROMO false
-#endif
-
-const char* WhatsNewURL = "https://youtu.be/QYM3TWf_G38?utm_source=au-app-au4-video&utm_medium=au-app-au4-video&utm_campaign=au-app-au4-video";
-const char* ChangeLogURL = "https://support.audacityteam.org/additional-resources/changelog";
-const char* PromoURL = "https://audacityteam.org/audacitypromo";
-const char* AudioComURL = "https://audio.com/audacity/auth/sign-in?mtm_campaign=audacitydesktop&mtm_content=app_launch_popup";
-const char* AudacitySurveyURL = "https://audacityteam.org/survey";
-const char* AudacityMerchStoreURL = "https://audacity-shop.fourthwall.com/en-gbp/?utm_source=au-app-merch-store&utm_medium=merch-25y&utm_campaign=au-app-welcome-au-app-merch-store-merch-25y&utm_id=au-app-welcome";
-const char* MuseHubURL = "https://www.musehub.com/plugin/soap-voice-cleaner?utm_medium=Referral&utm_source=au&utm_campaign=MH_WW_REF_AU_DESKTOP_ALL_170826_crosslink&utm_content=welcome_screen";
-
-constexpr auto WindowWidth = 812;
-
-#if defined(__WXOSX__)
-// wxHTML renders text with smaller line spacing on macOS
-   constexpr auto WindowHeight = 612;
-#elif defined(__WXMSW__)
-   constexpr auto WindowHeight = 656;
-#else
-   constexpr auto WindowHeight = 640;
-#endif
-
-}
 AttachedWindows::RegisteredFactory sWhatsNewWindow{
-   []( AudacityProject &project ) -> wxWeakRef< wxWindow > {
-      auto &window = GetProjectFrame(project);
-      return safenew WhatsNewDialog(&window, wxID_ANY);
+   [](AudacityProject &project) -> wxWeakRef<wxWindow> {
+      return safenew WhatsNewDialog(&GetProjectFrame(project), wxID_ANY);
    }
 };
-
-
-class NotFocusableWindow : public wxWindow
-{
-public:
-   NotFocusableWindow(wxWindow* parent, wxWindowID id)
-      : wxWindow(parent, id)
-   {}
-
-   bool AcceptsFocus() const override { return false; }
-};
+}
 
 BEGIN_EVENT_TABLE(WhatsNewDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, WhatsNewDialog::OnOK)
@@ -111,12 +36,10 @@ END_EVENT_TABLE()
 WhatsNewDialog::WhatsNewDialog(wxWindow* parent, wxWindowID id)
    : wxDialogWrapper(parent, id, XO("Welcome to AuTopsy!"))
 {
-
-   SetSize(FromDIP(wxSize(WindowWidth, WindowHeight)));
-
    SetName();
-   ShuttleGui S( this, eIsCreating );
-   Populate( S );
+   ShuttleGui S(this, eIsCreating);
+   Populate(S);
+   Fit();
    Centre();
 }
 
@@ -124,8 +47,7 @@ WhatsNewDialog::~WhatsNewDialog() = default;
 
 void WhatsNewDialog::Show(AudacityProject& project)
 {
-   auto dialog = &GetAttachedWindows(project)
-      .Get<WhatsNewDialog>(sWhatsNewWindow);
+   auto dialog = &GetAttachedWindows(project).Get<WhatsNewDialog>(sWhatsNewWindow);
    dialog->CenterOnParent();
    dialog->wxDialogWrapper::Show();
 }
@@ -133,204 +55,44 @@ void WhatsNewDialog::Show(AudacityProject& project)
 void WhatsNewDialog::Populate(ShuttleGui& S)
 {
    bool showSplashScreen;
-   gPrefs->Read(wxT("/GUI/ShowSplashScreen"), &showSplashScreen, true );
-
-#if defined (__WXOSX__) || defined(__WXMSW__)
-   const int width = 572;
-   const int height = 322;
-#else
-   const int width = FromDIP(572);
-   const int height = FromDIP(322);
-#endif
-
-   std::vector<CarouselSnapshot> snapshots;
-   snapshots.reserve(4);
-
-   // Render bitmaps at physical-pixel size so they stay sharp on HiDPI/Retina,
-   // and tag them with the matching scale factor so wx lays them out using the
-   // intended logical size (width x height points), not the physical size.
-   //
-   // Skipped on Windows: in wx 3.1.3 the MSW wxBitmap ignores the scale factor
-   // (see msw/bitmap.h: WXUNUSED(scale), GetScaleFactor() hardcoded to 1.0).
-   // Multiplying the rescale target by GetContentScaleFactor() there would just
-   // produce an oversized bitmap drawn at its physical size, making the image
-   // bigger than the carousel slot and the surrounding buttons look smaller
-   // in relation.
-#if defined(__WXMSW__)
-   const double scale = 1.0;
-#else
-   const double scale = GetContentScaleFactor();
-#endif
-   auto makeBitmap = [&](const unsigned char* data, size_t len) {
-      wxImage img = LoadEmbeddedImage(data, len);
-      img = Rescale(img,
-                    static_cast<int>(width * scale),
-                    static_cast<int>(height * scale));
-      img = RoundedImage(img, 12);
-      return wxBitmap(img, -1, scale);
-   };
-
-   if (ModuleManager::Get().CheckModuleLoaded("mod-cloud-audiocom")) {
-
-      auto displayLoginDialog = []() {
-         CloudLoginHelper::Get().ShowLoginDialog();
-      };
-
-      const bool dark = theTheme.IsUsingDarkAppearance();
-      const unsigned char* audioDotComData = dark
-         ? AudioDotComPromoDark_png
-         : AudioDotComPromoLight_png;
-      const unsigned int audioDotComLen = dark
-         ? AudioDotComPromoDark_png_len
-         : AudioDotComPromoLight_png_len;
-
-      snapshots.push_back(CarouselSnapshot(
-         XXO("Complete your Audacity cloud setup with audio.com"),
-         makeBitmap(audioDotComData, audioDotComLen),
-         displayLoginDialog,
-         XXO("Continue"),
-         XXO("")
-      ));
-   }
-
-   if (SHOW_MUSEHUB) {
-      if (ModuleManager::Get().CheckModuleLoaded("mod-musehub-ui")) {
-
-         snapshots.push_back(CarouselSnapshot(
-            XXO("Soap Voice Cleaner: studio-quality voice-over sound"),
-            makeBitmap(MuseHubPromo_png, MuseHubPromo_png_len),
-            MuseHubURL,
-            XXO("Get it on MuseHub"),
-            XXO("")
-         ));
-
-         auto displayMuseHub = []() {
-            GetEffectsHelper::Get().GetEffects();
-         };
-
-         snapshots.push_back(CarouselSnapshot(
-            XXO("Explore free plugins for sculpting your audio"),
-            makeBitmap(MuseHubPromo_jpg, MuseHubPromo_jpg_len),
-            displayMuseHub,
-            XXO("View free plugins"),
-            XXO("")
-         ));
-      }
-   }
-
-   snapshots.push_back(CarouselSnapshot(
-      XXO("Help us decide the future of Audacity"),
-      makeBitmap(AudacityFeatureSurvey_png, AudacityFeatureSurvey_png_len),
-      AudacitySurveyURL,
-      XXO("Take part in survey"),
-      XXO("")
-   ));
-
-
-   S.StartVerticalLay(wxEXPAND);
+   gPrefs->Read("/GUI/ShowSplashScreen", &showSplashScreen, true);
+   S.SetBorder(12);
+   S.StartVerticalLay(wxALIGN_CENTER_HORIZONTAL);
    {
-      S.StartHorizontalLay(wxEXPAND);
+      // Reuse the product's loading artwork; upstream promotions do not belong
+      // to this fork's welcome screen.
+      auto banner = safenew wxStaticBitmap(
+         S.GetParent(), wxID_ANY, wxBitmap(Audacity_splash_xpm));
+      banner->SetName(XO("AuTopsy: audio and video in sync").Translation());
+      S.AddWindow(banner);
+      S.AddFixedText(XO("Picture and sound. One timeline."));
+      S.AddFixedText(XO(
+         "Import Video adds picture and a separate editable soundtrack.\n"
+         "Split, trim and move video clips alongside your audio tracks.\n"
+         "Export the video with your finished audio mix."), false, 620);
+      S.AddSpace(10);
+      S.StartHorizontalLay(wxALIGN_CENTER_HORIZONTAL);
       {
-         const auto carousel = safenew ImageCarousel(S.GetParent(), snapshots);
-         S
-            .Prop(1)
-            .Position(wxEXPAND)
-            .AddWindow(carousel);
+         S.AddWindow(safenew HyperLink(S.GetParent(), wxID_ANY,
+            XO("AuTopsy guide").Translation(),
+            "https://github.com/Ceratops-Code/AuTopsy#readme"));
+         S.AddSpace(24);
+         S.AddWindow(safenew HyperLink(S.GetParent(), wxID_ANY,
+            XO("Help and feedback").Translation(),
+            "https://github.com/Ceratops-Code/AuTopsy/issues"));
       }
       S.EndHorizontalLay();
+      S.AddSpace(10);
+      mDontShowAgain = S.AddCheckBox(
+         XXO("&Don't show this again at start up"), !showSplashScreen);
+      S.Id(wxID_OK).AddButton(XXO("Start editing"), wxALL, true);
    }
    S.EndVerticalLay();
-
-   const auto line = safenew NotFocusableWindow(S.GetParent(), wxID_ANY);
-   line->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNSHADOW));
-   line->SetSize(-1, 1);
-
-   S
-      .Prop(0)
-      .Position(wxEXPAND)
-      .AddWindow(line);
-
-   S.StartHorizontalLay(wxALIGN_CENTER, 0);
-   {
-      S.SetBorder(10);
-      const auto tutorialsLink = safenew HyperLink(
-         S.GetParent(),
-         wxID_ANY,
-         _("View tutorials"),
-         "https://support.audacityteam.org/");
-      S
-         .Position(wxTOP | wxBOTTOM)
-         .AddWindow(tutorialsLink);
-
-      S.AddSpace(25);
-
-      const auto forumLink = safenew HyperLink(
-         S.GetParent(),
-         wxID_ANY,
-         _("Visit our forum"),
-         "https://forum.audacityteam.org/");
-      S
-         .Position(wxTOP | wxBOTTOM)
-         .AddWindow(forumLink);
-   }
-   S.EndHorizontalLay();
-
-   const auto bottomLine = safenew NotFocusableWindow(S.GetParent(), wxID_ANY);
-   bottomLine->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNSHADOW));
-   bottomLine->SetSize(-1, 1);
-   S
-      .Prop(0)
-      .Position(wxEXPAND)
-      .AddWindow(bottomLine);
-
-   S.Position(wxEXPAND).StartPanel(2);
-   {
-      S.StartHorizontalLay(wxEXPAND);
-      {
-         S.SetBorder(4);
-         mDontShowAgain = S
-            .Position(wxALL | wxALIGN_CENTER)
-            .AddCheckBox( XXO("&Don't show this again at start up"), !showSplashScreen);
-
-         S.AddSpace(1,1,1);
-
-         TranslatableString okLabel = XXO("OK");
-         S
-            .Id(wxID_OK)
-#if defined (__WXOSX__) || defined(__WXMSW__)
-            .AddGradientButton(okLabel, wxALL, true);
-#else
-            .AddButton(okLabel, wxALL, true);
-#endif
-      }
-      S.EndHorizontalLay();
-   }
-   S.EndPanel();
 }
 
-void WhatsNewDialog::OnOK(wxCommandEvent& evt)
+void WhatsNewDialog::OnOK(wxCommandEvent&)
 {
-   gPrefs->Write(wxT("/GUI/ShowSplashScreen"), !mDontShowAgain->IsChecked() );
+   gPrefs->Write("/GUI/ShowSplashScreen", !mDontShowAgain->IsChecked());
    gPrefs->Flush();
    wxDialogWrapper::Show(false);
-}
-
-wxImage WhatsNewDialog::Rescale(const wxImage& image, int width, int height)
-{
-   wxImage img = image;
-   img.Rescale(width, height, wxIMAGE_QUALITY_HIGH);
-
-   return img;
-}
-
-wxImage WhatsNewDialog::LoadEmbeddedImage(const unsigned char* data, size_t len)
-{
-    wxMemoryInputStream stream(data, len);
-    wxImage image;
-    if (!image.LoadFile(stream, wxBITMAP_TYPE_ANY))
-    {
-        wxLogError("Failed to load embedded image.");
-        return wxImage();
-    }
-    return image;
 }
