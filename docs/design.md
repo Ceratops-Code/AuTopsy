@@ -548,49 +548,6 @@ Current previews are unsigned; [the signing policy](../README.md#code-signing-po
 states roles and MFA requirements. SignPath application/approval and actual signing
 are external steps, not completed by publishing an unsigned preview.
 
-### Planned GitHub release checks
-
-Status: requested, not implemented. Check the public releases of
-[Ceratops-Code/AuTopsy](https://github.com/Ceratops-Code/AuTopsy/releases) rather
-than Audacity's update service. Provide an explicit **Check for updates** command
-and optional automatic checks with a user-controlled interval/channel; automatic
-network access and downloads require opt-in. Release discovery sends no project
-paths, media, clip contents or account credentials.
-
-Keep release discovery/version policy in an AuTopsy-owned module, with narrow
-adapters for HTTPS, settings, UI notification and installer launch. Use the public
-GitHub release API, bounded responses/timeouts and conditional requests. Treat
-offline, rate-limit and malformed responses as nonfatal: editing, playback and
-saving continue normally, with a clear manual-check result and bounded backoff.
-No updater service, database or copied upstream update engine is needed.
-
-Compare declared product/release identities, including preview numbers and the
-selected stable/preview channel. Skip drafts and incompatible installer assets;
-preview releases must remain discoverable even when GitHub's stable-only latest
-endpoint has no result. Distinguish unpublished development builds so an older
-public preview is not offered over a newer local build. Never order versions by
-installer filenames, timestamps or bare Git hashes.
-
-Show the release version, notes and source URL. Offer its Windows installer only
-after explicit user choice; check its declared artifact identity and the current
-signing policy before execution. Save active work and arrange application closure
-before replacement; never silently terminate an editing session or install from a
-source tree. Repeated checks reuse unchanged release metadata and avoid duplicate
-notifications/downloads. The download owner publishes only a complete accepted
-installer, removes interrupted staging on its next entry and obsolete failure
-payloads after success, and retains at most the current download plus two
-predecessors. Installer handoff uses current state after interruption, without
-replaying a completed installation.
-
-Focused tests will cover newer/same/older versions, stable and preview filtering,
-an unreleased local build, missing/wrong-architecture assets, offline/rate-limit
-responses, cancellation, tampered/partial downloads and repeated checks. Exercise
-interruption immediately before/after download publication and installer handoff;
-fresh normal calls must preserve projects and perform only unmet effects. Keep
-network/version-policy cases independent of Audacity internals and test the UI
-and installer adapters separately. New module/test paths require the applicable
-approval when implementation starts.
-
 ## 11. Quality targets
 
 These are proposed thresholds, not measured release guarantees.
@@ -695,9 +652,6 @@ Implementation order:
    captions and analyses, using the same evaluator/render contracts.
 5. **Breadth:** remaining planned operations, media collection,
    region/multiple export and equivalent commands/keyboard workflows.
-6. **Product updates:** GitHub release discovery and safe installer handoff, as
-   described in section 10. Keep this separate from media editing and make its
-   network failures unable to block project work.
 
 For every new operation, add cases to existing suites where suitable. Cover normal
 outcome, repeated exact request, interruption immediately before/after each visible
