@@ -83,6 +83,8 @@ screen-selection and worker-lifecycle cases. CMake owns the disposable
 `.build/_core` cache and updates it in place on each call; installers are separate
 release outputs. Python lint covers the fork's test driver and repository tools;
 inherited scripting examples retain their upstream conventions.
+The npm overrides select patched lint dependencies while their parent packages
+still constrain older releases.
 
 ## Manual upstream updates
 
