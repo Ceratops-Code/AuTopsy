@@ -2,14 +2,15 @@
 
 ## Prerequisites
 
-* **python3** >= 3.8 (you can find an official download here: https://www.python.org/downloads/)
-* **cmake** >= 3.16 (you can find an official download here: https://cmake.org/download/)
+* **python3** >= 3.8 (you can find an official download here: <https://www.python.org/downloads/>)
+* **cmake** >= 3.16 (you can find an official download here: <https://cmake.org/download/>)
 * A working C++ 17 compiler
 * Graphviz (optional)
 
 For Windows see below for important installer settings.
 
 Please note that Xcode 14 support on macOS requires CMake 3.24.0 or later.
+
 ### Conan
 
 AuTopsy uses [Conan 2](https://conan.io/) to manage dependencies. If `conan` is not already installed, AuTopsy will download and install it automatically.
@@ -42,7 +43,7 @@ Here are the dependencies you need to install on various distribution families.
 
 #### Debian and Ubuntu
 
-```
+```text
 $ sudo apt-get update
 $ sudo apt-get install -y build-essential cmake git python3-pip
 $ sudo pipx install conan
@@ -51,7 +52,7 @@ $ sudo apt-get install libgtk2.0-dev libasound2-dev libjack-jackd2-dev uuid-dev
 
 #### openSUSE
 
-```
+```text
 $ sudo zypper refresh
 $ sudo zypper install patterns-devel-C-C++-devel_C_C++ cmake git python3-pip \
                       gtk2-devel libjack-devel uuid-devel libSM-devel
@@ -60,7 +61,7 @@ $ sudo pip3 install conan
 
 #### Fedora Workstation
 
-```
+```text
 $ sudo dnf update
 $ sudo dnf install gcc-c++ cmake git python3-pip perl-core \
                    gtk2-devel gtk3-devel alsa-lib-devel jack-audio-connection-kit-devel uuid-devel libSM-devel
@@ -69,14 +70,13 @@ $ sudo pip3 install conan
 
 ### Graphviz
 
-https://graphviz.org/download/
+<https://graphviz.org/download/>
 
 This is not necessary to build and run AuTopsy. It generates diagrams that aid understanding of the large scale structure of AuTopsy's source code.
 
 If you install Graphviz, then an image file modules.dot.svg is generated in the build directory as a by-product of configuration. It shows the dependencies among the AuTopsy executable, its optional extension modules, its shared libraries, and third-party libraries.
 
 You will also be able to change to the scripts directory and run ./graph.pl to generate a diagram of dependencies among source code files within the executable.
-
 
 ## Building on Windows
 
@@ -86,9 +86,9 @@ You will also be able to change to the scripts directory and run ./graph.pl to g
    and is based on the upstream audacity3 branch.
 
 3. Open CMake GUI.
-   
+
    Set the **Where is the source code** to the location of this AuTopsy checkout.
-   
+
    Set **Where to build the binaries** to the location you want to place your build in. It is preferred that this location is not within the directory with the source code.
 
 4. Press **Configure**. You can choose which version of Visual Studio to use and the platform to build for in the pop-up. We support **x64** and **Win32** platforms. The **x64** platform is a default option. Press **Finish** to start the configuration process.
@@ -96,11 +96,11 @@ You will also be able to change to the scripts directory and run ./graph.pl to g
 5. After successful configuration, you will see `Configuring done` in the last line of the log. Press **Generate** to generate the Visual Studio project.
 
 6. After you see "Generating done", press **Open Project** to open the project in Visual Studio.
-   
+
 7. Select "Build -> Build Solution".
-   
+
 8. You can now run and debug AuTopsy!
-      
+
 Generally, steps 1-6 are only needed the first-time you configure. Then, after you've generated the solution, you can open it in Visual Studio next time. If the project configuration has changed, the IDE will invoke CMake internally.
 
 ### Building with ASIO support on Windows
@@ -111,29 +111,32 @@ To enable ASIO support, please select `audacity_has_asio_support=On` in CMake af
 
 1. Clone AuTopsy from its GitHub project.
   
-    ```
+    ```text
     $ git clone https://github.com/Ceratops-Code/AuTopsy/
     ```
 
 2. Configure AuTopsy using CMake:
-   ```
+
+   ```text
    $ mkdir build && cd build
    $ cmake -GXcode ../AuTopsy
    ```
 
 3. Open AuTopsy XCode project:
-   ```
+
+   ```text
    $ open Audacity.xcodeproj
    ```
+
    and build AuTopsy using the IDE.
 
-Steps 1 and 2 are only required for first-time builds. 
+Steps 1 and 2 are only required for first-time builds.
 
 Alternatively, you can use **CLion**. If you chose to do so, open the directory where you have cloned AuTopsy using CLion and you are good to go.
 
 In upstream releases before version 3.2 only **x86_64** builds and XCode "legacy" build system were supported. In order to build older version please use:
 
-```
+```text
    $ mkdir build && cd build
    $ cmake -GXcode -T buildsystem=1 ../AuTopsy
 ```
@@ -144,32 +147,37 @@ to configure AuTopsy.
 
 1. Clone AuTopsy from its GitHub project.
   
-    ```
+    ```text
     $ git clone https://github.com/Ceratops-Code/AuTopsy/
     ```
 
 2. Configure AuTopsy using CMake:
-   ```
+
+   ```text
    $ mkdir build && cd build
    $ cmake -G "Unix Makefiles" ../AuTopsy
    ```
+
    By default, Debug build will be configured. To change that, pass `-DCMAKE_BUILD_TYPE=Release` to CMake.
 
 3. Build AuTopsy:
-   ```
+
+   ```text
    $ make -j`nproc`
    ```
 
 4. Testing the build:
    Adding a "Portable Settings" folder allows AuTopsy to ignore the settings of any existing AuTopsy installation.
-   ```
+
+   ```text
    $ cd Debug/bin
    $ mkdir "Portable Settings"
    $ ./audacity
    ```
 
 5. Installing AuTopsy
-   ```
+
+   ```text
    $ cd <build directory>
    $ sudo make install
    ```
@@ -182,9 +190,9 @@ You can use `cmake -LH` to get a list of the options available (or use CMake GUI
 
 ### Building using system libraries
 
-On Linux it is possible to build AuTopsy using (almost) only the libraries provided by the package manager. Please, see the list of required libraries [here](linux/required_libraries.md).
+On Linux it is possible to build AuTopsy using (almost) only the libraries provided by the package manager. See the [required system libraries](linux/required_libraries.md).
 
-```
+```text
 $ mkdir build && cd build
 $ cmake -G "Unix Makefiles" \
         -Daudacity_use_ffmpeg=loaded \
@@ -211,12 +219,12 @@ scripts in [linux/packages](linux/packages) describe their package dependencies.
 
 ### Disabling Conan
 
-Conan can be disabled completely using `-Daudacity_conan_enabled=Off` during the configuration. 
-This option implies `-Daudacity_obey_system_dependencies=On` and disables `local` for packages that are managed with Conan. 
+Conan can be disabled completely using `-Daudacity_conan_enabled=Off` during the configuration.
+This option implies `-Daudacity_obey_system_dependencies=On` and disables `local` for packages that are managed with Conan.
 
 ### Disabling pre-built binaries downloads for Conan
 
-It is possible to force Conan to build all the dependencies from the source code without using the pre-built binaries. To do so, please pass `-Daudacity_conan_allow_prebuilt_binaries=Off` to CMake during the configuration. 
+It is possible to force Conan to build all the dependencies from the source code without using the pre-built binaries. To do so, please pass `-Daudacity_conan_allow_prebuilt_binaries=Off` to CMake during the configuration.
 
 Additionally, passing `-Daudacity_conan_force_build_dependencies=On` will force Conan to rebuild all the packaged during *every* configuration. This can be usefull for the offline builds against the Conan download cache.
 
@@ -228,44 +236,45 @@ AuTopsy will try to detect the host and build profiles automatically. However, `
 
 To fix errors, similar to the following:
 
-```
+```text
 ERROR: HTTPSConnectionPool(host='center.conan.io', port=443): Max retries exceeded with url: /v1/ping (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1131)
 ```
 
 please, update your Conan version. Alternatively, the problem can be fixed using:
 
-```
+```text
 $ conan config install https://github.com/conan-io/conanclientcert.git
 ```
 
 For errors like:
 
-```
+```text
 Unable to connect to conan-center=https://conan.bintray.com
 ```
 
 please run
 
-```
+```text
 conan remote remove conan-center
 ```
 
 For errors like:
 
-```
+```text
 [package] package_name/package_version: package has 'exports_sources' but sources not found
 ```
 
 please run
 
-```
+```text
 conan remove package_name -c
 ```
+
 ### Reducing Conan cache size
 
 In order to reduce the space used by Conan cache, please run:
 
-```
+```text
 $ conan cache clean "*"
 ```
 
@@ -275,24 +284,24 @@ Starting with version 3.2.0, AuTopsy target architecture on macOS can be selecte
 
 To build for Intel:
 
-```
+```text
 $ cmake -GXcode -DMACOS_ARCHITECTURE=x86_64 ../AuTopsy
 ```
 
 To build for AppleSilicon:
 
-```
+```text
 $ cmake -GXcode -DMACOS_ARCHITECTURE=arm64 ../AuTopsy
 ```
 
 The default build architecture is selected based on `CMAKE_HOST_SYSTEM_PROCESSOR` value.
 
-When cross-compiling from Intel to AppleSilicon, or if *Rosetta 2* is not installed on the AppleSilicon Mac, 
+When cross-compiling from Intel to AppleSilicon, or if *Rosetta 2* is not installed on the AppleSilicon Mac,
 a native host-architecture build directory is required, as AuTopsy needs a working `image-compiler`.
 
 For example, to build ARM64 version of AuTopsy on Intel Mac:
 
-```
+```text
 $ mkdir build.x64
 $ cmake -GXcode -DMACOS_ARCHITECTURE=x86_64 -B build.x64 -S ../AuTopsy
 $ cmake --build build.x64 --config Release --target image-compiler

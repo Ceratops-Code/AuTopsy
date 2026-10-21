@@ -72,6 +72,7 @@ Released under terms of the GNU General Public License version 2:
 import os
 import sys
 import threading
+from typing import Optional, TextIO, cast
 import time
 import errno
 import argparse
@@ -128,7 +129,7 @@ class PipeClient():
     reader_pipe_broken = threading.Event()
     reply_ready = threading.Event()
 
-    _shared_state = {}
+    _shared_state: dict = {}
 
     def __new__(cls, enc='', *p, **k):
         self = object.__new__(cls, *p, **k)
@@ -137,8 +138,8 @@ class PipeClient():
 
     def __init__(self, enc=''):
         self.timer = False
-        self._start_time = 0
-        self._write_pipe = None
+        self._start_time = 0.0
+        self._write_pipe: Optional[TextIO] = None
         self.reply = ''
         self.enc = enc
         if not self._write_pipe:
@@ -198,8 +199,10 @@ class PipeClient():
         if self.timer:
             self._start_time = time.time()
         try:
-            self._write_pipe.write(command + EOL)
-            self._write_pipe.flush()
+            # Startup requires an open pipe before a client can send commands.
+            write_pipe = cast(TextIO, self._write_pipe)
+            write_pipe.write(command + EOL)
+            write_pipe.flush()
         except IOError as err:
             if err.errno == errno.EPIPE:
                 sys.exit('PipeClient: Write-pipe error.')

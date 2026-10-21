@@ -70,11 +70,19 @@ These are planned ideas, not features included in the current release.
 | Later | Titles and subtitle tracks | Add captions and simple overlays without leaving the project. |
 
 ## Developers
-Build instructions are available [here](BUILDING.md).
+
+See [the AuTopsy build instructions](BUILDING.md).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for AuTopsy contributions and
 [upstream development documentation](https://audacity.gitbook.io/dev/) for the
 inherited audio engine.
+
+The SDLC contract in `sdlc/sdlc.yml` owns the same checks used locally and in CI.
+It runs the independent C++ feature tests with CMake/CTest, alongside headless
+screen-selection and worker-lifecycle cases. CMake owns the disposable
+`.build/_core` cache and updates it in place on each call; installers are separate
+release outputs. Python lint covers the fork's test driver and repository tools;
+inherited scripting examples retain their upstream conventions.
 
 ## Manual upstream updates
 

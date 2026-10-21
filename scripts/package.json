@@ -1,0 +1,14 @@
+{
+  "name": "repository-validation",
+  "private": true,
+  "description": "Repository Markdown validation tools.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint:markdown": "markdownlint \"../README.md\" \"../AGENTS.md\" \"../BUILDING.md\" \"../CONTRIBUTING.md\" \"../CODE_OF_CONDUCT.md\" --config .markdownlint.json"
+  },
+  "devDependencies": {
+    "markdownlint-cli": "0.49.1"
+  }
+}

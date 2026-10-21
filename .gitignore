@@ -184,3 +184,5 @@ build.release/
 build.debug/
 build.install/
 build.artifacts/
+/scripts/node_modules/
+/.build/

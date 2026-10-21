@@ -1,0 +1,65 @@
+version: 4
+kind: ceratops-sdlc
+repository:
+  capabilities:
+    uv:
+      executable: uv
+    shellcheck:
+      executable: shellcheck
+    cmake:
+      executable: cmake
+    ctest:
+      executable: ctest
+  actions:
+    bootstrap:
+      requires:
+        capabilities:
+          - uv
+      steps:
+        - run:
+            - uv
+            - sync
+            - --project
+            - scripts
+            - --locked
+    validate:
+      requires:
+        capabilities:
+          - uv
+          - shellcheck
+      steps:
+        - run:
+            - uv
+            - run
+            - --locked
+            - scripts/validate-repository.py
+      validation-capabilities:
+        - shellcheck
+    test:
+      requires:
+        capabilities:
+          - cmake
+          - ctest
+      steps:
+        - run:
+            - cmake
+            - -S
+            - src/video
+            - -B
+            - .build/_core
+            - -DCMAKE_BUILD_TYPE=Release
+        - run:
+            - cmake
+            - --build
+            - .build/_core
+            - --config
+            - Release
+            - --parallel
+            - "2"
+        - run:
+            - ctest
+            - --test-dir
+            - .build/_core
+            - -C
+            - Release
+            - --output-on-failure
