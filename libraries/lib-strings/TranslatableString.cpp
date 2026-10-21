@@ -10,6 +10,7 @@
 
 #include "TranslatableString.h"
 #include "Identifier.h"
+#include "Internat.h"
 #include <wx/translation.h>
 
 const wxChar *const TranslatableString::NullContextName = wxT("*");
@@ -97,7 +98,7 @@ wxString TranslatableString::DoSubstitute( const Formatter &formatter,
    return formatter
       ? formatter( format, debug ? Request::DebugFormat : Request::Format )
       : // come here for most translatable strings, which have no formatting
-         ( debug ? format : wxGetTranslation( format, wxString{}, context ) );
+          ( debug ? format : GetCustomSubstitution(wxGetTranslation( format, wxString{}, context )) );
 }
 
 wxString TranslatableString::DoChooseFormat(
@@ -112,13 +113,13 @@ wxString TranslatableString::DoChooseFormat(
    wxString context;
    return ( debug || NullContextName == (context = DoGetContext(formatter)) )
       ? ( nn == 1 ? singular : plural )
-      : wxGetTranslation(
+       : GetCustomSubstitution(wxGetTranslation(
             singular, plural, nn
 #if HAS_I18N_CONTEXTS
             , wxString{} // domain
             , context
 #endif
-         );
+         ));
 }
 
 TranslatableString &TranslatableString::Join(

@@ -419,12 +419,20 @@ The same CMake/CTest entry point is used by local contributors and GitHub CI:
     cmake --build _core-build --config Release --parallel 2
     ctest --test-dir _core-build -C Release --output-on-failure
 
-This mode checks the owned video timing and transport models without the editor
-or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
+This mode checks the owned video timing, transport, and product-name policy
+without the editor or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
 test interface, pinned to its Git commit. CMake owns the current executables,
 dependency checkout, and generated files in the selected build directory.
 The full Windows cases above cover the native adapters, media, and GUI; the
 independent CI checks do not claim those desktop behaviors were exercised.
+The product-name policy lives in libraries/lib-strings/ApplyProductBranding.h; its small
+adapter uses the existing fork-name translation hook and returns owned values.
+Translated templates receive the product name before formatting arguments.
+Original gettext keys, contexts, plural rules, debug identities, literal credits,
+and argument values keep their own meaning. Technical paths, links, identifiers,
+and markup attributes retain their spelling. The core case has no wxWidgets
+dependency; the native product-branding case also uses a real in-memory gettext
+catalog to cover translation, formatting, and the adapter contracts.
 `fork-branding` additionally checks the welcome screen and native Help menu,
 including opening and closing About twice. It uses only its private test process.
 

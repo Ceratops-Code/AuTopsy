@@ -20,8 +20,10 @@
 class wxArrayString;
 class wxArrayStringEx;
 
-extern STRINGS_API const wxString& GetCustomTranslation(const wxString& str1 );
-extern STRINGS_API const wxString& GetCustomSubstitution(const wxString& str1 );
+// Fork substitutions own their result instead of retaining references to a
+// modified catalog or a shared scratch buffer.
+extern STRINGS_API wxString GetCustomTranslation(const wxString& str1 );
+extern STRINGS_API wxString GetCustomSubstitution(const wxString& str1 );
 
 // Marks string for substitution only.
 #define _TS( s ) GetCustomSubstitution( s )

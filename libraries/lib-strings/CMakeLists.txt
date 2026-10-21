@@ -14,6 +14,8 @@ This library depends only on the wxBase subset of wxWidgets.
 ]]
 
 set( SOURCES
+   ApplyProductBranding.h
+   ApplyProductBranding.cpp
    Base64.h
    Base64.cpp
    FutureStrings.h

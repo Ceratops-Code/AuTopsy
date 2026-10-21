@@ -19,6 +19,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    target_compile_features(video-playback-test PRIVATE cxx_std_17)
    target_link_libraries(video-playback-test PRIVATE Catch2::Catch2)
    add_test(NAME video-playback COMMAND video-playback-test)
+   add_executable(product-branding-core-test
+      ../../libraries/lib-strings/tests/TestProductBranding.cpp ../../tests/Catch2Main.cpp)
+   target_compile_features(product-branding-core-test PRIVATE cxx_std_17)
+   target_compile_definitions(product-branding-core-test PRIVATE AUTOPSY_BRANDING_CORE_ONLY=1)
+   target_link_libraries(product-branding-core-test PRIVATE Catch2::Catch2)
+   add_test(NAME product-branding-core COMMAND product-branding-core-test)
    find_package(Python3 QUIET COMPONENTS Interpreter)
    if(Python3_Interpreter_FOUND)
       add_test(NAME fork-display-policy COMMAND "${Python3_EXECUTABLE}"
