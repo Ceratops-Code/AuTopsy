@@ -10,6 +10,8 @@
 **********************************************************************/
 
 #include "SyncVideoPlayback.h"
+#include "ChooseVideoExport.h"
+#include "RelinkVideoMedia.h"
 #include "EditVideoTimeline.h"
 
 #include <catch2/catch.hpp>
@@ -20,6 +22,30 @@
 #include <vector>
 
 using namespace VideoPreview;
+
+TEST_CASE("Frame timecode keeps fractional source rates and rejects malformed input")
+{
+   for (const double rate : {24.0, 25.0, 30.0, 60.0, 24000.0 / 1001, 30000.0 / 1001}) {
+      for (const auto frame : {0, 1, 29, 301, 123456}) {
+         const auto time = frame / rate;
+         REQUIRE(ParseFrameTimecode(FormatFrameTimecode(time, rate), rate) == Approx(time));
+      }
+   }
+   for (const auto *bad : {"", "00:60:00:00", "00:00:00:30", "-1:00:00:00", "00:00:01:00 junk"})
+      REQUIRE_THROWS(ParseFrameTimecode(bad, 30));
+   REQUIRE_THROWS(FormatFrameTimecode(-1, 30));
+   REQUIRE_THROWS(ParseFrameTimecode("00:00:00:00", 0));
+}
+
+TEST_CASE("Frame steps use source boundaries after moves and trims")
+{
+   const double start = 7.0, source = 1.0 / 60;
+   REQUIRE(AdjacentSourceFrame(start, start, source, 60, 1) == Approx(start + 1.0 / 60));
+   REQUIRE(AdjacentSourceFrame(start + 1.0 / 60, start, source, 60, -1) == Approx(start));
+   REQUIRE(AdjacentSourceFrame(start + 0.001, start, source, 60, -1) == Approx(start));
+   REQUIRE(AdjacentSourceFrame(0, 0, 0, 30, -1) == 0);
+   REQUIRE_THROWS(AdjacentSourceFrame(0, 0, 0, 30, 0));
+}
 
 namespace {
 
@@ -78,6 +104,19 @@ private:
       }
    }
 };
+
+TEST_CASE("Precise inspection seeks a single source frame that smooth playback can tolerate")
+{
+   FakePlayer player;
+   player.state.frameRate = 60;
+   player.state.position = 1;
+   const TransportSnapshot cursor{1 + 1.0 / 60, 1, false};
+   SynchronizeVideoPlayback(player, cursor, true);
+   REQUIRE(player.state.position == Approx(cursor.position));
+   REQUIRE(player.effects == std::vector<std::string>{"seek"});
+   SynchronizeVideoPlayback(player, cursor, true);
+   REQUIRE(player.effects.size() == 1);
+}
 
 void RunFreshCalls(FakePlayer &player, const TransportSnapshot &audio)
 {
@@ -416,4 +455,63 @@ TEST_CASE("Native video track order composes upper pictures while exposing lower
    REQUIRE(PictureAt(mix, 3.5).sourceTime == 3.5);
    REQUIRE_FALSE(KeepsOriginalPicture(mix));
    REQUIRE(ComposeVideoTracks({}).clips.empty());
+}
+
+TEST_CASE("Export settings preserve stream copy only when picture settings are unchanged")
+{
+   VideoExport::ExportSettings settings;
+   REQUIRE(VideoExport::AllowsOriginalPictureCopy(settings));
+   settings.frameRate = 30000.0 / 1001;
+   REQUIRE_FALSE(VideoExport::AllowsOriginalPictureCopy(settings));
+   settings.frameRate = 0; settings.width = 1920; settings.height = 1080;
+   REQUIRE_FALSE(VideoExport::AllowsOriginalPictureCopy(settings));
+   settings.width = 1919;
+   REQUIRE_THROWS(VideoExport::RequireUsableExportSettings(settings));
+   settings.width = 0;
+   REQUIRE_THROWS(VideoExport::RequireUsableExportSettings(settings));
+   settings = {}; settings.preset = "untrusted-external-encoder";
+   REQUIRE_THROWS(VideoExport::VideoEncoderArguments(settings));
+   settings = {}; settings.frameRate = std::numeric_limits<double>::quiet_NaN();
+   REQUIRE_THROWS(VideoExport::RequireUsableExportSettings(settings));
+}
+
+TEST_CASE("Relinking preserves moves, trims and IDs and rejects too-short media")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("old.mp4", 10, 30, 1920, 1080);
+   VideoTimeline::SplitClipAt(timeline, 3);
+   VideoTimeline::MoveClipTo(timeline, 2, 6);
+   const auto before = timeline;
+   REQUIRE_THROWS(VideoTimeline::ReplaceVideoSource(timeline, "old.mp4",
+      {"short.mp4", 2, 30, 1920, 1080}));
+   REQUIRE(timeline.sourcePath == before.sourcePath);
+   REQUIRE(timeline.clips[1].start == before.clips[1].start);
+   REQUIRE(VideoTimeline::ReplaceVideoSource(timeline, "old.mp4",
+      {"moved.mp4", 10, 30, 1920, 1080}));
+   REQUIRE(timeline.clips[1].id == before.clips[1].id);
+   REQUIRE(timeline.clips[1].start == before.clips[1].start);
+   REQUIRE(timeline.clips[1].sourceStart == before.clips[1].sourceStart);
+   REQUIRE_FALSE(VideoTimeline::ReplaceVideoSource(timeline, "old.mp4",
+      {"moved.mp4", 10, 30, 1920, 1080}));
+}
+
+TEST_CASE("Clip flags retain content-relative placement across video moves, splits and clipboard edits")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("flags.mp4", 10, 30);
+   const std::string id(32, 'a');
+   REQUIRE(ClipMarkers::PutMarker(timeline.clips[0].markers, {id, 4, "Sync clap"}));
+   REQUIRE_FALSE(ClipMarkers::PutMarker(timeline.clips[0].markers, {id, 4, "Sync clap"}));
+   VideoTimeline::SplitClipAt(timeline, 3);
+   REQUIRE(timeline.clips[0].markers.size() == 1);
+   REQUIRE(timeline.clips[1].markers.size() == 1);
+   VideoTimeline::MoveClipTo(timeline, 2, 8);
+   const auto &right = timeline.clips[1];
+   REQUIRE(ClipMarkers::ProjectMarkerTime(right.markers[0], right.start-right.sourceStart, 1) == Approx(9));
+   auto clipboard = VideoTimeline::CopyVideoRange(timeline, 8, 10);
+   REQUIRE(clipboard.clips[0].markers[0].text == "Sync clap");
+   REQUIRE(ClipMarkers::ProjectMarkerTime(clipboard.clips[0].markers[0],
+      clipboard.clips[0].start-clipboard.clips[0].sourceStart, 1) == Approx(1));
+   auto before = clipboard.clips[0].markers;
+   REQUIRE_THROWS(ClipMarkers::PutMarker(clipboard.clips[0].markers, {"bad-id", 1, "Invalid"}));
+   REQUIRE(clipboard.clips[0].markers[0].id == before[0].id);
+   REQUIRE(ClipMarkers::ProjectMarkerTime(before[0], 2, 0.5) == Approx(4));
 }

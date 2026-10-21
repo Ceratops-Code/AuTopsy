@@ -82,6 +82,7 @@ endfunction()
 retain_installer_artifacts("")
 set(_pending_installer "${_build_root}/package/_autopsy-installer-${INSTALLER_SUFFIX}.tmp")
 file(REMOVE "${_pending_installer}")
+file(REMOVE "${_build_root}/package/_installer-${INSTALLER_SUFFIX}.json.pending")
 
 file(COPY "${SOURCE_DIR}/win/Inno_Setup_Wizard/" DESTINATION "${OUTPUT_DIR}")
 configure_file("${OUTPUT_DIR}/audacity.iss.in" "${OUTPUT_DIR}/audacity.iss")
@@ -151,6 +152,13 @@ else()
     file(RENAME "${_pending_installer}" "${_published}")
 endif()
 retain_installer_artifacts("${_published}")
+
+# The packager owns one current descriptor. Callers never infer its result from
+# directory order or from an upstream application version prefix.
+set(_descriptor "${_build_root}/package/_installer-${INSTALLER_SUFFIX}.json")
+file(WRITE "${_descriptor}.pending" "{\"filename\":\"${_name}\",\"sha256\":\"${_digest}\"}\n")
+file(RENAME "${_descriptor}.pending" "${_descriptor}")
+
 message(STATUS "AuTopsy installer: ${_published}")
 message(STATUS "SHA256: ${_digest}")
 # Staging contains runtime files, which are not deliverable artifacts.

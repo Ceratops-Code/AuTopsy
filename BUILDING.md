@@ -333,7 +333,8 @@ Use the C++ workload and Windows SDK from Visual Studio 2022, and an extracted
 64-bit libmpv development package matching the build architecture. The package
 must contain include/mpv/client.h and libmpv-2.dll at its top level.
 Windows package links are listed on [mpv's installation page](https://mpv.io/installation/).
-Also provide the Windows x64 FFmpeg 8.1 shared runtime, available from
+Also provide the Windows x64 FFmpeg 8.1 GPL shared runtime, including libx264,
+libx265 and libsvtav1 encoders, available from
 [BtbN's FFmpeg builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 Keep ffmpeg.exe, ffprobe.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
 swresample-6.dll, swscale-9.dll, avfilter-11.dll, avdevice-62.dll, and the
@@ -346,7 +347,7 @@ Configure the normal AuTopsy build with these additional options:
 
     cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -Daudacity_has_tests=ON -Daudacity_has_video_preview=ON -Daudacity_video_mpv_sdk="<extracted-mpv-sdk>" -Daudacity_video_ffmpeg_runtime="<ffmpeg-runtime>"
     cmake --build _build --config Release --parallel 4
-    ctest --test-dir _build -C Release -R "^(video-playback|video-timeline|fork-groups|fork-tracks|fork-video|fork-preview)$" --output-on-failure
+    ctest --test-dir _build -C Release -R "^(video-playback|video-timeline|fork-groups|fork-tracks|fork-video|fork-media|fork-preview)$" --output-on-failure
     cmake -S . -B _build -DINNO_SETUP_COMPILER="<Inno-Setup-6.7.3>/ISCC.exe"
     cmake --build _build --config Release --target innosetup
 
@@ -382,6 +383,13 @@ are needed for those cases. Cases check native video/audio track ownership,
 cross-track clip dragging, clipboard edits, project round trips, group motion,
 track order and scrolling, mixed-source rendering, video-only playback,
 silence, rejected edits and overwrite protection.
+Preview tests always generate a neutral 16-second 1080p colour pattern and tone;
+they accept no personal media path or environment override. The generated
+`_fork-tests/_preview/source.mp4` belongs to the marked test root and is replaced
+when that case starts afresh. The fixture producer atomically publishes only
+completed footage and discards its private pending file after interruption.
+`fork-fixtures` checks the encoded picture/audio and repeated/interrupted calls
+without opening AuTopsy; its temporary media is removed after the check.
 The gesture case waits for the native pane to be enabled, then supplies held
 mouse input only to the owned test window through its normal window procedure.
 The GUI runner selects Windows DISPLAY2 when connected. With several displays
@@ -391,11 +399,12 @@ launching. That process-local adapter constrains each wx top-level window before
 Windows applies its placement, covering the loading splash, editor, welcome,
 About, and video preview. A missing or too-small target stops the test instead
 of falling back to screen 1. It changes no system display settings or user windows.
-Placement and display-change checks obtain a fresh monitor handle from the last
-checked target area and require the same device name. They never select the
-nearest or primary monitor as a fallback, retain a monitor handle between
-callbacks, or accept a removed/reassigned target. Desktop enumeration is needed
-only for initial named-device discovery.
+Each placement resolves the selected device afresh in the callback's DPI
+coordinate space. The guard retains neither monitor handles nor geometry as an
+identity, and never falls back to screen 1. Private test windows use wx's
+stay-on-top style so the host retains their exposure during activation; the
+runner also checks the window under the target point before sending input.
+Its held mouse button is released even when the owned window disappears.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
 `fork-branding` also repeats hidden/visible placement requests toward the other
@@ -436,6 +445,79 @@ separate.
 
 Keep the libmpv package's applicable license and corresponding-source material
 with any distributed build, alongside AuTopsy's existing license material.
+
+### Windows installer workflow
+
+Run the same repository-owned builder used by the GitHub-hosted Windows job:
+
+    uv run --project scripts --locked --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+
+Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
+`--inno-compiler` for a nondefault compiler location. The builder uses CMake's
+archive reader, so a separate 7-Zip installation is unnecessary. Python build
+dependencies, including the Windows process-tree wrapper, come from the locked
+`scripts` environment.
+
+The builder owns `_video-dependencies` under its selected build directory:
+one pinned archive and current SDK per component, private extraction/download
+siblings, and one identity record per SDK. Startup discards only abandoned
+owned staging; successful publication removes staging immediately. Required
+SDK filenames are kept because native linkers and encoders require them.
+A live-worker lock protects cleanup. A Windows job terminates remaining
+extractor/compiler children when their worker exits, including abrupt exits.
+
+The packager publishes `package/_installer-x64.json` atomically, naming the
+exact installer and its SHA-256. The builder consumes that descriptor and writes
+one current `package/_build-manifest.json` with the source revision, unsigned
+status, installer hash and pinned dependency identities. Failure replaces
+`_build_command_failure.json` with the exact invocation, exit and both output
+streams; success removes it. Pending record files are removed on the next call.
+The existing per-architecture installer retention remains current plus two
+predecessors. Building never installs or publishes an application.
+
+GitHub's `Validate` workflow builds on `windows-2022` when manually
+dispatched, or when a pull request has the `build-windows-installer` label.
+Its repository checks precede the installer job. The uploaded unsigned installer
+and source manifest are retained for 14 days; failure details for 7 days.
+Signing is a separate service approval and is not claimed by this job.
+
+The `deliverables.packages.windows-installer.actions.publish` operation consumes
+the existing accepted installer and `_build-manifest.json` from
+`AUTOPSY_VIDEO_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
+to select the preview tag and a local UTF-8 notes file. The tag names the original
+build revision, including when later test/documentation commits have advanced
+main. The operation creates a draft only when needed, uploads just those two
+accepted files, checks GitHub's asset digests, then makes the preview public.
+Repeated calls inspect live release state and perform only missing effects;
+conflicting tags/assets stop publication. It preserves the original build
+acceptance and does not compile or install an application.
+
+Every new installer build runs `fork-fixtures` after compilation and before
+packaging, without opening AuTopsy. The build manifest records its passing result
+and source revision. Repeated builds reuse that accepted installer only when the
+clean source, dependency inputs and installer integrity still match the receipt.
+Portable model and installer-producer tests run in the repository test operation;
+source-only CI does not require an already-built Windows application.
+The package build operation takes explicit `build_dir` and `inno_compiler`
+inputs, so local builds can reuse their task-owned build and compiler paths.
+Setting both `AUTOPSY_VIDEO_BUILD_DIR` and `AUTOPSY_VIDEO_TEST_NAME` selects only
+an explicit native session in the repository test operation. For example,
+`^fork-media$` runs the existing guarded desktop case for linked-media splits
+across video tracks, trims with unrelated audio before zero, saved links, flags
+and exports. Reconfiguration without the selector restores the portable suite.
+For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
+an existing native build, defaulting to
+`.build/_windows-installer`. For a separate desktop test session,
+`AUTOPSY_VIDEO_TEST_NAME` selects a CTest case such as `^fork-media$`; empty
+selections fail. The same builder's `--test-existing-build`, `--build-dir` and
+`--test-name` options expose those inputs directly. Test child failures own one
+current `_test_command_failure.json` beside the build; success removes it and
+startup discards its abandoned pending sibling.
+The application's install operation takes `installer_path` from the accepted build
+manifest and runs that installer silently. It installs into Program Files/AuTopsy;
+close the application first. Deployment never copies a source/build tree.
+The media case covers linked video/audio movement and trim/split behavior,
+saved clip flags, relinking, source frame stepping and modern software exports.
 
 ### Independent feature checks
 

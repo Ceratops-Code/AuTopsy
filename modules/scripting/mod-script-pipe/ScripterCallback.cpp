@@ -35,8 +35,6 @@ namespace {
 // then constrain every placement before Windows applies it (including splash).
 class TestDisplayGuard final : public wxEventFilter {
    wxString mDevice;
-   mutable RECT mTargetArea{};
-   mutable bool mTargetResolved{};
    std::set<HWND> mWindows;
 
    [[noreturn]] static void Fail(const char *operation)
@@ -51,26 +49,15 @@ class TestDisplayGuard final : public wxEventFilter {
 
    RECT WorkArea() const
    {
-      // Monitor handles can be invalidated between window callbacks. Resolve
-      // a fresh one from the last checked area, without nearest/primary fallback,
-      // and require the named device before using its current geometry.
-      if (mTargetResolved) {
-         const auto monitor = MonitorFromRect(&mTargetArea, MONITOR_DEFAULTTONULL);
-         MONITORINFOEXW info{}; info.cbSize = sizeof(info);
-         if (!monitor || !GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&info)) ||
-            mDevice != info.szDevice ||
-            (GetSystemMetrics(SM_CMONITORS) > 1 && mDevice == L"\\\\.\\DISPLAY1") ||
-            info.rcWork.right - info.rcWork.left < 640 ||
-            info.rcWork.bottom - info.rcWork.top < 480)
-            Fail("the selected test monitor is unavailable or unsafe");
-         mTargetArea = info.rcWork;
-         return info.rcWork;
-      }
+      // Resolve the requested device in the callback's current DPI context.
+      // Cached rectangles cannot identify a monitor after a DPI-context switch;
+      // selection by device remains stable without a primary-screen fallback.
       struct Displays {
          const wxString &device;
          RECT work{};
          unsigned count{}, matches{};
          DWORD queryError{};
+         wxString devices;
       } displays{mDevice};
       const auto enumerated = EnumDisplayMonitors(nullptr, nullptr,
          [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
@@ -81,6 +68,7 @@ class TestDisplayGuard final : public wxEventFilter {
                return FALSE;
             }
             ++found.count;
+            found.devices += wxString{info.szDevice} + ";";
             if (found.device == info.szDevice) {
                ++found.matches;
                found.work = info.rcWork;
@@ -95,10 +83,15 @@ class TestDisplayGuard final : public wxEventFilter {
             "work=%ld,%ld,%ld,%ld query_error=%lu\n", enumerated, displays.count,
             displays.matches, displays.work.left, displays.work.top,
             displays.work.right, displays.work.bottom, displays.queryError);
+         using ReadContext = HANDLE (WINAPI *)();
+         const auto read = reinterpret_cast<ReadContext>(GetProcAddress(
+            GetModuleHandleW(L"user32.dll"), "GetThreadDpiAwarenessContext"));
+         std::fprintf(stderr, "Test display selection: requested=%s found=%s dpi=%lld thread=%lu\n",
+            mDevice.utf8_str().data(), displays.devices.utf8_str().data(),
+            static_cast<long long>(read ? reinterpret_cast<INT_PTR>(read()) : 0),
+            GetCurrentThreadId());
          Fail("the selected test display is missing, forbidden, or too small");
       }
-      mTargetArea = displays.work;
-      mTargetResolved = true;
       return displays.work;
    }
 
@@ -123,6 +116,21 @@ class TestDisplayGuard final : public wxEventFilter {
       WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR data)
    {
       auto &guard = *reinterpret_cast<TestDisplayGuard *>(data);
+      // Foreign SendMessage callers can arrive with another DPI context.
+      // Keep every geometry query in the actual window owner's coordinates.
+      struct WindowDpiScope {
+         using SetContext = HANDLE (WINAPI *)(HANDLE);
+         HANDLE previous{};
+         SetContext set{};
+         explicit WindowDpiScope(HWND target) {
+            using ReadContext = HANDLE (WINAPI *)(HWND);
+            const auto user = GetModuleHandleW(L"user32.dll");
+            const auto read = reinterpret_cast<ReadContext>(GetProcAddress(user, "GetWindowDpiAwarenessContext"));
+            set = reinterpret_cast<SetContext>(GetProcAddress(user, "SetThreadDpiAwarenessContext"));
+            if (read && set) previous = set(read(target));
+         }
+         ~WindowDpiScope() { if (previous) set(previous); }
+      } dpi{window};
       if (message == WM_NCDESTROY) {
          guard.mWindows.erase(window);
          RemoveWindowSubclass(window, WindowProcedure, id);
@@ -174,6 +182,10 @@ public:
             if (!SetWindowSubclass(handle, WindowProcedure, 1,
                reinterpret_cast<DWORD_PTR>(this))) Fail("attach test window display guard");
             mWindows.insert(handle);
+            // The wx owner must retain this style: changing native z-order
+            // from the worker can be undone by wx during activation. Private
+            // tests need their own windows exposed before sending any input.
+            window->SetWindowStyleFlag(window->GetWindowStyleFlag() | wxSTAY_ON_TOP);
          }
       }
       return Event_Skip;

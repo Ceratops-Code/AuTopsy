@@ -2,6 +2,7 @@
 // Picture files remain external references; project XML owns only clip metadata.
 #include "EditVideoTimeline.h"
 #include "CreateVideoTrack.h"
+#include "../clip-groups/LinkMediaClips.h"
 #include "TrackFocus.h"
 #include "Viewport.h"
 #include "Project.h"
@@ -237,13 +238,12 @@ public:
          unsigned long long id{};
          if (!mId.ToULongLong(&id) || !id) throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
          auto &source = FindClipTrack(context.project, Removing() ? 0 : id, mTrack);
-         if (!Removing() && mToTrack >= 0) {
-            auto &destination = FindClipTrack(context.project, 0, mToTrack);
+         if (!Removing()) {
+            auto &destination = mToTrack >= 0 ? FindClipTrack(context.project, 0, mToTrack) : source;
             VideoTimeline::MoveVideoClipBetweenTracks(context.project, source, destination, id, mStart);
          }
-         else EditProjectTimeline(context.project, Removing() ? XO("Deleted video clip") : XO("Moved video clip"),
-            [&](auto &timeline) { return Removing() ? VideoTimeline::RemoveClip(timeline, id)
-               : VideoTimeline::MoveClipTo(timeline, id, mStart); }, &source);
+         else EditProjectTimeline(context.project, XO("Deleted video clip"),
+            [&](auto &timeline) { return VideoTimeline::RemoveClip(timeline, id); }, &source);
          return true;
       }
       catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
@@ -406,14 +406,19 @@ VideoTimeline::Timeline VideoTimeline::GetProjectTimeline(const AudacityProject 
 bool VideoTimeline::SplitProjectVideo(AudacityProject &project, double at)
 {
    auto &track = FindClipTrack(project, 0);
-   return EditProjectTimeline(project, XO("Split video clip"),
-      [&](auto &timeline) { return SplitClipAt(timeline, at); }, &track);
+   if (ProjectAudioIO::Get(project).IsAudioActive())
+      throw std::runtime_error("Stop playback or recording before editing video clips.");
+   if (!ClipGroups::SplitMediaAtSelection(project, at, at, &track)) return false;
+   try { ProjectHistory::Get(project).PushState(XO("Split video clip"), XO("Split")); }
+   catch (...) { ProjectHistory::Get(project).RollbackState(); throw; }
+   Viewport::Get(project).HandleResize();
+   RefreshPreviewLater(project);
+   return true;
 }
 bool VideoTimeline::MoveProjectVideoClip(AudacityProject &project, uint64_t id, double start)
 {
    auto &track = FindClipTrack(project, id);
-   return EditProjectTimeline(project, XO("Moved video clip"),
-      [&](auto &timeline) { return MoveClipTo(timeline, id, start); }, &track);
+   return MoveVideoClipBetweenTracks(project, track, track, id, start);
 }
 bool VideoTimeline::RemoveProjectVideoClip(AudacityProject &project, uint64_t id)
 {

@@ -13,8 +13,59 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 
 namespace VideoPreview {
+
+// Timecode is non-drop-frame: the frame counter uses the nearest nominal
+// integer rate, while conversion to seconds retains the source's exact rate.
+inline std::string FormatFrameTimecode(double seconds, double rate)
+{
+   if (!std::isfinite(seconds) || seconds < 0 || seconds > 100000000.0 ||
+       !std::isfinite(rate) || rate < 1 || rate > 1000)
+      throw std::runtime_error("Timecode requires a finite time and frame rate.");
+   const auto nominal = static_cast<long long>(std::round(rate));
+   const auto frames = static_cast<long long>(std::llround(seconds * rate));
+   const auto whole = frames / nominal;
+   std::ostringstream out;
+   out << std::setfill('0') << std::setw(2) << whole / 3600 << ':'
+       << std::setw(2) << (whole / 60) % 60 << ':' << std::setw(2) << whole % 60
+       << ':' << std::setw(2) << frames % nominal;
+   return out.str();
+}
+
+inline double ParseFrameTimecode(const std::string &text, double rate)
+{
+   if (!std::isfinite(rate) || rate < 1 || rate > 1000)
+      throw std::runtime_error("Timecode requires a usable frame rate.");
+   std::istringstream input{text};
+   long long hours{}, minutes{}, seconds{}, frames{};
+   char first{}, second{}, third{};
+   if (!(input >> hours >> first >> minutes >> second >> seconds >> third >> frames) ||
+       first != ':' || second != ':' || third != ':' || hours < 0 || hours > 27777 ||
+       minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59 ||
+       frames < 0 || frames >= std::llround(rate))
+      throw std::runtime_error("Enter non-drop-frame timecode as HH:MM:SS:FF.");
+   input >> std::ws;
+   if (!input.eof()) throw std::runtime_error("Unexpected text after timecode.");
+   return ((hours * 3600 + minutes * 60 + seconds) * std::llround(rate) + frames) / rate;
+}
+
+inline double AdjacentSourceFrame(double projectTime, double clipStart,
+   double sourceStart, double rate, int direction)
+{
+   if (!std::isfinite(projectTime) || !std::isfinite(clipStart) ||
+       !std::isfinite(sourceStart) || !std::isfinite(rate) || rate < 1 || rate > 1000 ||
+       (direction != -1 && direction != 1))
+      throw std::runtime_error("Choose the previous or next video frame.");
+   const auto frame = (projectTime - clipStart + sourceStart) * rate;
+   const auto target = direction > 0 ? std::floor(frame + 1e-7) + 1
+                                    : std::ceil(frame - 1e-7) - 1;
+   return std::max(0.0, clipStart - sourceStart + target / rate);
+}
 
 struct TransportSnapshot {
    double position{};
@@ -50,7 +101,8 @@ struct PlayerSnapshot {
    The GUI calls this on its own timer, never from the audio callback.
 */
 template<typename Player>
-void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio)
+void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio,
+   bool preciseFrames = false)
 {
    auto video = player.ReadState();
    if (!video.ready)
@@ -72,7 +124,7 @@ void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio)
       video.frameRate > 0.0 ? video.frameRate : 30.0;
    const double tolerance = shouldPlay
       ? (std::max)(0.080, 2.0 / frameRate)
-      : 1.0 / frameRate + 0.001;
+       : (preciseFrames ? 0.45 / frameRate + 0.0001 : 1.0 / frameRate + 0.001);
    const auto needsSeek = [&](const PlayerSnapshot &state) {
       return std::abs(state.position - target) > tolerance;
    };

@@ -9,6 +9,9 @@ Paul Licameli split from AudacityProject.cpp
 **********************************************************************/
 
 #include "ProjectFileManager.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "clip-groups/LinkMediaClips.h"
+#endif
 
 #include <wx/crt.h> // for wxPrintf
 
@@ -1239,6 +1242,9 @@ ProjectFileManager::AddImportedTracks(const FilePath &fileName,
       });
    }
 
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   ClipGroups::LinkNewlyImportedVideoAudio(project);
+#endif
    history.PushState(XO("Imported '%s'").Format( fileName ),
        XO("Import"));
 

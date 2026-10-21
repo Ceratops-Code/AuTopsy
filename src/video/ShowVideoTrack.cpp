@@ -2,6 +2,8 @@
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
 #include "CreateVideoTrack.h"
+#include "../clip-groups/LinkMediaClips.h"
+#include "../clip-groups/GroupAudioClips.h"
 #include "Project.h"
 #include "ProjectHistory.h"
 #include "ProjectAudioIO.h"
@@ -39,11 +41,13 @@
 
 namespace {
 using namespace VideoTimeline;
-struct ShiftInterval final : ChannelGroupInterval {
+struct ShiftInterval final : ChannelGroupInterval, ClipGroups::LinkedClipInterval {
    Clip clip;
    explicit ShiftInterval(Clip value) : clip(std::move(value)) {}
    double Start() const override { return clip.start; }
    double End() const override { return clip.End(); }
+   const std::string &MediaGroupId() const override { return clip.linkGroup; }
+   unsigned long long VideoClipId() const override { return clip.id; }
 };
 
 // The existing move engine supplies snapping, multi-track selection, scrolling,
@@ -324,6 +328,11 @@ public:
          dc.SetBrush(*wxTRANSPARENT_BRUSH); dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
          dc.SetTextForeground(*wxWHITE);
          dc.DrawText(wxFileName(wxString::FromUTF8(source.path)).GetFullName(),left+5,rect.y+5);
+         {
+            wxDCClipper clipFlags{dc, wxRect{left, rect.y, right-left, 24}};
+            ClipMarkers::DrawClipMarkerFlags(dc, rect, view, clip.markers,
+               clip.start - clip.sourceStart, 1, clip.start, clip.End());
+         }
          dc.DestroyClippingRegion();
       }
       CommonChannelView::Draw(context,rect,pass);
@@ -399,9 +408,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &,AudacityP
          }
       }
       else if (mCandidate) {
-         const auto previous = track->Timeline(); track->SetTimeline(std::move(*mCandidate));
-         try { ProjectHistory::Get(*project).PushState(XO("Trimmed video clip"),XO("Trim Video Clip")); }
-         catch (...) { track->SetTimeline(previous); throw; }
+         ClipGroups::CommitVideoClipTrim(*project, *track, std::move(*mCandidate));
       }
    }
    catch (const std::exception &error) {

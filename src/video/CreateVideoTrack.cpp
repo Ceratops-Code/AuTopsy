@@ -1,6 +1,7 @@
 // Audacity adapters for native video tracks. The TrackList owns ordering,
 // lifetime, selection, clipboard cloning and Undo; video owns only picture data.
 #include "CreateVideoTrack.h"
+#include "../clip-groups/LinkMediaClips.h"
 #include "Project.h"
 #include "ProjectHistory.h"
 #include "ProjectAudioIO.h"
@@ -179,6 +180,11 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       if (!ReadAttribute(attributes, "id", clip.id) || !ReadAttribute(attributes, "start", clip.start) ||
           !ReadAttribute(attributes, "sourceStart", clip.sourceStart) ||
           !ReadAttribute(attributes, "videoDuration", clip.duration)) return false;
+      std::string_view markers;
+      if (ReadAttribute(attributes, "clipMarkers", markers))
+         clip.markers = ClipMarkers::DecodeMarkers(std::string(markers));
+      std::string_view link;
+      if (ReadAttribute(attributes, "mediaLink", link)) clip.linkGroup = link;
       std::string_view source;
       if (ReadAttribute(attributes, "mediaSource", source)) clip.media.path = source;
       ReadAttribute(attributes, "mediaDuration", clip.media.duration);
@@ -209,6 +215,8 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       const auto source = VideoTimeline::SourceFor(mTimeline, clip);
       writer.StartTag("videoclip");
       writer.WriteAttr("id", static_cast<long long>(clip.id));
+      if (!clip.linkGroup.empty()) writer.WriteAttr("mediaLink", wxString::FromUTF8(clip.linkGroup));
+      if (!clip.markers.empty()) writer.WriteAttr("clipMarkers", wxString::FromUTF8(ClipMarkers::EncodeMarkers(clip.markers)));
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);
       writer.WriteAttr("videoDuration", clip.duration, 17);
       writer.WriteAttr("mediaSource", wxString::FromUTF8(source.path));
@@ -277,6 +285,19 @@ bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &sou
       throw std::runtime_error("A video track was removed while the operation was pending.");
    if (ProjectAudioIO::Get(project).IsAudioActive())
       throw std::runtime_error("Stop playback before moving video clips.");
+   const auto &members = source.Timeline().clips;
+   const auto linked = std::find_if(members.begin(), members.end(), [id](const auto &clip) { return clip.id == id; });
+   if (linked != members.end() && !linked->linkGroup.empty()) {
+      const auto rate = SourceFor(source.Timeline(), *linked).frameRate;
+      const auto target = std::round(start * rate) / rate;
+      if (std::abs(target - linked->start) > 1e-10) {
+         if (&source == &destination)
+            return ClipGroups::MoveLinkedVideoClip(project, source, id, target, recordHistory);
+         ClipGroups::MoveLinkedVideoClip(project, source, id, target, false);
+         try { return MoveVideoClipBetweenTracks(project, source, destination, id, target, recordHistory); }
+         catch (...) { ProjectHistory::Get(project).RollbackState(); throw; }
+      }
+   }
    auto from = source.Timeline(), to = destination.Timeline();
    if (&source == &destination) {
       if (!MoveClipTo(to, id, start)) return false;

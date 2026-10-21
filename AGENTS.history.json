@@ -26,6 +26,16 @@
       "decision": "Rename the fork AuTopsy and supersede the prior decision 'Require AudaciTops changes to minimize upstream edits and review changed behavior for unnecessary upgrade coupling and brittle tests.' with owned grouping/video timing and explicit Audacity adapter contracts.",
       "reason": "The user clarified resilience to upstream evolution rather than edit count as the required objective.",
       "regression": "Keep native attachment, command, history, mixer and drag integration; feature tests depend on public behavior and required contracts, not unrelated UI layout or source text."
+    },
+    {
+      "rules": [
+        "FORK-01",
+        "FORK-02",
+        "FORK-03"
+      ],
+      "decision": "Make full requested functionality explicit in FORK-01, retain native editing integration, extend FORK-02 to independent feature and audacity3 adapter tests with plausible upstream changes, and add FORK-03 for semantic targeting and clear missing or ambiguous contracts.",
+      "reason": "The user moves detailed upstream-resilience policy from global rules into this repository. This extends the prior decision 'Rename the fork AuTopsy and supersede the prior decision' without restoring the superseded small-diff objective.",
+      "regression": "Continue using native attachments, commands and history rather than copied editing engines; keep behavior tests independent of unrelated UI layout and implementation text. Isolation must preserve every requested feature, and only unavoidable coupling may remain. Existing scope, approval and unchanged-test acceptance rules remain in force."
     }
   ]
 }

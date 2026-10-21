@@ -54,16 +54,44 @@ The inherited audio tools are covered by the
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
 
+Preview publication uploads the completed installer and its source/build-check
+manifest. The publisher keeps the original accepted build intact, checks the
+uploaded asset identities, and makes the preview public after both uploads.
+See [BUILDING.md](BUILDING.md) for the build and publication inputs.
+
+## Code signing policy
+
+Current Windows preview installers are **unsigned**. AuTopsy is preparing an
+application to SignPath Foundation; no certificate or sponsorship has been
+granted, and a signature must never be claimed for an unsigned file.
+
+- Author, reviewer and release/signing approver:
+  [RomanOstr](https://github.com/RomanOstr).
+- Contributions from other authors require maintainer review. Release signing
+  requires the maintainer's explicit approval of the exact source revision
+  and its GitHub-hosted installer artifact.
+- Signing accounts and repository access must use multi-factor authentication.
+  Signing credentials belong in protected service/GitHub secrets, never source
+  files, release assets or build logs.
+
+Once signing is available, each release will identify its signing provider and
+publisher. If SignPath Foundation accepts AuTopsy, this policy and release pages
+will credit SignPath.io and SignPath Foundation before the first signed release.
+Unsigned previews remain clearly labelled.
+
+The video preview, proxy preparation and edited-audio export process media
+locally. Their source videos and project audio are not uploaded by those
+features. The Windows release build disables inherited application networking;
+opening help or repository links uses the user's browser. Installed components
+can be removed using Windows Installed Apps.
+
 ## Video backlog
 
 These are planned ideas, not features included in the current release.
 
 | Priority | Feature | Practical result |
 | --- | --- | --- |
-| Next | Link video clips with their imported audio | Move, split, and trim picture and sound together; unlink for independent editing. |
-| Next | Relink missing media and collect project media | Move a project to another computer without hunting for every source file. |
-| Next | Frame stepping and timecode | Place cuts and sync dialogue one frame at a time. |
-| Next | Export presets with modern encoders | Choose resolution, frame rate, quality, and hardware encoding instead of the initial fixed edited-picture format. |
+| Next | Collect project media | Copy referenced videos into a portable project folder. |
 | Later | Ripple edits and magnetic snapping | Close gaps and align video/audio edges while preserving later timing. |
 | Later | Background proxy preparation | Keep editing while lightweight previews are prepared; show progress and cache controls. |
 | Later | Video fades, dissolves, crop, and rotation | Handle basic picture transitions and framing. |
@@ -83,6 +111,12 @@ screen-selection and worker-lifecycle cases. CMake owns the disposable
 `.build/_core` cache and updates it in place on each call; installers are separate
 release outputs. Python lint covers the fork's test driver and repository tools;
 inherited scripting examples retain their upstream conventions.
+The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
+child-process handling, display confinement, media fixtures and GUI gestures;
+`test_fork_features.py` owns the feature scenarios and result records.
+Preview tests generate their own neutral 16-second colour-pattern video and
+tone; personal video inputs are not accepted. `fork-fixtures` checks that media
+without opening AuTopsy.
 The npm overrides select patched lint dependencies while their parent packages
 still constrain older releases.
 
@@ -129,8 +163,10 @@ pipes, so it can run alongside an installed copy of Audacity.
 1. Choose **File > Import > Video...**, the first import entry. Each import
    adds a video track; **Tracks > Add New > Video Track** adds an empty one.
 2. Its soundtrack is imported into new audio tracks at its original timing,
-   without music tempo matching. Edit, mute, or delete those tracks normally;
-   the video remains editable. Silent videos add no audio tracks.
+   without music tempo matching. Picture and soundtrack clips start linked:
+   moving, splitting, or trimming either keeps their linked partners together.
+   Use **Edit > Clips > Unlink Video / Audio Clips...** for independent edits.
+   Edit, mute, or delete audio normally. Silent videos add no audio tracks.
 3. Use the transport controls. Video follows normal-speed playback, pause,
    stop, timeline seeks, and loop jumps. The preview player itself is muted,
    so audio plays once through the editable project tracks.
@@ -138,10 +174,12 @@ pipes, so it can run alongside an installed copy of Audacity.
    starting playback also brings it back. Delete a video track using its normal
    close button or **Tracks > Remove Tracks**.
 5. Choose **File > Export Video with Audio Mix...** to save MP4 or MKV.
-   Unchanged picture timing is copied without re-encoding, including a source
-   split into adjacent clips. Moving or deleting picture sections renders the
-   edited picture as MPEG-4 Part 2 at the first visible source's frame rate and
-   oriented picture size. Other sources are scaled and letterboxed. The entire project mix replaces
+   Auto copies unchanged picture without re-encoding, including adjacent
+   splits. Edited picture defaults to H.264. The export dialog also offers HEVC,
+   AV1, and NVIDIA H.264/HEVC, with resolution, frame rate and quality controls.
+   NVIDIA presets require compatible hardware and drivers. Zero dimensions and
+   frame rate keep the first visible source's oriented size and rate; other
+   sources are scaled and letterboxed. The entire project mix replaces
    the original soundtrack, including mute, solo, gain, pan and effects.
    Export starts at zero and ends at the last video clip; short audio is padded
    with silence and later audio is excluded. The current selection does not
@@ -155,9 +193,26 @@ Drag a clip's header along the timeline or onto another video track with free
 space. Drag either edge to trim it; click its picture body to select time.
 Use the normal **Edit > Clips > Split**, **Split New**, **Trim**, Cut, Copy,
 Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
-Splits and moves snap to source frames. Picture edits leave audio available
-for independent synchronization and mixing. Tracks can be resized, reordered,
+Splits and video moves snap to source frames. Linked splits create separate
+left and right groups, so moving the right pair leaves the left pair in place.
+Each paste or duplication creates an independent linked set.
+Unlink clips when synchronizing picture and sound independently. Tracks can be resized, reordered,
 scrolled, selected, renamed, and removed with the native controls.
+
+**Edit > Clips > Add Clip Flag...** attaches a short label at the cursor inside
+an audio or video clip. Flags follow their clip when it moves, and stay attached
+through nondestructive trims, splits, copies, Undo/Redo and project saves.
+**Remove Clip Flag...** removes a chosen flag.
+
+Use **View > Previous Video Frame**, **Next Video Frame**, or **Go to Video
+Timecode...** for frame placement. Timecode uses HH:MM:SS:FF without drop-frame
+numbering; frame inspection reads the original source even when playback uses a
+lightweight proxy.
+
+**File > Relink Video Media...** locates moved or missing source videos without
+reimporting audio or changing clip positions, trims, links or flags. A replacement
+must contain enough source footage for every existing clip. Its preview cache is
+prepared before the project references change.
 
 Video tracks own their source references and clip timing. Native TrackList,
 clipboard, selection and history adapters provide normal Undo/Redo. Track and

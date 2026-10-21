@@ -2,7 +2,11 @@
 name = "repository-tools"
 version = "0.0.0"
 requires-python = ">=3.11"
-dependencies = ["mypy", "ruff"]
+dependencies = [
+    "mypy",
+    "pywin32>=312 ; sys_platform == 'win32'",
+    "ruff",
+]
 
 [tool.uv]
 package = false
@@ -13,7 +17,14 @@ members = []
 [tool.ruff]
 target-version = "py314"
 # Own the fork tooling; inherited scripting examples keep their upstream policy.
-include = ["scripts/validate-repository.py", "scripts/run-actionlint.py", "scripts/piped-work/test_fork_features.py"]
+include = [
+  "scripts/validate-repository.py",
+  "scripts/run-actionlint.py",
+  "scripts/piped-work/test_fork_features.py",
+  "scripts/piped-work/run_fork_test_harness.py",
+  "scripts/build/windows/build_video_installer.py",
+  "scripts/build/windows/test_build_video_installer.py",
+]
 force-exclude = true
 # The contract renderer supplies the shared Python target and rule policy.
 
@@ -24,7 +35,14 @@ ignore = ["E501"]
 [tool.mypy]
 # The GUI test driver targets Win32 even when lint runs on a Linux host.
 platform = "win32"
-files = ["scripts/validate-repository.py", "scripts/run-actionlint.py", "scripts/piped-work/test_fork_features.py"]
+files = [
+  "scripts/validate-repository.py",
+  "scripts/run-actionlint.py",
+  "scripts/piped-work/test_fork_features.py",
+  "scripts/piped-work/run_fork_test_harness.py",
+  "scripts/build/windows/build_video_installer.py",
+  "scripts/build/windows/test_build_video_installer.py",
+]
 exclude = ["(^|/)\\.venv/"]
 ignore_missing_imports = true
 check_untyped_defs = true
