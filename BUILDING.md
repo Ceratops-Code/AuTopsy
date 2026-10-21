@@ -318,7 +318,7 @@ or copy the VST3 SDK to `vst3sdk` directory in the Audacity source tree.
 
 Pass `-Daudacity_use_vst3sdk=system` to CMake. CMake will build the SDK during the configuration.
 
-## Video reference preview (Windows fork)
+## Video tracks (Windows fork)
 
 The video module is opt-in, so the base build does not require video SDKs.
 The configuration below enables the AuTopsy video features explicitly.
@@ -329,10 +329,10 @@ must contain include/mpv/client.h and libmpv-2.dll at its top level.
 Windows package links are listed on [mpv's installation page](https://mpv.io/installation/).
 Also provide the Windows x64 FFmpeg 8.1 shared runtime, available from
 [BtbN's FFmpeg builds](https://github.com/BtbN/FFmpeg-Builds/releases).
-Keep ffmpeg.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
+Keep ffmpeg.exe, ffprobe.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
 swresample-6.dll, swscale-9.dll, avfilter-11.dll, avdevice-62.dll, and the
 distribution's LICENSE.txt together in the selected runtime directory.
-The command-line encoder is shipped beside AuTopsy and runs without a
+The command-line encoder and picture probe ship beside AuTopsy and run without a
 console window. libmpv requires the C numeric runtime locale; Windows language
 setup keeps that locale stable after capturing the regional display separator.
 
@@ -355,11 +355,13 @@ calls, interruptions before and after each player command, asynchronous seeks,
 loop boundaries, frame quantization, and invalid clock values.
 The timeline case exercises the owned value model without a host editor.
 The fork cases use public scripting commands against synthetic media in a
-marked temporary work directory. Python 3, Pillow (for the owned-window screenshot),
-and the runtime distribution's ffprobe.exe are needed for those cases;
-ffprobe is a test tool, not an installed
-runtime dependency. Cases check project round trips, group motion, track order,
-picture copying/rendering, silence, rejected edits and overwrite protection.
+marked temporary work directory. Python 3 and Pillow (for the owned-window screenshot)
+are needed for those cases. Cases check native video/audio track ownership,
+cross-track clip dragging, clipboard edits, project round trips, group motion,
+track order and scrolling, mixed-source rendering, video-only playback,
+silence, rejected edits and overwrite protection.
+The gesture case waits for the native pane to be enabled, then supplies held
+mouse input only to the owned test window through its normal window procedure.
 The runner owns its marked case directories and shared preview cache under
 the selected test work root. Fresh runs replace case scratch data. Completed
 result records retain their original run, executable and check identities in
@@ -369,14 +371,14 @@ Portable Settings is removed when the owned app exits.
 
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
-ffmpeg.exe and
+ffmpeg.exe, ffprobe.exe and
 FFmpeg-LICENSE.txt beside the built executable. It
 copies these files on every app build, restoring missing files and replacing
 them when building with another SDK or compatible FFmpeg package. Build outputs belong to the chosen
 build directory; no version copies or recovery checkpoints are created by this
 feature. The decoder reads the selected video without writing player
-configuration, logs or cache files. The project owns its video source reference
-and clip metadata in its existing .aup3 XML storage. No media copy or separate
+configuration, logs or cache files. Native video tracks own their per-clip source
+references and timing in the existing .aup3 XML storage. No media copy or separate
 database is introduced. Soundtrack audio uses the existing project audio storage,
 Undo history, and cleanup. Closing the project releases its player and window.
 

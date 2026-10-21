@@ -1,6 +1,9 @@
 #include "../AdornedRulerPanel.h"
 #include "../Clipboard.h"
 #include "../CommonCommandFlags.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "../video/CreateVideoTrack.h"
+#endif
 #include "LabelTrack.h"
 #include "../MenuCreator.h"
 #include "NoteTrack.h"
@@ -41,6 +44,15 @@
 
 // private helper classes and functions
 namespace {
+
+const ReservedCommandFlag &EditableClipTracksSelectedFlag()
+{
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   return VideoTimeline::AudioOrVideoTracksSelectedFlag();
+#else
+   return WaveTracksSelectedFlag();
+#endif
+}
 
 // Handle text paste. Return true if did paste.
 // (This was formerly the first part of overly-long OnPaste.)
@@ -754,7 +766,12 @@ void OnDuplicate(const CommandContext &context)
 
       // Make copies not for clipboard but for direct addition to the project
       auto dest = n->Copy(selectedRegion.t0(), selectedRegion.t1(), false);
-      dest->MoveTo(std::max(selectedRegion.t0(), n->GetStartTime()));
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      if (dynamic_cast<AuTopsyVideoTrack*>(dest.get()))
+         dest->ShiftBy(-1,selectedRegion.t0());
+      else
+#endif
+         dest->MoveTo(std::max(selectedRegion.t0(), n->GetStartTime()));
       tracks.Add(dest);
 
       // This break is really needed, else we loop infinitely
@@ -859,9 +876,12 @@ void OnTrim(const CommandContext &context)
       //Hide the section before the left selector
       wt.Trim(selectedRegion.t0(), selectedRegion.t1());
    } );
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   VideoTimeline::TrimSelectedVideoTracks(project,selectedRegion.t0(),selectedRegion.t1());
+#endif
 
    ProjectHistory::Get( project ).PushState(
-      XO("Trim selected audio tracks from %.2f seconds to %.2f seconds")
+      XO("Trim selected clips from %.2f seconds to %.2f seconds")
          .Format( selectedRegion.t0(), selectedRegion.t1() ),
       XO("Trim Audio"));
 }
@@ -874,13 +894,18 @@ void OnSplit(const CommandContext &context)
    if (auto *pTrack = context.temporarySelection.pTrack) {
       if (auto pWaveTrack = dynamic_cast<WaveTrack*>(pTrack))
          pWaveTrack->Split(sel0, sel1);
-      else
-         // Did nothing, don't push history
-         return;
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      else if (dynamic_cast<AuTopsyVideoTrack*>(pTrack))
+         VideoTimeline::SplitSelectedVideoTracks(project,sel0,sel1,pTrack);
+#endif
+      else return;
    }
-   else
-      for (auto wt : tracks.Selected<WaveTrack>())
-         wt->Split(sel0, sel1);
+   else {
+      for (auto wt : tracks.Selected<WaveTrack>()) wt->Split(sel0,sel1);
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      VideoTimeline::SplitSelectedVideoTracks(project,sel0,sel1);
+#endif
+   }
 
    ProjectHistory::Get( project ).PushState(XO("Split"), XO("Split"));
 #if 0
@@ -958,6 +983,13 @@ void OnSplitNew(const CommandContext &context)
             }
             wt.SplitDelete(newt0, newt1);
          }
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+         , [&](AuTopsyVideoTrack &video) {
+            auto copy = video.Copy(selectedRegion.t0(),selectedRegion.t1(),false);
+            copy->ShiftBy(-1,selectedRegion.t0()); tracks.Add(copy);
+            video.Silence(selectedRegion.t0(),selectedRegion.t1());
+         }
+#endif
 #if 0
          ,
          // LL:  For now, just skip all non-wave tracks since the other do not
@@ -1202,8 +1234,8 @@ auto EditMenu()
                      AudioIONotBusyFlag() | TimeSelectedFlag() | WaveTracksSelectedFlag(),
                      wxT("Ctrl+L") ),
                   /* i18n-hint: (verb)*/
-                  Command( wxT("Trim"), XXO("Tri&m Audio"), OnTrim,
-                     AudioIONotBusyFlag() | TimeSelectedFlag() | WaveTracksSelectedFlag(),
+                  Command( wxT("Trim"), XXO("Tri&m"), OnTrim,
+                     AudioIONotBusyFlag() | TimeSelectedFlag() | EditableClipTracksSelectedFlag(),
                      Options{ wxT("Ctrl+T") } )
                )
             )
@@ -1214,14 +1246,14 @@ auto EditMenu()
       Section( "Other",
       //////////////////////////////////////////////////////////////////////////
 
-         Menu( wxT("Clip"), XXO("Audi&o Clips"),
+         Menu( wxT("Clip"), XXO("Cli&ps"),
             Section( "",
                /* i18n-hint: (verb) It's an item on a menu. */
                Command( wxT("Split"), XXO("Sp&lit"), OnSplit,
-                  AudioIONotBusyFlag() | WaveTracksSelectedFlag(),
+                  AudioIONotBusyFlag() | EditableClipTracksSelectedFlag(),
                   Options{ wxT("Ctrl+I") } ),
                Command( wxT("SplitNew"), XXO("Split Ne&w"), OnSplitNew,
-                  AudioIONotBusyFlag() | TimeSelectedFlag() | WaveTracksSelectedFlag(),
+                  AudioIONotBusyFlag() | TimeSelectedFlag() | EditableClipTracksSelectedFlag(),
                   Options{ wxT("Ctrl+Alt+I") } )
             ),
 

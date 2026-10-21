@@ -28,55 +28,59 @@ Additional development resources may be found [here](https://audacity.gitbook.io
 
 Audacity is open source software licensed GPLv3. Most code files are GPLv2-or-later, with the notable exceptions being /lib-src (which contains third party libraries), as well as VST3-related code. Documentation is licensed CC-by 3.0 unless otherwise noted. Details can be found in the [license file](LICENSE.txt).
 
-## Video reference preview (Windows fork)
+## Video tracks (Windows fork)
 
-This fork follows upstream's audacity3 branch and adds a video reference in a
-separate, resizable preview window. The video strip is in the main project
-window above the audio tracks, using the same timeline, zoom and play cursor.
+This fork follows upstream's audacity3 branch and adds native video tracks in
+the same scrolling track pane as audio. Each track can hold clips from several
+files. A separate, resizable preview window shows the composed picture; higher
+visible tracks take precedence and gaps expose the tracks below.
 
 AuTopsy has its own Windows instance lock, settings directory, and scripting
 pipes, so it can run alongside an installed copy of Audacity.
 
-1. Choose **File > Import > Video Reference...** and select one video.
+1. Choose **File > Import > Video...**, the first import entry. Each import
+   adds a video track; **Tracks > Add New > Video Track** adds an empty one.
 2. Its soundtrack is imported into new audio tracks at its original timing,
    without music tempo matching. Edit, mute, or delete those tracks normally;
-   the video remains attached. Silent videos add no audio tracks.
+   the video remains editable. Silent videos add no audio tracks.
 3. Use the transport controls. Video follows normal-speed playback, pause,
    stop, timeline seeks, and loop jumps. The preview player itself is muted,
    so audio plays once through the editable project tracks.
 4. Closing the preview hides it. **View > Video Preview** shows it again, and
-   starting playback also brings it back. **View > Remove Video Reference**
-   detaches it from this project.
+   starting playback also brings it back. Delete a video track using its normal
+   close button or **Tracks > Remove Tracks**.
 5. Choose **File > Export Video with Audio Mix...** to save MP4 or MKV.
    Unchanged picture timing is copied without re-encoding, including a source
    split into adjacent clips. Moving or deleting picture sections renders the
-   edited picture as MPEG-4 Part 2 at the source frame rate. The entire project mix replaces
+    edited picture as MPEG-4 Part 2 at the first visible source's frame rate and
+    oriented picture size. Other sources are scaled and letterboxed. The entire project mix replaces
    the original soundtrack, including mute, solo, gain, pan and effects.
    Export starts at zero and ends at the last video clip; short audio is padded
    with silence and later audio is excluded. The current selection does not
    limit this export. Audio is stereo AAC at 48 kHz, 256 kbit/s.
 
-Playback uses the audio transport. A silent video, or a project whose only
-audio track was deleted, needs another audio track before playback is available.
+Playback uses the normal audio transport, including when the soundtrack has
+been deleted. Video-only projects supply silence in memory to its clock; no
+hidden audio track or temporary soundtrack is created.
 
-Click the main-window video strip to place the audio cursor. Drag the body of a
-video clip left or right to line its picture up with the audio; its soundtrack
-stays in place. Right-click for **Split Video at Cursor** or **Delete Selected
-Video Clip**, or use **Edit > Audio Clips > Split Video at Cursor**. Splits snap to source frames.
-**Video Clips...** lists independent clip IDs and provides move and delete
-operations. Moves require free space; gaps show black. Picture edits leave the
-ordinary audio tracks available for separate editing and mixing.
+Drag a clip's header along the timeline or onto another video track with free
+space. Drag either edge to trim it; click its picture body to select time.
+Use the normal **Edit > Clips > Split**, **Split New**, **Trim**, Cut, Copy,
+Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
+Splits and moves snap to source frames. Picture edits leave audio available
+for independent synchronization and mixing. Tracks can be resized, reordered,
+scrolled, selected, renamed, and removed with the native controls.
 
-Each project owns its reference and clip timing. They are saved in .aup3 project
-XML through Audacity's extension registry and restored without importing another
-copy of the soundtrack. The source video remains an external file and must stay
-accessible. Split, move, delete and reference removal support normal Undo/Redo.
-Cancelling or failing an import keeps the previous reference. Importing a video
-with audio is one combined import Undo action; removing its picture leaves the
-imported audio tracks in the project.
+Video tracks own their source references and clip timing. Native TrackList,
+clipboard, selection and history adapters provide normal Undo/Redo. Track and
+clip data are saved in .aup3 XML and restored without importing another copy
+of the soundtrack. Projects from the earlier single-video format open as a
+native video track. Source files remain external and must stay accessible.
+Cancelling or failing an import keeps existing tracks. Importing picture with
+audio is one combined Undo action; removing its picture leaves the audio.
 
 Synchronization uses the audio clock with periodic drift correction;
-this is a reference preview, with no guarantee of frame-accurate external
+the preview has no guarantee of frame-accurate external
 monitoring. Play-at-speed, scrub, and time-track warping are outside the first
 version's smooth-playback scope.
 
@@ -92,7 +96,7 @@ Reopening uses an available cache without a nested loading dialog.
 `GetVideoPreviewInfo` reports decoded size and a bounded observation of the last
 playback, including dropped frames and video/audio clock positions.
 Soundtrack import uses Audacity's existing FFmpeg importer with bundled FFmpeg
-8.1 shared libraries. Video export uses the bundled `ffmpeg.exe`; if a source
+8.1 shared libraries. Video export uses bundled `ffmpeg.exe` and `ffprobe.exe`; if a source
 video codec cannot be copied into MP4, export MKV instead. Export cannot replace
 the source video. A cancelled or failed export preserves an existing destination.
 
@@ -109,22 +113,26 @@ version history is produced by the application.
 
 Windows scripting clients use the names
 `AuTopsyToSrvPipe` and `AuTopsyFromSrvPipe`.
-See [BUILDING.md](BUILDING.md#video-reference-preview-windows-fork) for the SDK
+See [BUILDING.md](BUILDING.md#video-tracks-windows-fork) for the SDK
 and focused test commands.
 
-The `ImportVideoReference: Filename="..."` and
+The `ImportVideo: Filename="..."` and
 `ExportVideoMix: Filename="..." Overwrite=0` scripting commands invoke the
 same operations as the File menu. Set `Overwrite=1` to replace an existing
 export; the source video is always protected.
 
-`GetVideoClips` returns the saved source and clip IDs/ranges. `SplitVideo: At=2`,
-`MoveVideoClip: Id=2 Start=5`, and `DeleteVideoClip: Id=2` use the same editing
-operations as the main-window video controls. Repeating a split at an existing boundary,
+`GetVideoClips` returns native track indices and each clip's source, ID and range.
+`SplitVideo: At=2`, `MoveVideoClip: Track=0 Id=2 ToTrack=1 Start=5`, and
+`DeleteVideoClip: Track=0 Id=2` use the same editing operations as the native
+video controls. Omit `ToTrack` for a move within the source track. Omit `Track`
+only when focus or an unambiguous clip ID identifies the track. Empty tracks
+can be added through `NewVideoTrack`, `AddVideoTrackBefore: Track=1`, and
+`AddVideoTrackAfter: Track=1`. Repeating a split at an existing boundary,
 an absolute move to the same start, or deletion of an absent ID makes no change.
 
 ## Audio clip groups and track insertion
 
-The fork adds **Edit > Audio Clips > Group Clips...** and
+The fork adds **Edit > Clips > Group Clips...** and
 **Ungroup Clips...**. The chooser can select individual clips across tracks.
 Grouping merges any existing groups touched by the choice. A normal clip-header
 drag then moves the whole group, including members on unselected tracks, subject
@@ -132,8 +140,9 @@ to every track's available space. Group IDs survive project saves and Undo/Redo.
 Other audio editing commands keep Audacity's usual selection behavior. Clipboard
 copies retain group metadata.
 
-The track menu adds **Add Audio Track Before This Track** and
-**Add Audio Track After This Track**. The new empty track matches an audio
+The track menu adds **Add Audio Track Before This Track**,
+**Add Audio Track After This Track**, and matching **Add Video Track** before/after
+actions. The new empty audio track matches an audio
 anchor's mono/stereo channel count; a non-audio anchor creates mono. Each
 insertion is one Undo action. The same operations appear under Tracks > Add New,
 using the focused track, and as `AddAudioTrackBefore: Track=0` and

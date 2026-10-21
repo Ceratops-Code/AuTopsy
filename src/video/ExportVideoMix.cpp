@@ -10,9 +10,12 @@
 #include <wx/progdlg.h>
 #include <wx/stdpaths.h>
 #include <wx/msw/wrapwin.h>
+#include <rapidjson/document.h>
+#include <optional>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -283,6 +286,39 @@ public:
       return true;
    }
 };
+
+// FFprobe supplies structured source dimensions, including display rotation.
+// Export uses the first visible original as its canvas, never its small proxy.
+std::optional<std::pair<int, int>> ReadExportPictureSize(const fs::path &source, wxWindow *parent)
+{
+   const auto probe = wxFileName(wxStandardPaths::Get().GetExecutablePath())
+      .GetPathWithSep() + "ffprobe.exe";
+   if (!wxFileExists(probe)) throw std::runtime_error("The bundled ffprobe.exe is missing. Reinstall AuTopsy.");
+   FfmpegProcess process{{probe.ToStdWstring(), L"-v", L"error", L"-select_streams", L"v:0",
+      L"-show_entries", L"stream=width,height:stream_side_data=rotation:stream_tags=rotate",
+      L"-of", L"json", source.wstring()}};
+   if (!process.Wait(parent, _("Reading Video"), _("Reading original picture dimensions..."))) return {};
+   rapidjson::Document data; data.Parse(process.output.c_str());
+   if (data.HasParseError() || !data.IsObject() || !data.HasMember("streams") ||
+       !data["streams"].IsArray() || data["streams"].Empty())
+      throw std::runtime_error("FFprobe did not report a video stream.");
+   const auto &stream = data["streams"][0];
+   if (!stream.HasMember("width") || !stream["width"].IsInt() ||
+       !stream.HasMember("height") || !stream["height"].IsInt())
+      throw std::runtime_error("The video stream has no usable picture dimensions.");
+   int width = stream["width"].GetInt(), height = stream["height"].GetInt(), rotation{};
+   if (stream.HasMember("side_data_list") && stream["side_data_list"].IsArray())
+      for (const auto &side : stream["side_data_list"].GetArray())
+         if (side.IsObject() && side.HasMember("rotation") && side["rotation"].IsNumber())
+            rotation = int(std::round(side["rotation"].GetDouble()));
+   if (rotation == 0 && stream.HasMember("tags") && stream["tags"].IsObject() &&
+       stream["tags"].HasMember("rotate") && stream["tags"]["rotate"].IsString())
+      rotation = std::atoi(stream["tags"]["rotate"].GetString());
+   if (std::abs(rotation) % 180 == 90) std::swap(width, height);
+   if (width <= 0 || height <= 0 || width > 65536 || height > 65536)
+      throw std::runtime_error("The original video dimensions are outside supported bounds.");
+   return std::pair<int,int>{(width + 1) & ~1, (height + 1) & ~1};
+}
 } // namespace
 
 // Called when the project attachments start, and before every export.
@@ -309,21 +345,37 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    const wxString &destination, bool overwrite, wxWindow *parent)
 {
    VideoTimeline::RequireWellFormedTimeline(timeline);
-   const auto source = wxString::FromUTF8(timeline.sourcePath);
    const auto duration = timeline.End();
    const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline);
    const fs::path target = fs::absolute(fs::path(destination.ToStdWstring()));
-   const fs::path input = fs::absolute(fs::path(source.ToStdWstring()));
-   if (!std::isfinite(duration) || duration <= 0 || source.empty() || destination.empty())
-      throw std::runtime_error("Choose a ready video and an output filename before exporting.");
+   if (!std::isfinite(duration) || duration <= 0 || timeline.clips.empty() || destination.empty())
+      throw std::runtime_error("Choose video clips and an output filename before exporting.");
    const auto extension = wxString(target.extension().wstring()).Lower();
    if (extension != ".mp4" && extension != ".mkv")
       throw std::runtime_error("Choose an .mp4 or .mkv output filename.");
-   if (!fs::is_regular_file(input) || !fs::is_directory(target.parent_path()))
-      throw std::runtime_error("The source video or output folder is unavailable.");
-   if (wxString(input.wstring()).CmpNoCase(wxString(target.wstring())) == 0 ||
-      (fs::exists(target) && fs::equivalent(input, target)))
-      throw std::runtime_error("The output must be different from the source video.");
+   if (!fs::is_directory(target.parent_path()))
+      throw std::runtime_error("The output folder is unavailable.");
+   std::vector<fs::path> inputs;
+   std::vector<size_t> clipInputs;
+   const auto protectSource = [&](const fs::path &input) {
+      if (wxString(input.wstring()).CmpNoCase(wxString(target.wstring())) == 0 ||
+          (fs::exists(target) && fs::exists(input) && fs::equivalent(input, target)))
+         throw std::runtime_error("The output must be different from every source video.");
+   };
+   for (const auto &path : timeline.protectedSourcePaths)
+      protectSource(fs::absolute(fs::path(wxString::FromUTF8(path).ToStdWstring())));
+   for (const auto &clip : timeline.clips) {
+      const auto source = VideoTimeline::SourceFor(timeline, clip);
+      const auto input = fs::absolute(fs::path(wxString::FromUTF8(source.path).ToStdWstring()));
+      if (!fs::is_regular_file(input))
+         throw std::runtime_error("A source video is unavailable: " + source.path);
+      protectSource(input);
+      const auto found = std::find_if(inputs.begin(), inputs.end(), [&](const auto &path) {
+         return wxString(input.wstring()).CmpNoCase(wxString(path.wstring())) == 0;
+      });
+      clipInputs.push_back(size_t(found - inputs.begin()));
+      if (found == inputs.end()) inputs.push_back(input);
+   }
    if (fs::exists(target) && !overwrite)
       throw std::runtime_error("The output already exists. Choose another name or allow overwrite.");
    const auto executable = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPathWithSep() + "ffmpeg.exe";
@@ -331,6 +383,11 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    const auto [plugin, format] = ExportPluginRegistry::Get().FindFormat("WAV");
    if (!plugin) throw std::runtime_error("The WAV export module is unavailable.");
 
+   std::optional<std::pair<int,int>> pictureSize;
+   if (!copyPicture) {
+      pictureSize = ReadExportPictureSize(inputs.front(), parent);
+      if (!pictureSize) return false;
+   }
    ExportWorkspace workspace{ target };
    const auto mix = workspace.path / "_mix.wav";
    const auto result = workspace.path / (extension == ".mp4" ? "_result.mp4" : "_result.mkv");
@@ -351,27 +408,37 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    seconds << std::setprecision(17) << duration;
    std::vector<std::wstring> arguments{
        executable.ToStdWstring(), L"-hide_banner", L"-loglevel", L"error", L"-nostdin", L"-nostats", L"-n",
-       L"-progress", L"pipe:1", L"-i", input.wstring(), L"-i", mix.wstring()
+       L"-progress", L"pipe:1"
     };
+   for (const auto &input : inputs)
+      arguments.insert(arguments.end(), {L"-i", input.wstring()});
+   arguments.insert(arguments.end(), {L"-i", mix.wstring()});
    if (copyPicture) {
       arguments.insert(arguments.end(), {L"-map", L"0:v:0", L"-c:v", L"copy"});
    }
    else {
       // FFmpeg owns decoding, trimming, gap frames and concatenation. This
       // adapter translates only our value model, never Audacity track internals.
-      struct Span { double sourceStart, duration; bool gap; };
+      struct Span { size_t input; double sourceStart, duration; bool gap; };
       std::vector<Span> spans;
       double end{};
-      for (const auto &clip : timeline.clips) {
-         if (clip.start > end + 1e-7) spans.push_back({0, clip.start - end, true});
-         spans.push_back({clip.sourceStart, clip.duration, false});
+      for (size_t clipIndex = 0; clipIndex < timeline.clips.size(); ++clipIndex) {
+         const auto &clip = timeline.clips[clipIndex];
+         if (clip.start > end + 1e-7) spans.push_back({0, 0, clip.start - end, true});
+         spans.push_back({clipInputs[clipIndex], clip.sourceStart, clip.duration, false});
          end = clip.End();
       }
       std::ostringstream graph;
       graph.imbue(std::locale::classic()); graph << std::setprecision(17);
-      graph << "[0:v:0]split=" << spans.size();
-      for (size_t i = 0; i < spans.size(); ++i) graph << "[s" << i << "]";
-      graph << ";\n";
+      for (size_t input = 0; input < inputs.size(); ++input) {
+         const auto count = std::count_if(spans.begin(), spans.end(),
+            [&](const auto &span) { return span.input == input; });
+         if (!count) continue;
+         graph << "[" << input << ":v:0]split=" << count;
+         for (size_t i = 0; i < spans.size(); ++i)
+            if (spans[i].input == input) graph << "[s" << i << "]";
+         graph << ";\n";
+      }
       for (size_t i = 0; i < spans.size(); ++i) {
          const auto &span = spans[i];
          graph << "[s" << i << "]";
@@ -380,7 +447,10 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
                << span.duration << ",trim=duration=" << span.duration << ",drawbox=color=black:t=fill";
          else graph << "trim=start=" << span.sourceStart << ":duration=" << span.duration
             << ",setpts=PTS-STARTPTS";
-         graph << ",fps=" << timeline.frameRate << ",pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p[v" << i << "];\n";
+         const auto [width, height] = *pictureSize;
+         graph << ",fps=" << timeline.frameRate
+            << ",scale=" << width << ":" << height << ":force_original_aspect_ratio=decrease:force_divisible_by=2"
+            << ",pad=" << width << ":" << height << ":(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v" << i << "];\n";
       }
       for (size_t i = 0; i < spans.size(); ++i) graph << "[v" << i << "]";
       graph << "concat=n=" << spans.size() << ":v=1:a=0[vout]\n";
@@ -396,7 +466,8 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
       arguments.insert(arguments.end(), {L"-filter_complex_script", filterPath.wstring(),
          L"-map", L"[vout]", L"-c:v", L"mpeg4", L"-q:v", L"2", L"-r", frameRate.str()});
    }
-   arguments.insert(arguments.end(), {L"-map", L"1:a:0", L"-map_metadata", L"0",
+   const auto audioMap = std::to_wstring(inputs.size()) + L":a:0";
+   arguments.insert(arguments.end(), {L"-map", audioMap, L"-map_metadata", L"0",
       L"-map_chapters", copyPicture ? L"0" : L"-1", L"-c:a", L"aac", L"-b:a", L"256k",
       L"-af", L"apad", L"-t", seconds.str()});
    if (extension == ".mp4") { arguments.push_back(L"-movflags"); arguments.push_back(L"+faststart"); }

@@ -3,7 +3,7 @@
 CTest supplies an executable and a dedicated work root. Tests own only marked
 temporary directories and their child process. The native Portable Settings
 name is required by Audacity; a marker protects any unrelated existing profile.
-No installed app, user project, source snapshot or upstream UI geometry is used.
+No installed app, user project, source snapshot or fixed upstream layout is used.
 """
 from pathlib import Path
 from datetime import datetime
@@ -115,51 +115,170 @@ class ScriptClient:
         return self.send(f'{operation}: Filename="{path.as_posix()}" {extra}', success)
 
 
-def save_reopen(client, project):
-    client.file("SaveProject2", project)
+def save_reopen(client, project, save_existing=False):
+    # SaveProject2 is Save As and compares path strings. A reopened Windows
+    # path may use different separators; use native Save for its current file.
+    if save_existing: client.send("Save")
+    else: client.file("SaveProject2", project)
     client.send("Close")
     client.file("OpenProject2", project)
 
 
-def drag_owned_video_clip(client, start_time, end_time):
-    """Send drag events only to this runner's video panel; never move the mouse."""
+def painted_video_tracks(client):
+    """Wait for the native TrackPanel's asynchronous paint, not a proxy window."""
+    deadline = time.monotonic() + 5
+    while True:
+        info = client.data("GetVideoPreviewInfo")
+        if info["videoTrackThumbnails"] and all(row["dataWidth"] > 0 for row in info["videoTrackRows"]):
+            return info
+        if time.monotonic() >= deadline:
+            capture_owned_project(int(info["videoTrackPanelHandle"]),
+                                  Path(os.environ["AUTOPSY_BEHAVIOR_ROOT"]) / "_unpainted-video.png")
+            raise AssertionError(info)
+        time.sleep(.1)
+
+
+def ready_video_preview(client):
+    """File loading and project-open callbacks complete asynchronously."""
+    deadline = time.monotonic() + 15
+    while True:
+        info = client.data("GetVideoPreviewInfo")
+        if info["ready"]: return info
+        if time.monotonic() >= deadline: raise AssertionError(info)
+        time.sleep(.1)
+
+
+def drag_owned_video_clip(client, start_time, end_time, track=None, to_track=None, cancel=False):
+    """Exercise the real TrackPanel's clip header; target only the owned PID."""
+    info = painted_video_tracks(client)
+    if not all(info["viewStart"] <= time <= info["viewEnd"] for time in (start_time, end_time)):
+        client.send("FitInWindow")
+        info = painted_video_tracks(client)
+    panel = int(info["videoTrackPanelHandle"])
+    rows = info["videoTrackRows"]
+    source = next((row for row in rows if track is None or row["index"] == track), None)
+    target = source if to_track is None else next((row for row in rows if row["index"] == to_track), None)
+    if source is None or target is None: raise RuntimeError("The requested native video row is missing.")
     user = ctypes.WinDLL("user32", use_last_error=True)
-    callback_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_ssize_t)
-    user.EnumWindows.argtypes = [callback_type, ctypes.c_ssize_t]
-    user.EnumChildWindows.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_ssize_t]
     user.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
-    user.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
-    pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
-    panels = []
-    @callback_type
-    def child(window, _):
-        text = ctypes.create_unicode_buffer(256)
-        user.GetWindowTextW(window, text, len(text))
-        if text.value == "Video Track": panels.append(window)
+    owner = ctypes.c_uint32()
+    user.GetWindowThreadProcessId(panel, ctypes.byref(owner))
+    if owner.value != int(os.environ["AUTOPSY_OWNED_APP_PID"]):
+        raise RuntimeError("The native TrackPanel belongs to another process.")
+    def position(time, row):
+        x = row["dataLeft"] + round((time-info["viewStart"]) /
+             (info["viewEnd"]-info["viewStart"]) * info["videoTrackDataWidth"])
+        return x, row.get("dataTop", row["y"])+12
+    x0,y0 = position(start_time,source); x1,y1 = position(end_time,target)
+    # The scripting progress wrapper can still be disabling the pane when its
+    # reply arrives. Inspect that precondition before input. A real held button
+    # also prevents native mouse-leave handling from cancelling synthetic motion.
+    class Point(ctypes.Structure):
+        _fields_ = [("x",ctypes.c_long),("y",ctypes.c_long)]
+    class Mouse(ctypes.Structure):
+        _fields_ = [("x",ctypes.c_long),("y",ctypes.c_long),("data",ctypes.c_uint32),
+                    ("flags",ctypes.c_uint32),("time",ctypes.c_uint32),("extra",ctypes.c_size_t)]
+    class Union(ctypes.Union): _fields_ = [("mouse",Mouse)]
+    class Input(ctypes.Structure): _fields_ = [("kind",ctypes.c_uint32),("value",Union)]
+    class Gui(ctypes.Structure):
+        _fields_ = [("size",ctypes.c_uint32),("flags",ctypes.c_uint32),
+                    *[(name,ctypes.c_void_p) for name in ("active","focus","capture","menu","move","caret")],
+                    ("rect",ctypes.c_long*4)]
+    callback = ctypes.WINFUNCTYPE(ctypes.c_int,ctypes.c_void_p,ctypes.c_ssize_t)
+    user.GetAncestor.argtypes=[ctypes.c_void_p,ctypes.c_uint]; user.GetAncestor.restype=ctypes.c_void_p
+    user.GetForegroundWindow.restype=ctypes.c_void_p
+    user.SetForegroundWindow.argtypes=[ctypes.c_void_p]
+    user.GetParent.argtypes=[ctypes.c_void_p]; user.GetParent.restype=ctypes.c_void_p
+    user.IsWindowEnabled.argtypes=[ctypes.c_void_p]
+    user.IsWindowVisible.argtypes=[ctypes.c_void_p]
+    user.GetWindowLongPtrW.argtypes=[ctypes.c_void_p,ctypes.c_int]; user.GetWindowLongPtrW.restype=ctypes.c_ssize_t
+    user.SetWindowPos.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_uint]
+    user.GetClientRect.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_long*4)]
+    user.GetCursorPos.argtypes=[ctypes.POINTER(Point)]
+    user.ClientToScreen.argtypes=[ctypes.c_void_p,ctypes.POINTER(Point)]
+    user.WindowFromPoint.argtypes=[Point]; user.WindowFromPoint.restype=ctypes.c_void_p
+    user.GetWindowTextW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_int]
+    user.EnumWindows.argtypes=[callback,ctypes.c_ssize_t]; user.ShowWindow.argtypes=[ctypes.c_void_p,ctypes.c_int]
+    user.GetGUIThreadInfo.argtypes=[ctypes.c_uint32,ctypes.POINTER(Gui)]
+    user.SendInput.argtypes=[ctypes.c_uint,ctypes.POINTER(Input),ctypes.c_int]
+    user.SendMessageTimeoutW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t,
+                                      ctypes.c_uint,ctypes.c_uint,ctypes.POINTER(ctypes.c_size_t)]
+    user.SetThreadDpiAwarenessContext.argtypes=[ctypes.c_void_p]; user.SetThreadDpiAwarenessContext.restype=ctypes.c_void_p
+    user.GetWindowDpiAwarenessContext.argtypes=[ctypes.c_void_p]; user.GetWindowDpiAwarenessContext.restype=ctypes.c_void_p
+    previous_dpi=user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    root=user.GetAncestor(panel,2); foreground=user.GetForegroundWindow()
+    pinned=bool(user.GetWindowLongPtrW(root,-20)&8)
+    original=Point(); user.GetCursorPos(ctypes.byref(original))
+    rectangle=(ctypes.c_long*4)(); user.GetClientRect(panel,ctypes.byref(rectangle))
+    point=Point(round(x0*rectangle[2]/info["videoTrackPanelWidth"]),
+                round(y0*rectangle[3]/info["videoTrackPanelHeight"]))
+    user.ClientToScreen(panel,ctypes.byref(point))
+    hidden=[]; pressed=False; positioned=False
+    @callback
+    def hide_preview(window,_):
+        pid=ctypes.c_uint32(); user.GetWindowThreadProcessId(window,ctypes.byref(pid))
+        if pid.value==owner.value and user.IsWindowVisible(window):
+            title=ctypes.create_unicode_buffer(256); user.GetWindowTextW(window,title,len(title))
+            if title.value.startswith("Video Preview"):
+                hidden.append(window); user.ShowWindow(window,0)
         return 1
-    @callback_type
-    def parent(window, _):
-        owner = ctypes.c_uint32()
-        user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-        if owner.value == pid: user.EnumChildWindows(window, child, 0)
-        return 1
-    user.EnumWindows(parent, 0)
-    if len(panels) != 1: raise RuntimeError("The owned main-window video panel is missing or ambiguous.")
-    info = client.data("GetVideoPreviewInfo")
-    def point(time):
-        x = info["videoTrackLeftOffset"] + round((time - info["viewStart"]) /
-             (info["viewEnd"] - info["viewStart"]) * info["videoTrackDataWidth"])
-        return (50 << 16) | x
-    user.SendMessageTimeoutW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t,
-                                        ctypes.c_ssize_t, ctypes.c_uint, ctypes.c_uint,
-                                        ctypes.POINTER(ctypes.c_size_t)]
-    user.SendMessageTimeoutW.restype = ctypes.c_size_t
-    for message, buttons, position in ((0x201, 1, point(start_time)),
-                                      (0x200, 1, point(end_time)), (0x202, 0, point(end_time))):
-        reply = ctypes.c_size_t()
-        if not user.SendMessageTimeoutW(panels[0], message, buttons, position, 2, 2000, ctypes.byref(reply)):
-            raise RuntimeError("The owned video track did not process its drag event.")
-    return panels[0]
+    def button(flags):
+        packet=Input(0,Union(mouse=Mouse(0,0,0,flags,0,0)))
+        if user.SendInput(1,ctypes.byref(packet),ctypes.sizeof(packet))!=1:
+            raise RuntimeError("Windows rejected the owned test's mouse-button event.")
+    def send(kind,flags,x,y):
+        reply=ctypes.c_size_t()
+        if not user.SendMessageTimeoutW(panel,kind,flags,((y&65535)<<16)|(x&65535),2,2000,ctypes.byref(reply)):
+            raise RuntimeError(f"SendMessageTimeoutW(HWND={panel}, message={kind:#x}, flags={flags}, point={(x,y)}) "
+                               f"failed with Windows error {ctypes.get_last_error()}; "
+                               + startup_window_messages(owner.value))
+    try:
+        if any(user.GetAsyncKeyState(key)&0x8000 for key in (1,16,17,18,91,92)):
+            raise RuntimeError("Human input is held; the test will not take over its drag meaning.")
+        # Consecutive drags at the same header must start as single clicks.
+        # A real OS down inside its double-click interval is a different action.
+        time.sleep((user.GetDoubleClickTime()+20)/1000)
+        user.EnumWindows(hide_preview,0)
+        user.SetWindowPos(root,ctypes.c_void_p(-1),0,0,0,0,0x53)
+        user.SetForegroundWindow(root)
+        deadline=time.monotonic()+3
+        while True:
+            enabled=True; ancestor=panel
+            while ancestor:
+                enabled=enabled and bool(user.IsWindowEnabled(ancestor))
+                if ancestor==root: break
+                ancestor=user.GetParent(ancestor)
+            if enabled and user.WindowFromPoint(point)==panel: break
+            if time.monotonic()>=deadline: raise RuntimeError("The owned native pane did not become enabled and exposed.")
+            time.sleep(.01)
+        user.SetCursorPos(point.x,point.y); positioned=True
+        if any(user.GetAsyncKeyState(key)&0x8000 for key in (1,16,17,18,91,92)):
+            raise RuntimeError("Human input changed before the owned drag began.")
+        button(2); pressed=True
+        thread=user.GetWindowThreadProcessId(panel,None); deadline=time.monotonic()+1
+        while True:
+            state=Gui(); state.size=ctypes.sizeof(state)
+            if user.GetGUIThreadInfo(thread,ctypes.byref(state)) and state.capture==panel: break
+            if time.monotonic()>=deadline: raise RuntimeError("The owned pane did not capture the held mouse input.")
+            time.sleep(.01)
+        user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
+        for step in range(1,6): send(0x200,1,round(x0+(x1-x0)*step/5),round(y0+(y1-y0)*step/5))
+        if cancel:
+            for kind in (0x100,0x101): send(kind,0x1b,0,0)
+        send(0x202,0,x1,y1)
+        button(4); pressed=False
+    finally:
+        if pressed:
+            send(0x100,0x1b,0,0); button(4)
+        user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        current=Point(); user.GetCursorPos(ctypes.byref(current))
+        if positioned and (current.x,current.y)==(point.x,point.y): user.SetCursorPos(original.x,original.y)
+        if not pinned: user.SetWindowPos(root,ctypes.c_void_p(-2),0,0,0,0,0x13)
+        for window in hidden: user.ShowWindow(window,4)
+        if user.GetForegroundWindow()==root and foreground: user.SetForegroundWindow(foreground)
+        if previous_dpi: user.SetThreadDpiAwarenessContext(previous_dpi)
+
+    return panel
 
 
 def capture_owned_project(panel, path):
@@ -271,8 +390,14 @@ def decoded_frame_hashes(ffmpeg, path):
 def check_video(client, root, ffmpeg, ffprobe):
     source = root / "source.mp4"
     source_bytes = hashlib.sha256(source.read_bytes()).hexdigest()
-    client.file("ImportVideoReference", source)
-    strip = client.data("GetVideoPreviewInfo")
+    import_children = client.data("GetVideoPreviewInfo")["importMenu"]
+    assert import_children[0]["id"] == "ImportVideo", import_children
+    video_import = next(row for row in import_children if row["id"] == "ImportVideo")
+    assert video_import["label"].rstrip(".") == "Video", import_children
+    client.file("ImportVideo", source)
+    native_tracks = client.data("GetInfo: Type=Tracks Format=JSON")
+    assert [track["kind"] for track in native_tracks] == ["video","wave"], native_tracks
+    strip = painted_video_tracks(client)
     assert strip["videoTrackVisible"] and strip["videoTrackThumbnails"], strip
     assert strip["videoTrackLeftOffset"] > 0 and strip["viewEnd"] > strip["viewStart"], strip
     client.send("ZoomIn")
@@ -280,7 +405,9 @@ def check_video(client, root, ffmpeg, ffprobe):
     client.send("ZoomOut")
     original = client.data("GetVideoClips")
     assert len(original["clips"]) == 1 and abs(original["end"] - 4) < .04
-    client.send("SplitVideo: At=2")
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=2 End=2")
+    client.send("Split")
     split = client.data("GetVideoClips")
     assert len(split["clips"]) == 2 and split["clips"][1]["sourceStart"] == 2
     client.send("SplitVideo: At=2")
@@ -292,8 +419,24 @@ def check_video(client, root, ffmpeg, ffprobe):
     client.file("ExportVideoMix", copied, success=False)
     assert copied.read_bytes() == before
     client.file("ExportVideoMix", source, "Overwrite=1", success=False)
+    client.send("SelectAll")
+    drag_owned_video_clip(client, 2.5, 3.5)
+    together = client.data("GetVideoClips")["clips"]
+    moved_tracks = client.data("GetInfo: Type=Tracks Format=JSON")
+    delta = together[0]["start"]
+    # A mouse target resolves to pixels; preserve exact inter-track timing and
+    # allow its endpoint to differ from a typed timestamp by one screen pixel.
+    view = client.data("GetVideoPreviewInfo")
+    assert abs(delta - 1) <= (view["viewEnd"]-view["viewStart"]) / view["videoTrackDataWidth"], (together, moved_tracks)
+    assert abs(together[1]["start"] - delta - 2) < 1e-8, together
+    assert abs(moved_tracks[1]["start"] - delta) < 1e-8, (together, moved_tracks)
+    client.send("Undo")
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
     client.send("DeleteVideoClip: Id=1")
     client.send("DeleteVideoClip: Id=1")
+    before_drag = client.data("GetVideoClips")["clips"]
+    drag_owned_video_clip(client, 2.5, 1.5, cancel=True)
+    assert client.data("GetVideoClips")["clips"] == before_drag
     panel = drag_owned_video_clip(client, 2.5, 1.5)
     moved = client.data("GetVideoClips")
     assert len(moved["clips"]) == 1 and moved["clips"][0]["start"] == 1
@@ -319,14 +462,17 @@ def check_video(client, root, ffmpeg, ffprobe):
                               "-f", "rawvideo", "-"], timeout=30)
         assert len(pixels) == 3
         assert (pixels[2] > 200 and pixels[0] < 20) if blue else max(pixels) < 8, pixels
+    height = painted_video_tracks(client)["videoTrackRows"][0]["height"]
     save_reopen(client, root / "video.aup3")
     assert client.data("GetVideoClips") == moved
-    strip = client.data("GetVideoPreviewInfo")
+    strip = painted_video_tracks(client)
+    assert strip["videoTrackRows"][0]["height"] == height, strip
     assert strip["videoTrackVisible"] and strip["videoTrackThumbnails"], strip
-    client.send("SelectAll")
+    client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
     client.send("RemoveTracks")
-    assert client.data("GetInfo: Type=Tracks Format=JSON") == []
-    assert client.data("GetVideoClips") == moved
+    remaining = client.data("GetInfo: Type=Tracks Format=JSON")
+    assert len(remaining) == 1 and remaining[0]["kind"] == "video", remaining
+    assert client.data("GetVideoClips")["clips"] == moved["clips"]
     silent = root / "silent.mkv"
     client.file("ExportVideoMix", silent)
     samples = run_process([ffmpeg, "-v", "error", "-i", str(silent), "-map", "0:a:0",
@@ -335,6 +481,130 @@ def check_video(client, root, ffmpeg, ffprobe):
     assert hashlib.sha256(source.read_bytes()).hexdigest() == source_bytes
     assert not list(root.glob("_autopsy-video-export-*"))
     client.send("Save")
+    check_video_tracks(client, root, ffmpeg, ffprobe)
+
+
+def check_video_tracks(client, root, ffmpeg, ffprobe):
+    """Exercise native track ownership, mixed sources and shared editing actions."""
+    other = root / "other-source.mp4"
+    client.file("ImportVideo", other)
+    assert [track["kind"] for track in client.data("GetInfo: Type=Tracks Format=JSON")] == ["video", "video"]
+    layers = root / "layered.mp4"
+    client.file("ExportVideoMix", layers)
+    streams = json.loads(run_process([ffprobe, "-v", "error", "-show_streams", "-of", "json", str(layers)],
+                                     text=True, timeout=30))["streams"]
+    assert (streams[0]["width"], streams[0]["height"]) == (90, 160), streams
+    for when, blue in ((.5, False), (1.5, True)):
+        pixel = run_process([ffmpeg, "-v", "error", "-ss", str(when), "-i", str(layers),
+                             "-frames:v", "1", "-vf", "crop=2:2:44:78,scale=1:1", "-pix_fmt", "rgb24",
+                             "-f", "rawvideo", "-"], timeout=30)
+        assert len(pixel) == 3
+        assert (pixel[2] > 200 and pixel[0] < 20) if blue else (pixel[0] > 200 and pixel[1] > 200), pixel
+    # Seeking switches the same preview between sources and uses source time,
+    # including an edited clip's offset. Await the decoder's asynchronous seek.
+    for when, path, expected in ((.5, other, .5), (1.5, root / "source.mp4", 2.5)):
+        client.send(f"SelectTime: Start={when} End={when}")
+        deadline = time.monotonic() + 5
+        while True:
+            info = client.data("GetVideoPreviewInfo")
+            if info["ready"] and Path(info["playbackPath"]).name == path.name and abs(info["position"]-expected) < .08:
+                break
+            if time.monotonic() >= deadline: raise AssertionError(info)
+            time.sleep(.1)
+    before = client.data("GetVideoClips")["clips"]
+    client.send("MoveVideoClip: Track=0 Id=2 ToTrack=1 Start=0", success=False)
+    assert client.data("GetVideoClips")["clips"] == before
+    drag_owned_video_clip(client, 1.5, 1.5, track=0, to_track=1)
+    assert client.data("GetVideoClips")["clips"] == before
+    client.send("MoveVideoClip: Track=1 Id=1 Start=4")
+    # With the soundtrack deleted, Space must still use the native transport
+    # clock, play each source at its edited offset, and cross a black gap.
+    client.send("SelectTime: Start=0 End=6")
+    client.send("DefaultPlayStop")
+    try: time.sleep(5.5)
+    finally: client.send("Stop")
+    report = client.data("GetVideoPreviewInfo")
+    (root / "_playback.json").write_text(json.dumps(report["samples"], indent=2))
+    playing = [sample for sample in report["samples"] if not sample["paused"]]
+    assert {Path(sample["source"]).name for sample in playing} == {"source.mp4", "other-source.mp4"}, report
+    stable = [sample for sample in playing if 1.3 < sample["audioPosition"] < 2.8 or sample["audioPosition"] > 4.3]
+    assert len(stable) >= 10 and max(abs(sample["position"]-sample["expectedPosition"]) for sample in stable) < .2, report
+    client.send("SelectTime: Start=0 End=0")
+    painted_video_tracks(client)
+    drag_owned_video_clip(client, 1.5, 1.5, track=0, to_track=1)
+    combined = client.data("GetVideoClips")
+    assert len(combined["tracks"]) == 2 and {clip["track"] for clip in combined["clips"]} == {1}, combined
+    assert [(clip["start"], Path(clip["source"]).name) for clip in combined["clips"]] == [
+        (1, "source.mp4"), (4, "other-source.mp4")], combined
+    client.send("Undo")
+    assert {clip["track"] for clip in client.data("GetVideoClips")["clips"]} == {0, 1}
+    client.send("Redo")
+    assert client.data("GetVideoClips")["clips"] == combined["clips"]
+    client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=1 End=3")
+    client.send("Copy")
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=0 End=0")
+    client.send("Paste")
+    copied = [clip for clip in client.data("GetVideoClips")["clips"] if clip["track"] == 0]
+    assert len(copied) == 1 and copied[0]["start"] == 0 and copied[0]["sourceStart"] == 2, copied
+    client.send("SelectTime: Start=0 End=2")
+    client.send("Cut")
+    assert not [clip for clip in client.data("GetVideoClips")["clips"] if clip["track"] == 0]
+    client.send("Paste")
+    pasted = [clip for clip in client.data("GetVideoClips")["clips"] if clip["track"] == 0]
+    assert [{key: value for key, value in clip.items() if key != "id"} for clip in pasted] == [
+        {key: value for key, value in clip.items() if key != "id"} for clip in copied], pasted
+    client.send("SelectTime: Start=.5 End=1.5")
+    client.send("SplitNew")
+    split = client.data("GetVideoClips")
+    assert len(split["tracks"]) == 3 and len([clip for clip in split["clips"] if clip["track"] == 2]) == 1, split
+    client.send("SelectTracks: Track=2 TrackCount=1 Mode=Set")
+    client.send("Duplicate")
+    assert len(client.data("GetVideoClips")["tracks"]) == 4
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=.1 End=1.9")
+    client.send("Trim")
+    trimmed = [clip for clip in client.data("GetVideoClips")["clips"] if clip["track"] == 0]
+    assert abs(trimmed[0]["start"]-.1) < .001 and abs(trimmed[-1]["end"]-1.9) < .001, trimmed
+    unchanged = client.data("GetVideoClips")
+    client.send("AddVideoTrackBefore: Track=999", success=False)
+    assert client.data("GetVideoClips") == unchanged
+    client.send("AddVideoTrackBefore: Track=1")
+    client.send("AddVideoTrackAfter: Track=1")
+    state = client.data("GetVideoClips")
+    assert len(state["tracks"]) == 6 and not [clip for clip in state["clips"] if clip["track"] in (1, 2)], state
+    for _ in range(3): client.send("NewVideoTrack")
+    state = client.data("GetVideoClips")
+    assert len(state["tracks"]) == 9
+    # New native rows scroll into view; earlier rows scroll out with audio rows.
+    time.sleep(.2)
+    rows = client.data("GetVideoPreviewInfo")["videoTrackRows"]
+    assert rows[0]["y"] < 0 and rows[-1]["y"] >= 0, rows
+    save_reopen(client, root / "video.aup3", save_existing=True)
+    restored = client.data("GetVideoClips")
+    assert restored["clips"] == state["clips"] and len(restored["tracks"]) == 9, restored
+    client.send("SelectTracks: Track=8 TrackCount=1 Mode=Set")
+    client.send("RemoveTracks")
+    assert len(client.data("GetVideoClips")["tracks"]) == 8
+    client.send("Save")
+    client.send("Close")
+    offline = other.with_name("_offline-source.mp4")
+    other.rename(offline)
+    try:
+        client.file("OpenProject2", root / "video.aup3")
+        client.send("FitV")
+        time.sleep(.2)
+        rows = client.data("GetVideoPreviewInfo")["videoTrackRows"]
+        assert rows[3]["y"] >= 0 and rows[3]["dataWidth"] > 0, rows
+        unchanged = layers.read_bytes()
+        for _ in range(2): client.file("ExportVideoMix", layers, "Overwrite=1", success=False)
+        assert layers.read_bytes() == unchanged
+        client.send("Save")
+        client.send("Close")
+    finally:
+        offline.rename(other)
+    client.file("OpenProject2", root / "video.aup3")
 
 
 def worker(args, root):
@@ -344,13 +614,8 @@ def worker(args, root):
     elif args.case == "video": check_video(client, root, args.ffmpeg, args.ffprobe)
     else:
         source = args.video_source or root / "source.mp4"
-        client.file("ImportVideoReference", source)
-        deadline = time.monotonic() + 15
-        while True:
-            info = client.data("GetVideoPreviewInfo")
-            if info["ready"]: break
-            if time.monotonic() > deadline: raise RuntimeError("Prepared preview did not become ready.")
-            time.sleep(.1)
+        client.file("ImportVideo", source)
+        info = ready_video_preview(client)
         assert info["lightweight"] and info["thumbnails"], info
         assert 0 < info["width"] <= 960 and 0 < info["height"] <= 540, info
         assert client.data("GetInfo: Type=Tracks Format=JSON"), "The original soundtrack was not imported."
@@ -376,7 +641,7 @@ def worker(args, root):
         assert samples[-1]["droppedFrames"] - samples[0]["droppedFrames"] <= 2, samples
         assert samples[-1]["decoderDroppedFrames"] - samples[0]["decoderDroppedFrames"] <= 2, samples
         save_reopen(client, root / "preview.aup3")
-        assert client.data("GetVideoPreviewInfo")["lightweight"]
+        assert ready_video_preview(client)["lightweight"]
         client.send("Save")
     client.send("Close")
     client.send("Exit")
@@ -488,6 +753,9 @@ def main():
                      "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-map", "2:a",
                      "-c:v", "mpeg4", "-q:v", "2", "-c:a", "aac", "-shortest",
                      str(root / "source.mp4")], timeout=60)
+        run_process([args.ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+                     "color=c=yellow:s=90x160:r=25:d=2", "-an", "-c:v", "mpeg4", "-q:v", "2",
+                     str(root / "other-source.mp4")], timeout=30)
     if args.case == "preview" and not args.video_source:
         run_process([args.ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i",
                      "testsrc2=s=1920x1080:r=30:d=16", "-f", "lavfi", "-i",

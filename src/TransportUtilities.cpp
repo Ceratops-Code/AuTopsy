@@ -10,6 +10,10 @@
 **********************************************************************/
 
 #include "TransportUtilities.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "video/CreateVideoTrack.h"
+#include "ProjectRate.h"
+#endif
 
 #include <thread>
 #include "AudioIO.h"
@@ -227,5 +231,9 @@ TransportSequences MakeTransportTracks(
             )
                result.otherPlayableSequences.push_back(pSequence);
    }
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   if (auto *project = trackList.GetOwner())
+      VideoTimeline::AppendVideoPlaybackClock(trackList,result,ProjectRate::Get(*project).GetRate());
+#endif
    return result;
 }

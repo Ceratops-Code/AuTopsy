@@ -10,6 +10,9 @@ Paul Licameli split from ProjectManager.cpp
 
 
 #include "ProjectAudioManager.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "video/CreateVideoTrack.h"
+#endif
 
 #include <wx/app.h>
 #include <wx/frame.h>
@@ -342,6 +345,9 @@ int ProjectAudioManager::PlayPlayRegion(const SelectedRegion &selectedRegion,
       hasaudio = ! tracks.Any<PlayableTrack>().empty();
    else
       hasaudio = ! tracks.Any<WaveTrack>().empty();
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   hasaudio = hasaudio || VideoTimeline::HasProjectVideoClips(*p);
+#endif
 
    double latestEnd = tracks.GetEndTime();
 

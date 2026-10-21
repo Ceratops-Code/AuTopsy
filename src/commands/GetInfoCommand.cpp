@@ -514,6 +514,12 @@ bool GetInfoCommand::SendTracks(const CommandContext & context)
       },
       [&](const TimeTrack &) {
          context.AddItem( "time", "kind" );
+      },
+      [&](const Track &track) {
+         context.AddItem(track.GetTypeNames().info, "kind");
+         context.AddItem(track.GetStartTime(), "start");
+         context.AddItem(track.GetEndTime(), "end");
+         context.AddItem(track.NChannels(), "channels");
       }
       );
       context.EndStruct();

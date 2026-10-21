@@ -1,8 +1,12 @@
 // Native adapters for project attachment/XML, undo, commands and the clip editor.
 // Picture files remain external references; project XML owns only clip metadata.
 #include "EditVideoTimeline.h"
+#include "CreateVideoTrack.h"
+#include "TrackFocus.h"
+#include "Viewport.h"
 #include "Project.h"
 #include "ProjectHistory.h"
+#include "ProjectFileIOExtension.h"
 #include "UndoManager.h"
 #include "XMLTagHandler.h"
 #include "CommandContext.h"
@@ -16,12 +20,7 @@
 #include "commands/LoadCommands.h"
 #include "SettingsVisitor.h"
 #include <wx/app.h>
-#include <wx/button.h>
-#include <wx/dialog.h>
-#include <wx/listbox.h>
 #include <wx/msgdlg.h>
-#include <wx/sizer.h>
-#include <wx/textdlg.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <memory>
@@ -41,6 +40,23 @@ void RefreshPreviewLater(AudacityProject &project)
             }
    });
 }
+
+// Opening the player belongs to the completed-project lifecycle, after every
+// native track has been read. XML handlers only construct the editable model.
+class VideoProjectLifecycle final : public ProjectFileIOExtension {
+public:
+   OnOpenAction OnOpen(AudacityProject &, const std::string &) override
+   { return OnOpenAction::Continue; }
+   void OnLoad(AudacityProject &project) override {
+      if (VideoTimeline::HasProjectVideoClips(project)) RefreshPreviewLater(project);
+   }
+   OnSaveAction OnSave(AudacityProject &, const ProjectSaveCallback &) override
+   { return OnSaveAction::Continue; }
+   OnCloseAction OnClose(AudacityProject &) override { return OnCloseAction::Continue; }
+   void OnUpdateSaved(AudacityProject &, const ProjectSerializer &) override {}
+   bool IsBlockLocked(const AudacityProject &, int64_t) const override { return false; }
+} sVideoProjectLifecycle;
+const ProjectFileIOExtensionRegistry::Extension sVideoProjectLifecycleRegistration{sVideoProjectLifecycle};
 
 template<typename Value>
 bool ReadVideoAttribute(const AttributesList &attributes,
@@ -63,12 +79,11 @@ bool ReadVideoAttribute(const AttributesList &attributes,
    return true;
 }
 
-class ProjectVideoTimeline final : public ClientData::Base, public XMLTagHandler {
+class VideoProjectFormatReader final : public ClientData::Base, public XMLTagHandler {
    AudacityProject &mProject;
    std::shared_ptr<Timeline> mReading;
 public:
-   std::shared_ptr<Timeline> current = std::make_shared<Timeline>();
-   explicit ProjectVideoTimeline(AudacityProject &project) : mProject(project) {}
+   explicit VideoProjectFormatReader(AudacityProject &project) : mProject(project) {}
 
    bool HandleXMLTag(const std::string_view &tag, const AttributesList &attributes) override
    {
@@ -106,139 +121,74 @@ public:
    void HandleXMLEndTag(const std::string_view &tag) override
    {
       if (tag == "autopsyvideo" && mReading) {
-         current = std::move(mReading);
-         RefreshPreviewLater(mProject);
+         // Existing project-format input is read into the native TrackList.
+         // New saves use each video track's normal XML writer.
+         auto &tracks = TrackList::Get(mProject);
+         const auto range = tracks.Any<Track>();
+          auto track = VideoTimeline::CreateProjectVideoTrack(mProject,
+             range.empty() ? nullptr : *range.begin(), true, false, std::move(*mReading));
+          mReading.reset();
       }
    }
 };
 
-const AudacityProject::AttachedObjects::RegisteredFactory sTimelineKey{
-   [](AudacityProject &project) { return std::make_shared<ProjectVideoTimeline>(project); }
+const AudacityProject::AttachedObjects::RegisteredFactory sVideoReaderKey{
+   [](AudacityProject &project) { return std::make_shared<VideoProjectFormatReader>(project); }
 };
-ProjectVideoTimeline &TimelineFor(AudacityProject &project)
-{ return project.AttachedObjects::Get<ProjectVideoTimeline>(sTimelineKey); }
+VideoProjectFormatReader &VideoReaderFor(AudacityProject &project)
+{ return project.AttachedObjects::Get<VideoProjectFormatReader>(sVideoReaderKey); }
 
 const ProjectFileIORegistry::ObjectReaderEntry sReadTimeline{
-   "autopsyvideo", [](AudacityProject &project) { return &TimelineFor(project); }
+   "autopsyvideo", [](AudacityProject &project) { return &VideoReaderFor(project); }
 };
-const ProjectFileIORegistry::ObjectWriterEntry sWriteTimeline{
-   [](const AudacityProject &project, XMLWriter &writer) {
-      const auto &timeline = VideoTimeline::GetProjectTimeline(project);
-      if (timeline.sourcePath.empty()) return;
-      writer.StartTag("autopsyvideo");
-      writer.WriteAttr("version", 1);
-      writer.WriteAttr("source", wxString::FromUTF8(timeline.sourcePath));
-      writer.WriteAttr("duration", timeline.sourceDuration, 17);
-      writer.WriteAttr("fps", timeline.frameRate, 17);
-      writer.WriteAttr("nextId", static_cast<long long>(timeline.nextId));
-      for (const auto &clip : timeline.clips) {
-         writer.StartTag("videoclip");
-         writer.WriteAttr("id", static_cast<long long>(clip.id));
-         writer.WriteAttr("start", clip.start, 17);
-         writer.WriteAttr("sourceStart", clip.sourceStart, 17);
-         writer.WriteAttr("duration", clip.duration, 17);
-         writer.EndTag("videoclip");
+AuTopsyVideoTrack &FindClipTrack(AudacityProject &project, uint64_t id, int index = -1)
+{
+   auto &tracks = TrackList::Get(project);
+   if (index >= 0) {
+      int position{};
+      for (auto *track : tracks.Any<Track>()) if (position++ == index) {
+         auto *video = dynamic_cast<AuTopsyVideoTrack*>(track);
+         if (!video) throw std::runtime_error("Choose a video track.");
+         if (id && std::none_of(video->Timeline().clips.begin(), video->Timeline().clips.end(),
+               [id](const auto &clip) { return clip.id == id; }))
+            throw std::runtime_error("The video clip is not in that track.");
+         return *video;
       }
-      writer.EndTag("autopsyvideo");
+      throw std::runtime_error("The video track is no longer in the project.");
    }
-};
-
-class VideoUndoState final : public UndoStateExtension {
-   const std::shared_ptr<Timeline> mTimeline;
-public:
-   explicit VideoUndoState(std::shared_ptr<Timeline> timeline) : mTimeline(std::move(timeline)) {}
-   void RestoreUndoRedoState(AudacityProject &project) override
-   {
-      TimelineFor(project).current = mTimeline;
-      RefreshPreviewLater(project);
+   const auto matches = [id](AuTopsyVideoTrack &track) {
+      return !id || std::any_of(track.Timeline().clips.begin(), track.Timeline().clips.end(),
+         [id](const auto &clip) { return clip.id == id; });
+   };
+   if (const auto focused = TrackFocus::Get(project).Get())
+      if (auto *video = dynamic_cast<AuTopsyVideoTrack*>(focused); video && matches(*video)) return *video;
+   AuTopsyVideoTrack *found{};
+   for (auto *track : VideoTimeline::ProjectVideoTracks(project)) if (matches(*track)) {
+      if (found) throw std::runtime_error("Select a video track or supply its Track index; the clip ID is ambiguous.");
+      found = track;
    }
-};
-const UndoRedoExtensionRegistry::Entry sVideoUndo{
-   [](AudacityProject &project) {
-      return std::make_shared<VideoUndoState>(TimelineFor(project).current);
-   }
-};
+   if (!found) throw std::runtime_error("Select a video track containing that clip.");
+   return *found;
+}
 
 template<typename Edit>
-bool EditProjectTimeline(AudacityProject &project, const TranslatableString &description, Edit edit)
+bool EditProjectTimeline(AudacityProject &project, const TranslatableString &description,
+   Edit edit, AuTopsyVideoTrack *selected = nullptr)
 {
    if (ProjectAudioIO::Get(project).IsAudioActive())
       throw std::runtime_error("Stop playback or recording before editing video clips.");
-   auto &state = TimelineFor(project);
-   auto changed = std::make_shared<Timeline>(*state.current);
-   if (!edit(*changed)) return false;
-   VideoTimeline::RequireWellFormedTimeline(*changed);
-   const auto previous = state.current;
-   state.current = std::move(changed);
+   auto &track = selected ? *selected : FindClipTrack(project, 0);
+   auto changed = track.Timeline();
+   if (!edit(changed)) return false;
+   VideoTimeline::RequireWellFormedTimeline(changed);
+   const auto previous = track.Timeline();
+   track.SetTimeline(std::move(changed));
    try { ProjectHistory::Get(project).PushState(description, description); }
-   catch (...) { state.current = previous; throw; }
+   catch (...) { track.SetTimeline(previous); throw; }
+   Viewport::Get(project).HandleResize();
    RefreshPreviewLater(project);
    return true;
 }
-
-class VideoClipDialog final : public wxDialog {
-   AudacityProject &mProject;
-   wxListBox *mClips;
-   std::vector<uint64_t> mIds;
-   void RefreshClips()
-   {
-      const auto selected = mClips->GetSelection();
-      mClips->Clear(); mIds.clear();
-      for (const auto &clip : VideoTimeline::GetProjectTimeline(mProject).clips) {
-         mIds.push_back(clip.id);
-         mClips->Append(wxString::Format("#%llu   %.3f - %.3f s   (source %.3f s)",
-            static_cast<unsigned long long>(clip.id), clip.start, clip.End(), clip.sourceStart));
-      }
-      if (!mIds.empty()) mClips->SetSelection(std::min(std::max(selected, 0), int(mIds.size()) - 1));
-   }
-   template<typename Edit> void Apply(Edit edit)
-   {
-      try { edit(); RefreshClips(); }
-      catch (const std::exception &error) {
-         wxMessageBox(wxString::FromUTF8(error.what()), _("Video Clips"), wxOK | wxICON_ERROR, this);
-      }
-   }
-public:
-   explicit VideoClipDialog(AudacityProject &project)
-      : wxDialog(&ProjectWindow::Get(project), wxID_ANY, _("Video Clips"),
-           wxDefaultPosition, wxSize(640, 300), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
-      , mProject(project), mClips(new wxListBox(this, wxID_ANY))
-   {
-      auto *layout = new wxBoxSizer(wxVERTICAL);
-      layout->Add(mClips, 1, wxEXPAND | wxALL, 8);
-      auto *buttons = new wxBoxSizer(wxHORIZONTAL);
-      auto *split = new wxButton(this, wxID_ANY, _("Split at Audio Cursor"));
-      auto *move = new wxButton(this, wxID_ANY, _("Move Selected..."));
-      auto *remove = new wxButton(this, wxID_ANY, _("Delete Selected"));
-      buttons->Add(split, 0, wxALL, 4); buttons->Add(move, 0, wxALL, 4);
-      buttons->Add(remove, 0, wxALL, 4);
-      buttons->Add(new wxButton(this, wxID_CANCEL, _("Close")), 0, wxALL, 4);
-      layout->Add(buttons, 0, wxALIGN_CENTER | wxALL, 4);
-      SetSizer(layout);
-      split->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { Apply([&] {
-         VideoTimeline::SplitProjectVideo(mProject, ViewInfo::Get(mProject).selectedRegion.t0());
-      }); });
-      move->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { Apply([&] {
-         const auto selection = mClips->GetSelection(); if (selection == wxNOT_FOUND) return;
-         const auto id = mIds.at(selection);
-         wxTextEntryDialog input(this, _("New start time in seconds:"), _("Move Video Clip"));
-         if (input.ShowModal() != wxID_OK) return;
-         double start{};
-         if (!input.GetValue().ToDouble(&start)) throw std::runtime_error("Enter a time in seconds.");
-         EditProjectTimeline(mProject, XO("Moved video clip"), [&](auto &timeline) {
-            return VideoTimeline::MoveClipTo(timeline, id, start);
-         });
-      }); });
-      remove->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { Apply([&] {
-         const auto selection = mClips->GetSelection(); if (selection == wxNOT_FOUND) return;
-         const auto id = mIds.at(selection);
-         EditProjectTimeline(mProject, XO("Deleted video clip"), [&](auto &timeline) {
-            return VideoTimeline::RemoveClip(timeline, id);
-         });
-      }); });
-      RefreshClips();
-   }
-};
 
 class SplitVideoCommand final : public AudacityCommand {
    double mAt{-1};
@@ -266,6 +216,7 @@ BuiltinCommandsModule::Registration<SplitVideoCommand> sSplitVideo;
 class EditVideoClipCommand : public AudacityCommand {
    wxString mId;
    double mStart{};
+   int mTrack{-1}, mToTrack{-1};
 protected:
    virtual bool Removing() const { return false; }
 public:
@@ -274,6 +225,8 @@ public:
    {
       visitor.Define(mId, wxT("Id"), wxString{});
       visitor.Define(mStart, wxT("Start"), 0.0, 0.0, 100000000.0);
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      visitor.Define(mToTrack, wxT("ToTrack"), -1, -1, 1000000);
       return true;
    }
    bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
@@ -283,9 +236,14 @@ public:
       try {
          unsigned long long id{};
          if (!mId.ToULongLong(&id) || !id) throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
-         EditProjectTimeline(context.project, Removing() ? XO("Deleted video clip") : XO("Moved video clip"),
+         auto &source = FindClipTrack(context.project, Removing() ? 0 : id, mTrack);
+         if (!Removing() && mToTrack >= 0) {
+            auto &destination = FindClipTrack(context.project, 0, mToTrack);
+            VideoTimeline::MoveVideoClipBetweenTracks(context.project, source, destination, id, mStart);
+         }
+         else EditProjectTimeline(context.project, Removing() ? XO("Deleted video clip") : XO("Moved video clip"),
             [&](auto &timeline) { return Removing() ? VideoTimeline::RemoveClip(timeline, id)
-               : VideoTimeline::MoveClipTo(timeline, id, mStart); });
+               : VideoTimeline::MoveClipTo(timeline, id, mStart); }, &source);
          return true;
       }
       catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
@@ -314,19 +272,38 @@ public:
    TranslatableString GetDescription() const override { return XO("List the saved video source and clip timing."); }
    bool Apply(const CommandContext &context) override
    {
-      const auto &timeline = VideoTimeline::GetProjectTimeline(context.project);
+      auto &project = context.project;
+      const auto timeline = VideoTimeline::GetProjectTimeline(project);
       rapidjson::StringBuffer buffer; rapidjson::Writer<rapidjson::StringBuffer> out(buffer);
       out.StartObject();
       out.Key("source"); out.String(timeline.sourcePath.c_str());
       out.Key("duration"); out.Double(timeline.sourceDuration);
       out.Key("end"); out.Double(timeline.End());
       out.Key("fps"); out.Double(timeline.frameRate);
-      out.Key("clips"); out.StartArray();
-      for (const auto &clip : timeline.clips) {
-         out.StartObject(); out.Key("id"); out.Uint64(clip.id);
-         out.Key("start"); out.Double(clip.start); out.Key("end"); out.Double(clip.End());
-         out.Key("sourceStart"); out.Double(clip.sourceStart);
-         out.Key("duration"); out.Double(clip.duration); out.EndObject();
+      out.Key("tracks"); out.StartArray();
+      int index{};
+      for (auto *track : TrackList::Get(project).Any<Track>()) {
+         if (auto *video = dynamic_cast<AuTopsyVideoTrack*>(track)) {
+            out.StartObject(); out.Key("index"); out.Int(index);
+            out.Key("name"); out.String(video->GetName().ToUTF8().data());
+            out.Key("selected"); out.Bool(video->GetSelected());
+            out.Key("visible"); out.Bool(video->VideoVisible());
+            out.Key("end"); out.Double(video->Timeline().End()); out.EndObject();
+         }
+         ++index;
+      }
+      out.EndArray(); out.Key("clips"); out.StartArray(); index = 0;
+      for (auto *track : TrackList::Get(project).Any<Track>()) {
+         if (auto *video = dynamic_cast<AuTopsyVideoTrack*>(track))
+            for (const auto &clip : video->Timeline().clips) {
+               const auto source = VideoTimeline::SourceFor(video->Timeline(), clip);
+               out.StartObject(); out.Key("id"); out.Uint64(clip.id); out.Key("track"); out.Int(index);
+               out.Key("start"); out.Double(clip.start); out.Key("end"); out.Double(clip.End());
+               out.Key("sourceStart"); out.Double(clip.sourceStart); out.Key("duration"); out.Double(clip.duration);
+               out.Key("source"); out.String(source.path.c_str()); out.Key("fps"); out.Double(source.frameRate);
+               out.EndObject();
+            }
+         ++index;
       }
       out.EndArray(); out.EndObject(); context.Status(wxString::FromUTF8(buffer.GetString()));
       return true;
@@ -335,16 +312,79 @@ public:
 const ComponentInterfaceSymbol GetVideoClipsCommand::Symbol{ XO("GetVideoClips") };
 BuiltinCommandsModule::Registration<GetVideoClipsCommand> sGetVideoClips;
 
+class InsertVideoTrackCommand : public AudacityCommand {
+   int mTrack{-1};
+protected:
+   virtual int RelativePosition() const { return 0; }
+public:
+   TranslatableString GetDescription() const override { return XO("Add an empty video track to the project."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
+      visitor.Define(mTrack,wxT("Track"),-1,-1,100000); return true;
+   }
+   bool VisitSettings(SettingsVisitor &visitor) override { return Settings(visitor); }
+   bool VisitSettings(ConstSettingsVisitor &visitor) override { return Settings(visitor); }
+   bool PromptUser(AudacityProject &project) override {
+      if (!RelativePosition()) return true;
+      int index{};
+      for (auto *track : TrackList::Get(project).Any<Track>()) {
+         if (track == TrackFocus::Get(project).Get()) { mTrack = index; return true; }
+         ++index;
+      }
+      return false;
+   }
+   bool Apply(const CommandContext &context) override {
+      try {
+         Track *anchor{};
+         if (RelativePosition()) {
+            int index{};
+            for (auto *track : TrackList::Get(context.project).Any<Track>())
+               if (index++ == mTrack) { anchor = track; break; }
+            if (!anchor && mTrack < 0) anchor = TrackFocus::Get(context.project).Get();
+            if (!anchor) throw std::runtime_error("Select an anchor track or supply its Track index.");
+         }
+         VideoTimeline::CreateProjectVideoTrack(context.project,anchor,RelativePosition() < 0);
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+class NewVideoTrackCommand final : public InsertVideoTrackCommand {
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+class AddVideoTrackBeforeCommand final : public InsertVideoTrackCommand {
+   int RelativePosition() const override { return -1; }
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+class AddVideoTrackAfterCommand final : public InsertVideoTrackCommand {
+   int RelativePosition() const override { return 1; }
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+const ComponentInterfaceSymbol NewVideoTrackCommand::Symbol{XO("NewVideoTrack")};
+const ComponentInterfaceSymbol AddVideoTrackBeforeCommand::Symbol{XO("AddVideoTrackBefore")};
+const ComponentInterfaceSymbol AddVideoTrackAfterCommand::Symbol{XO("AddVideoTrackAfter")};
+BuiltinCommandsModule::Registration<NewVideoTrackCommand> sNewVideoTrack;
+BuiltinCommandsModule::Registration<AddVideoTrackBeforeCommand> sVideoBefore;
+BuiltinCommandsModule::Registration<AddVideoTrackAfterCommand> sVideoAfter;
+
 using namespace MenuRegistry;
-AttachedItem sVideoEditing{
-   Section("VideoClips",
-      Command("SplitVideo", XXO("Split Video at Cursor"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
-      Command("EditVideoClips", XXO("Video Clips..."),
-         [](const CommandContext &context) { VideoTimeline::ShowProjectVideoClips(context.project); }, AudioIONotBusyFlag())),
-   wxT("Edit/Other/Clip")
+AttachedItem sAddVideoTrack{
+   Section("VideoTracks",
+      Command("NewVideoTrack",XXO("&Video Track"),CommandDispatch::OnAudacityCommand,AudioIONotBusyFlag()),
+      Command("AddVideoTrackBefore",XXO("Video Track Before Focused Track"),CommandDispatch::OnAudacityCommand,
+         AudioIONotBusyFlag() | TracksExistFlag()),
+      Command("AddVideoTrackAfter",XXO("Video Track After Focused Track"),CommandDispatch::OnAudacityCommand,
+         AudioIONotBusyFlag() | TracksExistFlag())),
+   wxT("Tracks/Add/Add")
 };
 AttachedItem sVideoClipScripting{
    Items("",
+      Command("SplitVideo", XXO("Split Video at Cursor"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("GetVideoClips", XXO("Get Video Clips"), CommandDispatch::OnAudacityCommand, AlwaysEnabledFlag),
       Command("MoveVideoClip", XXO("Move Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("DeleteVideoClip", XXO("Delete Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag())),
@@ -352,51 +392,32 @@ AttachedItem sVideoClipScripting{
 };
 }
 
-const VideoTimeline::Timeline &VideoTimeline::GetProjectTimeline(const AudacityProject &project)
-{ return *TimelineFor(const_cast<AudacityProject &>(project)).current; }
-
-void VideoTimeline::AdoptProjectVideo(AudacityProject &project, Timeline timeline, bool importedAudio)
+VideoTimeline::Timeline VideoTimeline::GetProjectTimeline(const AudacityProject &project)
 {
-   RequireWellFormedTimeline(timeline);
-   auto changed = std::make_shared<Timeline>(std::move(timeline));
-   auto &state = TimelineFor(project);
-   const auto previous = state.current;
-   state.current = std::move(changed);
-   try {
-      if (importedAudio) ProjectHistory::Get(project).ModifyState(true);
-      else ProjectHistory::Get(project).PushState(XO("Imported video"), XO("Import Video"));
-   }
-   catch (...) { state.current = previous; throw; }
-}
-
-void VideoTimeline::RemoveProjectVideo(AudacityProject &project)
-{
-   EditProjectTimeline(project, XO("Removed video reference"), [](auto &timeline) {
-      if (timeline.sourcePath.empty()) return false;
-      timeline = {}; return true;
-   });
+   const auto tracks = ProjectVideoTracks(const_cast<AudacityProject&>(project));
+   std::vector<const Timeline*> layers;
+   for (const auto *track : tracks) if (track->VideoVisible()) layers.push_back(&track->Timeline());
+   auto result = ComposeVideoTracks(layers);
+   for (const auto *track : tracks) for (const auto &clip : track->Timeline().clips)
+      result.protectedSourcePaths.push_back(SourceFor(track->Timeline(), clip).path);
+   return result;
 }
 
 bool VideoTimeline::SplitProjectVideo(AudacityProject &project, double at)
 {
-   return EditProjectTimeline(project, XO("Split video clip"), [at](auto &timeline) {
-      if (timeline.sourcePath.empty()) throw std::runtime_error("Import a video reference first.");
-      return SplitClipAt(timeline, at);
-   });
+   auto &track = FindClipTrack(project, 0);
+   return EditProjectTimeline(project, XO("Split video clip"),
+      [&](auto &timeline) { return SplitClipAt(timeline, at); }, &track);
 }
-
 bool VideoTimeline::MoveProjectVideoClip(AudacityProject &project, uint64_t id, double start)
 {
-   return EditProjectTimeline(project, XO("Moved video clip"), [=](auto &timeline) {
-      return MoveClipTo(timeline, id, start);
-   });
+   auto &track = FindClipTrack(project, id);
+   return EditProjectTimeline(project, XO("Moved video clip"),
+      [&](auto &timeline) { return MoveClipTo(timeline, id, start); }, &track);
 }
 bool VideoTimeline::RemoveProjectVideoClip(AudacityProject &project, uint64_t id)
 {
-   return EditProjectTimeline(project, XO("Deleted video clip"), [=](auto &timeline) {
-      return RemoveClip(timeline, id);
-   });
+   auto &track = FindClipTrack(project, 0);
+   return EditProjectTimeline(project, XO("Deleted video clip"),
+      [&](auto &timeline) { return RemoveClip(timeline, id); }, &track);
 }
-
-void VideoTimeline::ShowProjectVideoClips(AudacityProject &project)
-{ VideoClipDialog(project).ShowModal(); }

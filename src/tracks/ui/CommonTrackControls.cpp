@@ -8,6 +8,10 @@ Paul Licameli split from TrackControls.cpp
 
 **********************************************************************/
 
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "video/CreateVideoTrack.h"
+#include <wx/msgdlg.h>
+#endif
 #include "CommonTrackControls.h"
 
 #include "TrackButtonHandles.h"
@@ -76,6 +80,10 @@ enum
    OnMoveBottomID,
    OnAddTrackBeforeID,
    OnAddTrackAfterID,
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   OnAddVideoTrackBeforeID,
+   OnAddVideoTrackAfterID,
+#endif
 };
 
 class TrackMenuTable
@@ -94,6 +102,9 @@ private:
    void OnSetName(wxCommandEvent &);
    void OnMoveTrack(wxCommandEvent &event);
    void OnInsertAudioTrack(wxCommandEvent &event);
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   void OnInsertVideoTrack(wxCommandEvent &event);
+#endif
 
    void InitUserData(void *pUserData) override;
 
@@ -140,6 +151,15 @@ BEGIN_POPUP_MENU(TrackMenuTable)
       AppendItem("AddTrackAfter", OnAddTrackAfterID, XXO("Add Audio Track &After This Track"),
          POPUP_MENU_FN(OnInsertAudioTrack), enableWhenIdle);
    EndSection();
+
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   BeginSection("InsertVideoTrack");
+      AppendItem("AddVideoTrackBefore",OnAddVideoTrackBeforeID,XXO("Add Video Track Before This Track"),
+         POPUP_MENU_FN(OnInsertVideoTrack),enableWhenIdle);
+      AppendItem("AddVideoTrackAfter",OnAddVideoTrackAfterID,XXO("Add Video Track After This Track"),
+         POPUP_MENU_FN(OnInsertVideoTrack),enableWhenIdle);
+   EndSection();
+#endif
 
    BeginSection( "Move" );
       AppendItem( "Up",
@@ -282,6 +302,20 @@ void TrackMenuTable::OnInsertAudioTrack(wxCommandEvent &event)
       event.GetId() == OnAddTrackBeforeID))
       mpData->result = RefreshCode::RefreshAll;
 }
+
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+void TrackMenuTable::OnInsertVideoTrack(wxCommandEvent &event)
+{
+   try {
+      VideoTimeline::CreateProjectVideoTrack(mpData->project,&mpData->track,
+         event.GetId() == OnAddVideoTrackBeforeID);
+      mpData->result = RefreshCode::RefreshAll;
+   }
+   catch (const std::exception &error) {
+      wxMessageBox(wxString::FromUTF8(error.what()),_("Add Video Track"),wxOK|wxICON_ERROR,mpData->pParent);
+   }
+}
+#endif
 
 unsigned CommonTrackControls::DoContextMenu(
    const wxRect &rect, wxWindow *pParent, const wxPoint *,

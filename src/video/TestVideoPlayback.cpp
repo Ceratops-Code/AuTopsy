@@ -233,7 +233,7 @@ TEST_CASE("Video splits produce persistent independent identities without changi
    "[video-timeline]")
 {
    using namespace VideoTimeline;
-   auto timeline = CreateVideoReference("movie.mp4", 4.0, 30.0);
+   auto timeline = CreateVideoTimeline("movie.mp4", 4.0, 30.0);
    REQUIRE(KeepsOriginalPicture(timeline));
    REQUIRE(SplitClipAt(timeline, 2.0));
    REQUIRE(timeline.clips.size() == 2);
@@ -253,7 +253,7 @@ TEST_CASE("Owned video timing maps moved clips and black gaps independently of a
    "[video-timeline]")
 {
    using namespace VideoTimeline;
-   auto timeline = CreateVideoReference("movie.mp4", 4.0, 30.0);
+   auto timeline = CreateVideoTimeline("movie.mp4", 4.0, 30.0);
    SplitClipAt(timeline, 2.0);
    REQUIRE(MoveClipTo(timeline, 2, 3.0));
    REQUIRE_FALSE(MoveClipTo(timeline, 2, 3.0));
@@ -276,7 +276,7 @@ TEST_CASE("Rejected video edits leave the complete prior timeline intact",
    "[video-timeline]")
 {
    using namespace VideoTimeline;
-   auto timeline = CreateVideoReference("movie.mp4", 4.0, 30.0);
+   auto timeline = CreateVideoTimeline("movie.mp4", 4.0, 30.0);
    SplitClipAt(timeline, 2.0);
    const auto checkOriginal = [&] {
       REQUIRE(timeline.sourcePath == "movie.mp4");
@@ -299,12 +299,12 @@ TEST_CASE("Saved video model contracts reject malformed source ranges and duplic
    "[video-timeline]")
 {
    using namespace VideoTimeline;
-   REQUIRE_THROWS(CreateVideoReference("movie.mp4", -1, 30));
-   REQUIRE_THROWS(CreateVideoReference("movie.mp4", 4, 0));
-   auto timeline = CreateVideoReference("movie.mp4", 4, 30);
+   REQUIRE_THROWS(CreateVideoTimeline("movie.mp4", -1, 30));
+   REQUIRE_THROWS(CreateVideoTimeline("movie.mp4", 4, 0));
+   auto timeline = CreateVideoTimeline("movie.mp4", 4, 30);
    timeline.clips[0].sourceStart = 1;
    REQUIRE_THROWS(RequireWellFormedTimeline(timeline));
-   timeline = CreateVideoReference("movie.mp4", 4, 30);
+   timeline = CreateVideoTimeline("movie.mp4", 4, 30);
    SplitClipAt(timeline, 2);
    timeline.clips[1].id = 1;
    REQUIRE_THROWS(RequireWellFormedTimeline(timeline));
@@ -317,7 +317,7 @@ TEST_CASE("Video split boundaries follow source frames and empty timelines remai
    "[video-timeline]")
 {
    using namespace VideoTimeline;
-   auto timeline = CreateVideoReference("movie.mp4", 4, 30);
+   auto timeline = CreateVideoTimeline("movie.mp4", 4, 30);
    REQUIRE(SplitClipAt(timeline, 1.01));
    REQUIRE(timeline.clips[0].duration == 1.0);
    REQUIRE(timeline.clips[1].sourceStart == 1.0);
@@ -328,4 +328,92 @@ TEST_CASE("Video split boundaries follow source frames and empty timelines remai
    REQUIRE_FALSE(SplitClipAt(timeline, 1.0));
    REQUIRE_FALSE(PictureAt(timeline, 1.0).visible);
    REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
+}
+
+TEST_CASE("Video clipboard ranges carry sources across tracks and combine different movies",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   const auto red = CreateVideoTimeline("red.mp4", 4, 30, 1920, 1080);
+   const auto blue = CreateVideoTimeline("blue.mp4", 2, 25, 720, 1280);
+   const auto copied = CopyVideoRange(red, 1, 3);
+   REQUIRE(copied.clips.size() == 1);
+   REQUIRE(SourceFor(copied, copied.clips[0]).path == "red.mp4");
+   REQUIRE(copied.clips[0].sourceStart == 1);
+   Timeline destination;
+   PasteVideoRange(destination, 2, copied, 2);
+   REQUIRE(destination.clips[0].start == 2);
+   PasteVideoRange(destination, 0, blue, 2);
+   REQUIRE(destination.clips.size() == 2);
+   REQUIRE(SourceFor(destination, destination.clips[0]).path == "blue.mp4");
+   REQUIRE(SourceFor(destination, destination.clips[1]).path == "red.mp4");
+   REQUIRE(destination.clips[1].start == 4);
+   REQUIRE(destination.clips[1].sourceStart == 1);
+   REQUIRE(destination.End() == 6);
+   REQUIRE_FALSE(KeepsOriginalPicture(destination));
+   REQUIRE(SplitClipAt(destination, 1.03));
+   REQUIRE(destination.clips[0].duration == Approx(1.04));
+   REQUIRE(SourceFor(destination, destination.clips[1]).path == "blue.mp4");
+}
+
+TEST_CASE("Video range deletion and insertion preserve trims and honor gap behavior",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto original = CreateVideoTimeline("movie.mp4", 4, 30);
+   auto gap = original;
+   EraseVideoRange(gap, 1, 2, false);
+   REQUIRE(gap.clips.size() == 2);
+   REQUIRE(gap.clips[0].duration == 1);
+   REQUIRE(gap.clips[1].start == 2);
+   REQUIRE(gap.clips[1].sourceStart == 2);
+   REQUIRE(gap.clips[1].id != gap.clips[0].id);
+   REQUIRE_FALSE(PictureAt(gap, 1.5).visible);
+   auto ripple = original;
+   EraseVideoRange(ripple, 1, 2, true);
+   REQUIRE(ripple.End() == 3);
+   REQUIRE(PictureAt(ripple, 1.5).sourceTime == 2.5);
+   InsertVideoGap(original, 1, 2);
+   REQUIRE(original.End() == 6);
+   REQUIRE(original.clips[1].start == 3);
+   REQUIRE(original.clips[1].sourceStart == 1);
+   REQUIRE_FALSE(PictureAt(original, 2).visible);
+}
+
+TEST_CASE("Video edge trimming is frame snapped, reversible and atomically rejects collisions",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("movie.mp4", 4, 30);
+   REQUIRE(TrimVideoClip(timeline, 1, 1.01, 3.01));
+   REQUIRE(timeline.clips[0].start == Approx(1));
+   REQUIRE(timeline.clips[0].sourceStart == Approx(1));
+   REQUIRE(timeline.clips[0].duration == Approx(2));
+   REQUIRE_FALSE(TrimVideoClip(timeline, 1, 1, 3));
+   REQUIRE_THROWS(TrimVideoClip(timeline, 1, -1, 3));
+   REQUIRE(timeline.clips[0].start == Approx(1));
+   REQUIRE(TrimVideoClip(timeline, 1, 0, 4));
+   REQUIRE(KeepsOriginalPicture(timeline));
+   SplitClipAt(timeline, 2);
+   REQUIRE_THROWS(TrimVideoClip(timeline, 1, 0, 3));
+   REQUIRE(timeline.clips[0].duration == 2);
+   REQUIRE(timeline.clips[1].start == 2);
+}
+
+TEST_CASE("Native video track order composes upper pictures while exposing lower gaps",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   auto lower = CreateVideoTimeline("lower.mp4", 4, 30);
+   auto upper = CreateVideoTimeline("upper.mp4", 2, 25);
+   MoveClipTo(upper, 1, 1);
+   const auto mix = ComposeVideoTracks({&upper, &lower});
+   REQUIRE(mix.End() == 4);
+   REQUIRE(mix.clips.size() == 3);
+   REQUIRE(SourceFor(mix, *ClipAt(mix, .5)).path == "lower.mp4");
+   REQUIRE(SourceFor(mix, *ClipAt(mix, 1.5)).path == "upper.mp4");
+   REQUIRE(SourceFor(mix, *ClipAt(mix, 3.5)).path == "lower.mp4");
+   REQUIRE(PictureAt(mix, 3.5).sourceTime == 3.5);
+   REQUIRE_FALSE(KeepsOriginalPicture(mix));
+   REQUIRE(ComposeVideoTracks({}).clips.empty());
 }

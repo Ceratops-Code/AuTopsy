@@ -16,9 +16,13 @@
 #include "EditVideoTimeline.h"
 #include "PrepareVideoPreview.h"
 #include "ShowVideoTrack.h"
+#include "CreateVideoTrack.h"
+#include "ProjectHistory.h"
+#include "SelectUtilities.h"
 
 #include "AudioIO.h"
 #include "CommandContext.h"
+#include "CommandManager.h"
 #include "MenuRegistry.h"
 #include "Project.h"
 #include "ProjectAudioIO.h"
@@ -42,6 +46,7 @@
 #include <wx/filename.h>
 #include <wx/frame.h>
 #include <wx/msgdlg.h>
+#include <wx/menu.h>
 #include <wx/panel.h>
 #include <wx/progdlg.h>
 #include <wx/sizer.h>
@@ -162,6 +167,7 @@ class MpvPlayer final {
    std::unique_ptr<mpv_handle, decltype(&mpv_terminate_destroy)>
       mHandle{ nullptr, nullptr };
    bool mLoaded{};
+   wxString mRequestedPath;
 
    std::optional<double> Number(const char *name)
    {
@@ -188,6 +194,10 @@ class MpvPlayer final {
          if (event->event_id == MPV_EVENT_NONE)
             return;
          if (event->event_id == MPV_EVENT_FILE_LOADED) {
+            char *loaded{};
+            mApi.Check(mApi.get(mHandle.get(), "path", MPV_FORMAT_STRING, &loaded), "Reading loaded video path");
+            const std::unique_ptr<char, decltype(&mpv_free)> path{loaded, mApi.free};
+            if (!path || !wxFileName(wxString::FromUTF8(path.get())).SameAs(wxFileName(mRequestedPath))) continue;
             int64_t videoId{};
             const int result = mApi.get(mHandle.get(), "vid",
                MPV_FORMAT_INT64, &videoId);
@@ -235,8 +245,16 @@ public:
          "Setting video window");
       mApi.Check(mApi.initialize(mHandle.get()), "Initializing video player");
 
+      OpenFile(path);
+   }
+
+   void OpenFile(const wxString &path)
+   {
+      ReadEvents();
+      SetPaused(true);
+      mLoaded = false; mRequestedPath = path;
       const auto filename = Utf8(path);
-      const char *arguments[]{ "loadfile", filename.c_str(), "replace", nullptr };
+      const char *arguments[]{"loadfile", filename.c_str(), "replace", nullptr};
       mApi.Check(mApi.command(mHandle.get(), arguments), "Opening video");
    }
 
@@ -309,15 +327,20 @@ class VideoPreviewFrame final : public wxFrame {
    std::weak_ptr<AudacityProject> mProject;
    wxTimer mTimer{ this };
    wxStopWatch mLoadTime;
+   wxStopWatch mPlaybackSampleClock;
    wxPanel *mVideoArea{};
    wxPanel *mSurface{};
    wxStaticText *mStatus{};
    std::unique_ptr<MpvPlayer> mPlayer;
    Observer::Subscription mProjectClosing;
    std::shared_ptr<const VideoPreview::PreparedMedia> mMedia;
+   std::deque<std::shared_ptr<const VideoPreview::PreparedMedia>> mPreviousMedia;
    double mSourceDuration{}, mSourceFrameRate{30};
    bool mSourceHasAudio{}, mDurationChecked{};
-   struct PlaybackSample { double audio, video, dropped, decoderDropped; bool paused; };
+   struct PlaybackSample {
+      double audio, video, dropped, decoderDropped; bool paused;
+      double expected{}; std::string source;
+   };
    std::deque<PlaybackSample> mPlaybackSamples;
    long mLastSampleTime{};
    wxString mPath;
@@ -360,31 +383,35 @@ class VideoPreviewFrame final : public wxFrame {
          if (transport.playing && !mWasPlaying && !IsShown())
             ShowWithoutActivating();
          if (transport.playing && !mWasPlaying) {
-            mPlaybackSamples.clear(); mLastSampleTime = 0;
+             mPlaybackSamples.clear(); mLastSampleTime = 0; mPlaybackSampleClock.Start();
          }
          mWasPlaying = transport.playing;
 
-          const auto &timeline = VideoTimeline::GetProjectTimeline(*project);
-          const auto *clip = VideoTimeline::ClipAt(timeline, transport.position);
-          const auto picturePosition = VideoTimeline::PictureAt(timeline, transport.position);
-          mProjectTime = transport.position;
-          if (mSurface->IsShown() != (clip != nullptr)) {
-             mSurface->Show(clip != nullptr);
-             mVideoArea->Layout();
-          }
-          if (clip) {
-             auto picture = transport;
-             picture.position = picturePosition.sourceTime;
-             VideoPreview::SynchronizeVideoPlayback(*mPlayer, picture);
-          }
-          else if (!mPlayer->ReadState().paused) mPlayer->SetPaused(true);
-         const auto video = mPlayer->ReadState();
-         if (transport.playing && video.ready && mLoadTime.Time() - mLastSampleTime >= 100) {
-            mPlaybackSamples.push_back({transport.position, video.position,
-               mPlayer->Property("frame-drop-count"), mPlayer->Property("decoder-frame-drop-count"), video.paused});
-            if (mPlaybackSamples.size() > 256) mPlaybackSamples.pop_front();
-            mLastSampleTime = mLoadTime.Time();
+         const auto picturePosition = VideoTimeline::FindProjectPicture(*project, transport.position);
+         mProjectTime = transport.position;
+         if (picturePosition.visible && mPath != wxString::FromUTF8(picturePosition.source.path)) {
+            const auto &source = picturePosition.source;
+            const auto metadata = VideoTimeline::CreateVideoTimeline(source.path,source.duration,
+               source.frameRate,source.width,source.height);
+            Load(wxString::FromUTF8(source.path), &metadata);
          }
+         if (mSurface->IsShown() != picturePosition.visible) {
+            mSurface->Show(picturePosition.visible); mVideoArea->Layout();
+         }
+         if (picturePosition.visible) {
+            auto picture = transport; picture.position = picturePosition.sourceTime;
+            VideoPreview::SynchronizeVideoPlayback(*mPlayer,picture);
+         }
+         else if (!mPlayer->ReadState().paused) mPlayer->SetPaused(true);
+         const auto video = mPlayer->ReadState();
+          if (transport.playing && video.ready && mPlaybackSampleClock.Time() - mLastSampleTime >= 100) {
+            mPlaybackSamples.push_back({transport.position, video.position,
+               mPlayer->Property("frame-drop-count"), mPlayer->Property("decoder-frame-drop-count"),
+               video.paused, picturePosition.sourceTime, picturePosition.source.path});
+            if (mPlaybackSamples.size() > 256) mPlaybackSamples.pop_front();
+             mLastSampleTime = mPlaybackSampleClock.Time();
+         }
+         if (video.ready) mPreviousMedia.clear();
          if (video.ready && !mDurationChecked) {
             if (std::abs(video.duration - mSourceDuration) > std::max(0.1, 2.0 / mSourceFrameRate))
                throw std::runtime_error("The source video duration changed. Import the video again.");
@@ -392,7 +419,7 @@ class VideoPreviewFrame final : public wxFrame {
          }
          if (!video.ready && mLoadTime.Time() > 15000)
             throw std::runtime_error{ "The video did not become ready within 15 seconds." };
-          mStatus->SetLabel(!clip ? wxString::Format(_("Video gap  |  AuTopsy %.2f s"), transport.position) : video.ready
+          mStatus->SetLabel(!picturePosition.visible ? wxString::Format(_("Video gap  |  AuTopsy %.2f s"), transport.position) : video.ready
              ? wxString::Format(_("Video %.2f s  |  AuTopsy %.2f s"),
                video.position, transport.position)
             : _("Loading video..."));
@@ -450,7 +477,11 @@ public:
 
    bool Load(const wxString &path, const VideoTimeline::Timeline *saved = nullptr)
    {
-      mPath = path;
+      if (mMedia) {
+         mPreviousMedia.push_back(mMedia);
+         if (mPreviousMedia.size() > 3) mPreviousMedia.pop_front();
+      }
+      mDurationChecked = false; mPath = path;
       SetTitle(_("Video Preview") + " - " + wxFileName{ path }.GetFullName());
       Layout();
       if (saved) {
@@ -460,14 +491,16 @@ public:
          mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, true, this, false);
          if (!mMedia) mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, false, this, false);
       }
-      mPlayer = std::make_unique<MpvPlayer>(*mSurface, mMedia ? mMedia->playbackPath : path);
+      const auto playbackPath = mMedia ? mMedia->playbackPath : path;
+      if (mPlayer) mPlayer->OpenFile(playbackPath);
+      else mPlayer = std::make_unique<MpvPlayer>(*mSurface,playbackPath);
       mLoadTime.Start();
       if (saved) return true;
 
       // Finish opening before importing audio or replacing the old reference.
       // The modal dialog prevents transport changes during this bounded wait;
       // the timer starts only after soundtrack import has finished.
-      wxProgressDialog progress{ _("Open Video Reference"), _("Loading video..."),
+      wxProgressDialog progress{ _("Open Video"), _("Loading video..."),
          100, GetParent(), wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE };
       while (!mPlayer->ReadState().ready) {
          if (!progress.Pulse())
@@ -483,8 +516,8 @@ public:
          state.frameRate > 60;
       mMedia = VideoPreview::PrepareVideoMedia(path, state.duration, lightweight, this);
       if (lightweight) {
-         mPlayer = std::make_unique<MpvPlayer>(*mSurface, mMedia->playbackPath);
-         mLoadTime.Start();
+         mPlayer->OpenFile(mMedia->playbackPath);
+         mDurationChecked = false; mLoadTime.Start();
       }
       return true;
    }
@@ -541,7 +574,7 @@ public:
       const auto strip = VideoTimeline::GetProjectVideoTrackStatus(context.project);
       rapidjson::StringBuffer buffer; rapidjson::Writer<rapidjson::StringBuffer> out(buffer);
       out.StartObject();
-      out.Key("ready"); out.Bool(state.ready);
+       out.Key("ready"); out.Bool(state.ready);
       out.Key("lightweight"); out.Bool(media && media->lightweight);
       out.Key("position"); out.Double(state.position);
       out.Key("paused"); out.Bool(state.paused);
@@ -559,11 +592,48 @@ public:
       out.Key("videoTrackDataWidth"); out.Int(strip.usableWidth);
       out.Key("viewStart"); out.Double(strip.viewStart);
       out.Key("viewEnd"); out.Double(strip.viewEnd);
+       out.Key("videoTrackPanelHandle"); out.Uint64(strip.panelHandle);
+       out.Key("videoTrackPanelWidth"); out.Int(strip.width);
+       out.Key("videoTrackPanelHeight"); out.Int(strip.height);
+       // Report the actual native submenu through semantic command identities.
+       // Unrelated plug-in command names need not cross this adapter boundary.
+       auto &commands = CommandManager::Get(context.project);
+       wxMenu *importMenu{};
+       size_t importMatches{};
+       const auto visitMenu = [&](const auto &visit, wxMenu *menu) -> void {
+          for (auto *item : menu->GetMenuItems()) {
+             if (commands.GetNameFromNumericID(item->GetId()) == "ImportAudio") {
+                importMenu = menu; ++importMatches;
+             }
+             if (auto *child = item->GetSubMenu()) visit(visit,child);
+          }
+       };
+       if (auto *bar = ProjectWindow::Get(context.project).GetMenuBar())
+          for (size_t i{}; i < bar->GetMenuCount(); ++i) visitMenu(visitMenu,bar->GetMenu(i));
+       out.Key("importMenu"); out.StartArray();
+       if (importMatches == 1) for (auto *item : importMenu->GetMenuItems()) {
+          out.StartObject();
+          out.Key("id"); out.String(Utf8(commands.GetNameFromNumericID(item->GetId()).GET()).c_str());
+          out.Key("label"); out.String(Utf8(item->GetItemLabelText()).c_str());
+          out.EndObject();
+       }
+       out.EndArray();
+       out.Key("videoTrackRows"); out.StartArray();
+      for (const auto &row : strip.rows) {
+         out.StartObject(); out.Key("index"); out.Int(row.index);
+         out.Key("x"); out.Int(row.x); out.Key("y"); out.Int(row.y);
+         out.Key("width"); out.Int(row.width); out.Key("height"); out.Int(row.height);
+         out.Key("dataLeft"); out.Int(row.dataLeft); out.Key("dataWidth"); out.Int(row.dataWidth);
+         out.Key("selected"); out.Bool(row.selected); out.EndObject();
+      }
+      out.EndArray();
       out.Key("samples"); out.StartArray();
       if (frame) for (const auto &sample : frame->PlaybackSamples()) {
          out.StartObject();
          out.Key("audioPosition"); out.Double(sample.audio);
          out.Key("position"); out.Double(sample.video);
+         out.Key("expectedPosition"); out.Double(sample.expected);
+         out.Key("source"); out.String(sample.source.c_str());
          out.Key("paused"); out.Bool(sample.paused);
          out.Key("droppedFrames"); out.Double(sample.dropped);
          out.Key("decoderDroppedFrames"); out.Double(sample.decoderDropped);
@@ -583,7 +653,7 @@ MenuRegistry::AttachedItem sVideoPreviewInfo{
    wxT("Optional/Extra/Part2/Scriptables2")
 };
 
-bool ImportVideoReference(const CommandContext &context, const wxString &path)
+bool ImportVideo(const CommandContext &context, const wxString &path)
 {
    auto &project = context.project;
    if (!wxFileExists(path)) {
@@ -594,22 +664,33 @@ bool ImportVideoReference(const CommandContext &context, const wxString &path)
    const auto destroyCandidate = [](VideoPreviewFrame *frame) { frame->Destroy(); };
    std::unique_ptr<VideoPreviewFrame, decltype(destroyCandidate)> candidate{
       new VideoPreviewFrame{ project }, destroyCandidate };
+   bool committed{};
    try {
        if (!candidate->Load(path)) return false;
-       auto timeline = VideoTimeline::CreateVideoReference(Utf8(path),
+       auto timeline = VideoTimeline::CreateVideoTimeline(Utf8(path),
           candidate->GetVideoDuration(), candidate->GetVideoFrameRate());
        const auto hasAudio = candidate->HasAudio();
-       if (hasAudio && !ProjectFileManager::Get(project).ImportVideoAudio(path)) return false;
-       VideoTimeline::AdoptProjectVideo(project, std::move(timeline), hasAudio);
+       auto pictureTrack = VideoTimeline::CreateProjectVideoTrack(project, nullptr, false, false,
+          std::move(timeline),wxFileName(path).GetName() + _(" Video"));
+       try {
+          // Attach picture before the native audio importer records its Undo
+          // state, so a successful import is one complete audio/video action.
+          if (hasAudio && !ProjectFileManager::Get(project).ImportVideoAudio(path)) {
+             TrackList::Get(project).Remove(*pictureTrack); return false;
+          }
+          if (!hasAudio) ProjectHistory::Get(project).PushState(XO("Imported video"), XO("Import Video"));
+          committed = true;
+       }
+       catch (...) {
+          if (pictureTrack->GetOwner()) TrackList::Get(project).Remove(*pictureTrack);
+          throw;
+       }
+       SelectUtilities::SelectNone(project); pictureTrack->SetSelected(true);
        VideoTimeline::ShowProjectVideoTrack(project, candidate->Media());
       auto &viewport = Viewport::Get(project);
       viewport.ZoomFitHorizontally();
-      const auto tracks = TrackList::Get(project).Any<Track>();
-      if (!tracks.empty()) {
-         auto *lastTrack = *tracks.rbegin();
-         TrackFocus::Get(project).Set(lastTrack, true);
-         viewport.ShowTrack(*lastTrack);
-      }
+      TrackFocus::Get(project).Set(pictureTrack.get(), true);
+      viewport.ShowTrack(*pictureTrack);
       viewport.HandleResize();
       if (preview.frame && !preview.frame->IsBeingDeleted())
          preview.frame->Destroy();
@@ -619,6 +700,10 @@ bool ImportVideoReference(const CommandContext &context, const wxString &path)
       return true;
    }
    catch (const std::exception &error) {
+      if (committed) {
+         context.Status(_("Video tracks were imported; preview could not be shown: ") + wxString::FromUTF8(error.what()));
+         return true;
+      }
       context.Error(path + "\n" + wxString::FromUTF8(error.what()));
       return false;
    }
@@ -626,20 +711,20 @@ bool ImportVideoReference(const CommandContext &context, const wxString &path)
 
 // Both the File menu and scripting invoke these same operations. PromptUser
 // supplies native file pickers; configured scripting calls supply filenames.
-class ImportVideoReferenceCommand final : public AudacityCommand {
+class ImportVideoCommand final : public AudacityCommand {
    wxString mFileName;
 public:
    static const ComponentInterfaceSymbol Symbol;
    ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
    TranslatableString GetDescription() const override
-   { return XO("Open a video reference and import its editable soundtrack."); }
+   { return XO("Import video and its editable soundtrack into new tracks."); }
    template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor)
    { visitor.Define(mFileName, wxT("Filename"), wxString{}); return true; }
    bool VisitSettings(SettingsVisitor &visitor) override { return Settings(visitor); }
    bool VisitSettings(ConstSettingsVisitor &visitor) override { return Settings(visitor); }
    bool PromptUser(AudacityProject &project) override
    {
-      wxFileDialog dialog{ &ProjectWindow::Get(project), _("Open Video Reference"),
+      wxFileDialog dialog{ &ProjectWindow::Get(project), _("Open Video"),
          {}, {}, _("Video files (*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v)|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v|All files (*.*)|*.*"),
          wxFD_OPEN | wxFD_FILE_MUST_EXIST };
       if (dialog.ShowModal() != wxID_OK) return false;
@@ -647,10 +732,10 @@ public:
       return true;
    }
    bool Apply(const CommandContext &context) override
-   { return ImportVideoReference(context, mFileName); }
+   { return ImportVideo(context, mFileName); }
 };
-const ComponentInterfaceSymbol ImportVideoReferenceCommand::Symbol{ XO("ImportVideoReference") };
-BuiltinCommandsModule::Registration<ImportVideoReferenceCommand> sImportVideoCommand;
+const ComponentInterfaceSymbol ImportVideoCommand::Symbol{ XO("ImportVideo") };
+BuiltinCommandsModule::Registration<ImportVideoCommand> sImportVideoCommand;
 
 class ExportVideoMixCommand final : public AudacityCommand {
    wxString mFileName;
@@ -672,7 +757,7 @@ public:
    {
        const auto &timeline = VideoTimeline::GetProjectTimeline(project);
        if (timeline.sourcePath.empty()) {
-         wxMessageBox(_("Import a video reference first."), _("Export Video with Audio Mix"),
+         wxMessageBox(_("Import a video first."), _("Export Video with Audio Mix"),
             wxOK | wxICON_INFORMATION, &ProjectWindow::Get(project));
          return false;
       }
@@ -690,7 +775,7 @@ public:
    {
        const auto timeline = VideoTimeline::GetProjectTimeline(context.project);
        if (timeline.sourcePath.empty()) {
-         context.Error(_("Import a video reference first."));
+         context.Error(_("Import a video first."));
          return false;
       }
       try {
@@ -712,26 +797,17 @@ BuiltinCommandsModule::Registration<ExportVideoMixCommand> sExportVideoCommand;
 void OnShowVideo(const CommandContext &context)
 {
    if (VideoTimeline::GetProjectTimeline(context.project).sourcePath.empty())
-      wxMessageBox(_("Use File > Import > Video Reference to choose a video."),
+      wxMessageBox(_("Use File > Import > Video to choose a video."),
          _("Video Preview"), wxOK | wxICON_INFORMATION,
          &ProjectWindow::Get(context.project));
    else VideoTimeline::ShowProjectVideoPreview(context.project, true);
 }
 
-void OnRemoveVideo(const CommandContext &context)
-{
-   VideoTimeline::RemoveProjectVideo(context.project);
-   auto &preview = PreviewFor(context.project);
-   if (preview.frame && !preview.frame->IsBeingDeleted())
-      preview.frame->Destroy();
-   preview.frame = nullptr;
-}
-
 using namespace MenuRegistry;
 AttachedItem sImportVideo{
-   Command("ImportVideoReference", XXO("&Video Reference..."), CommandDispatch::OnAudacityCommand,
+   Command("ImportVideo", XXO("&Video..."), CommandDispatch::OnAudacityCommand,
       AudioIONotBusyFlag()),
-   wxT("File/Import-Export/Import")
+   Placement{wxT("File/Import-Export/Import"), {OrderingHint::Begin}}
 };
 AttachedItem sExportVideo{
    Command("ExportVideoMix", XXO("Export &Video with Audio Mix..."),
@@ -739,11 +815,9 @@ AttachedItem sExportVideo{
    wxT("File/Import-Export")
 };
 AttachedItem sVideoView{
-   Section("VideoReference",
+   Section("Video",
       Command("ShowVideoPreview", XXO("Video &Preview"), OnShowVideo,
-         AlwaysEnabledFlag),
-      Command("RemoveVideoReference", XXO("Remove Video Reference"), OnRemoveVideo,
-         AudioIONotBusyFlag())),
+         AlwaysEnabledFlag)),
    wxT("View")
 };
 

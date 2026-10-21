@@ -30,6 +30,9 @@
 
 *//*******************************************************************/
 #include "ControlToolBar.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "video/CreateVideoTrack.h"
+#endif
 
 #include <algorithm>
 #include <cfloat>
@@ -496,6 +499,9 @@ void ControlToolBar::EnableDisableButtons()
 
    // Only interested in audio type tracks
    bool tracks = p && TrackList::Get(*p).Any<AudioTrack>(); // PRL:  PlayableTrack ?
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   tracks = tracks || (p && VideoTimeline::HasProjectVideoClips(*p));
+#endif
 
    mPlay->SetEnabled( canStop && tracks && !recording );
    mRecord->SetEnabled(

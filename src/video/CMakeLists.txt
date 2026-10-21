@@ -28,7 +28,7 @@ if(audacity_use_ffmpeg STREQUAL "off")
 endif()
 set(_video_ffmpeg_libraries)
 foreach(_video_ffmpeg_name avformat-62.dll avcodec-62.dll avutil-60.dll
-   swresample-6.dll swscale-9.dll avfilter-11.dll avdevice-62.dll ffmpeg.exe)
+   swresample-6.dll swscale-9.dll avfilter-11.dll avdevice-62.dll ffmpeg.exe ffprobe.exe)
    set(_video_ffmpeg_file "${audacity_video_ffmpeg_runtime}/${_video_ffmpeg_name}")
    if(NOT EXISTS "${_video_ffmpeg_file}")
       message(FATAL_ERROR
@@ -43,11 +43,20 @@ endif()
 
 target_sources(Audacity PRIVATE ShowVideoPreview.cpp SyncVideoPlayback.h
    ExportVideoMix.cpp ExportVideoMix.h EditVideoTimeline.cpp EditVideoTimeline.h
-   PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h)
+   PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h
+   CreateVideoTrack.cpp CreateVideoTrack.h)
 target_include_directories(Audacity PRIVATE "${audacity_video_mpv_include}")
 # Only the enabled video build changes the numeric-runtime requirement. Keep
 # this definition on the owning translation unit rather than every app source.
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../prefs/GUISettings.cpp"
+   TARGET_DIRECTORY Audacity APPEND PROPERTY COMPILE_DEFINITIONS
+   AUTOPSY_HAS_VIDEO_PREVIEW=1)
+set_property(SOURCE
+   "${CMAKE_CURRENT_SOURCE_DIR}/../menus/EditMenus.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/CommonTrackControls.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ProjectAudioManager.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../TransportUtilities.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../toolbars/ControlToolBar.cpp"
    TARGET_DIRECTORY Audacity APPEND PROPERTY COMPILE_DEFINITIONS
    AUTOPSY_HAS_VIDEO_PREVIEW=1)
 
