@@ -100,6 +100,9 @@ def check_history_view(client, root):
             client.send("Redo")
             actual = client.data("GetInfo: Type=View Format=JSON")
             assert actual == expected, ("Redo", operation, expected, actual)
+    # The shared worker closes normally after this case. Save only this owned
+    # synthetic project so its unsaved-changes dialog cannot block teardown.
+    client.file("SaveProject2", root / "_history-view.aup3")
 
 
 def check_tracks(client, root):
