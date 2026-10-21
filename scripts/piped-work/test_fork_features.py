@@ -118,11 +118,11 @@ def check_media(client, root, ffmpeg, ffprobe):
     client.send("SelectTime: Start=0 End=4.02")
     client.send("Copy")
     pasted_groups = {linked[0]["group"]}
-    for start in (6, 12):
-        client.send(f"SelectTime: Start={start} End={start}")
+    for pasted_start in (6, 12):
+        client.send(f"SelectTime: Start={pasted_start} End={pasted_start}")
         client.send("Paste")
         rows = client.data("GetLinkedMediaClips")
-        copies = [row for row in rows if abs(row["start"] - start) < 1e-7]
+        copies = [row for row in rows if abs(row["start"] - pasted_start) < 1e-7]
         assert len(copies) == 2, rows
         group = {row["group"] for row in copies}
         assert len(group) == 1 and not group.intersection(pasted_groups), rows
