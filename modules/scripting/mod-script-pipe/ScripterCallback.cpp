@@ -16,13 +16,173 @@
 #include <wx/wx.h>
 #include "ScripterCallback.h"
 #include "commands/ScriptCommandRelay.h"
+#include "ModuleConstants.h"
+
+#ifdef __WXMSW__
+#include <wx/eventfilter.h>
+#include <wx/msw/wrapwin.h>
+#include <commctrl.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <set>
+
+namespace {
+// This adapter belongs to the private scripting-test session. It uses native
+// window contracts, without project types, captions, or upstream window layout.
+// wx creates its top-level windows hidden. Attach before their first Show(),
+// then constrain every placement before Windows applies it (including splash).
+class TestDisplayGuard final : public wxEventFilter {
+   wxString mDevice;
+   std::set<HWND> mWindows;
+
+   [[noreturn]] static void Fail(const char *operation)
+   {
+      std::fprintf(stderr, "AuTopsy test display guard: %s; Windows error %lu\n",
+         operation, GetLastError());
+      std::fflush(stderr);
+      // Only the runner's already checked private app session reaches here.
+      // Abort before showing unsafe UI; never display a failure dialog.
+      std::_Exit(197);
+   }
+
+   RECT WorkArea() const
+   {
+      struct Displays {
+         const wxString &device;
+         RECT work{};
+         unsigned count{}, matches{};
+         DWORD queryError{};
+      } displays{mDevice};
+      const auto enumerated = EnumDisplayMonitors(nullptr, nullptr,
+         [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+            auto &found = *reinterpret_cast<Displays *>(data);
+            MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+            if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&info))) {
+               found.queryError = GetLastError();
+               return FALSE;
+            }
+            ++found.count;
+            if (found.device == info.szDevice) {
+               ++found.matches;
+               found.work = info.rcWork;
+            }
+            return TRUE;
+         }, reinterpret_cast<LPARAM>(&displays));
+      if (!enumerated || displays.matches != 1 ||
+         (displays.count > 1 && mDevice == L"\\\\.\\DISPLAY1") ||
+         displays.work.right - displays.work.left < 640 ||
+         displays.work.bottom - displays.work.top < 480) {
+         std::fprintf(stderr, "Test display enumeration: completed=%d count=%u matches=%u "
+            "work=%ld,%ld,%ld,%ld query_error=%lu\n", enumerated, displays.count,
+            displays.matches, displays.work.left, displays.work.top,
+            displays.work.right, displays.work.bottom, displays.queryError);
+         Fail("the selected test display is missing, forbidden, or too small");
+      }
+      return displays.work;
+   }
+
+   void Constrain(HWND window, WINDOWPOS &position) const
+   {
+      const auto work = WorkArea();
+      RECT current{};
+      if (!GetWindowRect(window, &current)) Fail("read test window placement");
+      const int width = std::clamp<int>((position.flags & SWP_NOSIZE) ?
+         current.right-current.left : position.cx, 1, work.right-work.left);
+      const int height = std::clamp<int>((position.flags & SWP_NOSIZE) ?
+         current.bottom-current.top : position.cy, 1, work.bottom-work.top);
+      position.x = std::clamp<int>((position.flags & SWP_NOMOVE) ?
+         current.left : position.x, work.left, work.right-width);
+      position.y = std::clamp<int>((position.flags & SWP_NOMOVE) ?
+         current.top : position.y, work.top, work.bottom-height);
+      position.cx = width; position.cy = height;
+      position.flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
+   }
+
+   static LRESULT CALLBACK WindowProcedure(HWND window, UINT message,
+      WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR data)
+   {
+      auto &guard = *reinterpret_cast<TestDisplayGuard *>(data);
+      if (message == WM_NCDESTROY) {
+         guard.mWindows.erase(window);
+         RemoveWindowSubclass(window, WindowProcedure, id);
+      }
+      if (message == WM_DISPLAYCHANGE) guard.WorkArea();
+      if (message == WM_WINDOWPOSCHANGING) {
+         // Let the host enforce its size rules first; the test display is the
+         // final bound, so a minimum size cannot push UI onto another screen.
+         auto result = DefSubclassProc(window, message, wParam, lParam);
+         guard.Constrain(window, *reinterpret_cast<WINDOWPOS *>(lParam));
+         return result;
+      }
+      if (message == WM_SHOWWINDOW && wParam) {
+         WINDOWPOS position{}; position.hwnd = window;
+         position.flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER;
+         guard.Constrain(window, position);
+         if (!SetWindowPos(window, nullptr, position.x, position.y,
+            position.cx, position.cy, position.flags)) Fail("place test window before showing");
+         std::fprintf(stderr, "AUTOPSY_TEST_WINDOW show %llu %d %d %d %d\n",
+            static_cast<unsigned long long>(reinterpret_cast<UINT_PTR>(window)),
+            position.x, position.y, position.cx, position.cy);
+         std::fflush(stderr);
+      }
+      return DefSubclassProc(window, message, wParam, lParam);
+   }
+
+public:
+   explicit TestDisplayGuard(wxString device) : mDevice{std::move(device)}
+   {
+      WorkArea();
+      wxEvtHandler::AddFilter(this);
+   }
+   ~TestDisplayGuard() override
+   {
+      wxEvtHandler::RemoveFilter(this);
+      for (auto window : mWindows)
+         RemoveWindowSubclass(window, WindowProcedure, 1);
+   }
+   int FilterEvent(wxEvent &event) override
+   {
+      if (event.GetEventType() == wxEVT_CREATE) {
+         auto window = dynamic_cast<wxWindow *>(event.GetEventObject());
+         if (window && window->IsTopLevel()) {
+            const auto handle = static_cast<HWND>(window->GetHandle());
+            if (IsWindowVisible(handle)) Fail("test window was shown before its display guard");
+            if (!SetWindowSubclass(handle, WindowProcedure, 1,
+               reinterpret_cast<DWORD_PTR>(this))) Fail("attach test window display guard");
+            mWindows.insert(handle);
+         }
+      }
+      return Event_Skip;
+   }
+};
+
+std::unique_ptr<TestDisplayGuard> testDisplayGuard;
+
+void InstallTestDisplayGuard()
+{
+   // The host checks the marked portable profile and private audio directory
+   // before loading modules. Ordinary scripting users never enter this mode.
+   if (!wxGetEnv("AUTOPSY_BEHAVIOR_ROOT", nullptr)) return;
+   wxString device;
+   if (!wxGetEnv("AUTOPSY_TEST_DISPLAY", &device)) {
+      std::fprintf(stderr, "AuTopsy private tests require AUTOPSY_TEST_DISPLAY.\n");
+      std::_Exit(197);
+   }
+   testDisplayGuard = std::make_unique<TestDisplayGuard>(std::move(device));
+}
+}
+
+// The runner reads this exported data without executing or loading dependencies.
+// Refuse older modules before launching an app that could show on screen 1.
+extern "C" DLL_API const unsigned AuTopsyTestDisplayGuardVersion = 1;
+#endif
 
 /*
 //#define ModuleDispatchName "ModuleDispatch"
 See the example in this file.  It has several cases/options in it.
 */
-
-#include "ModuleConstants.h"
 
 extern void PipeServer();
 typedef DLL_IMPORT int (*tpExecScriptServerFunc)( wxString * pIn, wxString * pOut);
@@ -47,6 +207,14 @@ DEFINE_VERSION_CHECK
 extern "C" DLL_API int ModuleDispatch(ModuleDispatchTypes type)
 {
    switch (type) {
+#ifdef __WXMSW__
+   case ModuleInitialize:
+      InstallTestDisplayGuard();
+      break;
+   case ModuleTerminate:
+      testDisplayGuard.reset();
+      break;
+#endif
    // Module loading precedes the first project. Publish the pipe only after
    // command handlers have a project to serve, rather than dropping early calls.
    case AppInitialized:

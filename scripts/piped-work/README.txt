@@ -2,6 +2,13 @@
 
 This folder contains scripts for exercising mod-script-pipe
 
+test_fork_features.py is the CTest runner for AuTopsy behavior cases. It owns a
+marked private profile and child process. With multiple screens it runs on
+DISPLAY2 (or another screen except DISPLAY1); a single screen is allowed.
+The rebuilt scripting module constrains test windows before showing them.
+Missing display guards or an unavailable target stop the run. User windows and
+system display settings are untouched. See BUILDING.md for CMake/CTest usage.
+
 To run a simple test to check communications:
    python pipe_test.py
 or:

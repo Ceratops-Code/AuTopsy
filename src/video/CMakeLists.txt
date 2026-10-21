@@ -19,6 +19,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    target_compile_features(video-playback-test PRIVATE cxx_std_17)
    target_link_libraries(video-playback-test PRIVATE Catch2::Catch2)
    add_test(NAME video-playback COMMAND video-playback-test)
+   find_package(Python3 QUIET COMPONENTS Interpreter)
+   if(Python3_Interpreter_FOUND)
+      add_test(NAME fork-display-policy COMMAND "${Python3_EXECUTABLE}"
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work/test_fork_features.py"
+         --case display-policy)
+      add_test(NAME fork-worker-lifecycle COMMAND "${Python3_EXECUTABLE}"
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work/test_fork_features.py"
+         --case worker-lifecycle --work-root "${CMAKE_BINARY_DIR}/_fork-tests")
+   endif()
    return()
 endif()
 
@@ -104,7 +113,17 @@ add_unit_test(
 if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")
    find_package(Python3 QUIET COMPONENTS Interpreter)
-   if(Python3_Interpreter_FOUND)
+    if(Python3_Interpreter_FOUND)
+       add_test(NAME fork-display-policy COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py" --case display-policy)
+       add_test(NAME fork-worker-lifecycle COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"
+          --case worker-lifecycle --work-root "${CMAKE_BINARY_DIR}/_fork-tests")
+       add_test(NAME fork-display-rejection COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"
+          --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
+          --case branding --reject-display)
+       set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
       foreach(_case groups tracks video preview branding)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"

@@ -363,6 +363,23 @@ track order and scrolling, mixed-source rendering, video-only playback,
 silence, rejected edits and overwrite protection.
 The gesture case waits for the native pane to be enabled, then supplies held
 mouse input only to the owned test window through its normal window procedure.
+The GUI runner selects Windows DISPLAY2 when connected. With several displays
+it excludes DISPLAY1; with one it uses that display. It seeds only its private
+window preferences and requires the scripting module's test display guard before
+launching. That process-local adapter constrains each wx top-level window before
+Windows applies its placement, covering the loading splash, editor, welcome,
+About, and video preview. A missing or too-small target stops the test instead
+of falling back to screen 1. It changes no system display settings or user windows.
+`fork-display-policy` checks device selection without UI; `fork-display-rejection`
+checks that a disconnected target stops the child before showing a window.
+`fork-branding` also repeats hidden/visible placement requests toward the other
+screen, including oversized windows. GUI cases check the owned windows before
+commands, mouse input, and screenshots; pre-show observations stay in each case's
+bounded scratch output and its result records name the selected display.
+Unreadable display information stops the test before placement; the app log
+keeps the monitor query's failure details. `fork-worker-lifecycle` checks that
+app failure stops its worker promptly, preserves both streams, and releases
+the owned child. Its temporary fixtures are removed after each check.
 The runner owns its marked case directories and shared preview cache under
 the selected test work root. Fresh runs replace case scratch data. Completed
 result records retain their original run, executable and check identities in

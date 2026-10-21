@@ -4,6 +4,9 @@ CTest supplies an executable and a dedicated work root. Tests own only marked
 temporary directories and their child process. The native Portable Settings
 name is required by Audacity; a marker protects any unrelated existing profile.
 No installed app, user project, source snapshot or fixed upstream layout is used.
+Visible tests use DISPLAY2 when connected, otherwise another display except
+DISPLAY1 if several are connected. The scripting module constrains windows
+before showing them; the runner refuses modules without that contract.
 """
 from pathlib import Path
 from datetime import datetime
@@ -24,6 +27,7 @@ import wave
 
 
 def run_process(arguments, **options):
+    if os.name == "nt": options.setdefault("creationflags", subprocess.CREATE_NO_WINDOW)
     try:
         result = subprocess.run(arguments, capture_output=True, **options)
     except subprocess.TimeoutExpired as error:
@@ -37,6 +41,46 @@ def run_process(arguments, **options):
                            f"Exit: {result.returncode}\nstdout:\n{display(result.stdout)}\n"
                            f"stderr:\n{display(result.stderr)}")
     return result.stdout
+
+
+def run_behavior_worker(command, environment, app, root):
+    """Collect both worker streams and stop promptly when the owned app fails."""
+    if app.poll() is not None:
+        raise RuntimeError(f"Command: {subprocess.list2cmdline(command)}\n"
+                           f"Owned app exited with status {app.returncode} before worker launch.\n"
+                           "Worker exit: <not started>\nstdout: <absent>\nstderr: <absent>")
+    operation = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, env=environment,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    deadline, stopped_at = time.monotonic()+240, None
+    cause, output, errors = None, "", ""
+    try:
+        while True:
+            try:
+                output, errors = operation.communicate(timeout=.2)
+                break
+            except subprocess.TimeoutExpired:
+                status = app.poll()
+                if status is not None:
+                    if stopped_at is None: stopped_at = time.monotonic()
+                    if status or time.monotonic()-stopped_at > 2:
+                        cause = f"Owned app exited with status {status} while its worker was active."
+                        break
+                if time.monotonic() >= deadline:
+                    cause = "Behavior worker exceeded its 240-second deadline."
+                    break
+    finally:
+        if operation.poll() is None:
+            operation.terminate()
+            output, errors = operation.communicate(timeout=10)
+        (root / "_commands.log").write_text(output, encoding="utf-8")
+        (root / "_errors.log").write_text(errors, encoding="utf-8")
+    if cause:
+        app_output = (root / "_app.log").read_text(encoding="utf-8", errors="replace")[-5000:]
+        raise RuntimeError(f"Command: {subprocess.list2cmdline(command)}\n{cause}\n"
+                           f"Worker exit: {operation.returncode}\nstdout:\n{output[-14000:] or '<absent>'}\n"
+                           f"stderr:\n{errors or '<absent>'}\nApp output:\n{app_output or '<absent>'}")
+    return subprocess.CompletedProcess(command, operation.returncode, output, errors)
 
 
 def executable_version(executable):
@@ -58,6 +102,165 @@ def executable_version(executable):
     if length.value < 52 or fields[0] != 0xFEEF04BD:
         raise RuntimeError("The executable has no fixed Windows version resource.")
     return fields[2] >> 16, fields[2] & 0xFFFF, fields[3] >> 16
+
+
+def select_test_display(displays):
+    """Choose by Windows device identity, never enumeration order or coordinates."""
+    if not displays or len({row["device"] for row in displays}) != len(displays):
+        raise RuntimeError("Connected test displays are missing or ambiguous.")
+    candidates = displays if len(displays) == 1 else [
+        row for row in displays if row["device"] != r"\\.\DISPLAY1"]
+    if not candidates: raise RuntimeError("No test display other than screen 1 is available.")
+    target = min(candidates, key=lambda row: (row["device"] != r"\\.\DISPLAY2", row["device"]))
+    left, top, right, bottom = target["work"]
+    if right-left < 640 or bottom-top < 480:
+        raise RuntimeError("The selected test display needs a work area of at least 640 by 480.")
+    return target
+
+
+def connected_test_displays():
+    """Read work areas in this thread's DPI coordinate space; change no display settings."""
+    from ctypes import wintypes as w
+    class MonitorInfo(ctypes.Structure):
+        _fields_ = [("size", w.DWORD), ("monitor", w.RECT), ("work", w.RECT),
+                    ("flags", w.DWORD), ("device", w.WCHAR*32)]
+    callback_type = ctypes.WINFUNCTYPE(w.BOOL, w.HMONITOR, w.HDC, ctypes.POINTER(w.RECT), w.LPARAM)
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetMonitorInfoW.argtypes = [w.HMONITOR, ctypes.POINTER(MonitorInfo)]
+    user.EnumDisplayMonitors.argtypes = [w.HDC, ctypes.c_void_p, callback_type, w.LPARAM]
+    displays, errors = [], []
+    @callback_type
+    def visit(monitor, dc, rectangle, data):
+        info = MonitorInfo(); info.size = ctypes.sizeof(info)
+        if not user.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            errors.append(ctypes.get_last_error()); return False
+        displays.append({"device": info.device, "primary": bool(info.flags & 1),
+                         "work": [info.work.left, info.work.top, info.work.right, info.work.bottom]})
+        return True
+    if not user.EnumDisplayMonitors(None, None, visit, 0) or errors:
+        raise RuntimeError(f"Read connected displays: Windows errors {errors or [ctypes.get_last_error()]}")
+    return displays
+
+
+def require_test_display_guard(module):
+    """Read the module's exported contract data without running it or its dependencies."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
+    kernel.LoadLibraryExW.restype = ctypes.c_void_p
+    kernel.GetProcAddress.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    kernel.GetProcAddress.restype = ctypes.c_void_p
+    kernel.FreeLibrary.argtypes = [ctypes.c_void_p]
+    image = kernel.LoadLibraryExW(str(module), None, 1)  # DONT_RESOLVE_DLL_REFERENCES
+    if not image: raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        address = kernel.GetProcAddress(image, b"AuTopsyTestDisplayGuardVersion")
+        if not address or ctypes.c_uint.from_address(address).value != 1:
+            raise RuntimeError("Rebuild mod-script-pipe before GUI tests: its pre-show display guard is missing.")
+    finally:
+        kernel.FreeLibrary(image)
+
+
+def assert_owned_test_display(pid, include_window=None):
+    """Check the child's windows before input/capture; never move another process."""
+    from ctypes import wintypes as w
+    target = select_test_display(connected_test_displays())
+    if target["device"] != os.environ["AUTOPSY_TEST_DISPLAY"]:
+        raise RuntimeError("The selected test display disconnected or its identity changed.")
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, w.LPARAM]
+    user.IsWindowVisible.argtypes = [w.HWND]
+    user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    rows, errors = [], []
+    @callback_type
+    def visit(window, data):
+        owner = w.DWORD(); user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+        if owner.value == pid and (user.IsWindowVisible(window) or window == include_window):
+            rectangle = w.RECT(); text = ctypes.create_unicode_buffer(256)
+            if not user.GetWindowRect(window, ctypes.byref(rectangle)):
+                errors.append(f"Read window {window}: Windows error {ctypes.get_last_error()}"); return False
+            user.GetWindowTextW(window, text, len(text))
+            rect = [rectangle.left, rectangle.top, rectangle.right, rectangle.bottom]
+            left, top, right, bottom = target["work"]
+            if not (left <= rect[0] < rect[2] <= right and top <= rect[1] < rect[3] <= bottom):
+                errors.append(f"Test window {text.value!r} at {rect} escaped {target}")
+            rows.append({"handle": window, "title": text.value, "rectangle": rect})
+        return True
+    if not user.EnumWindows(visit, 0) or errors:
+        raise RuntimeError("; ".join(errors) or "Read owned test windows failed.")
+    if include_window and not any(row["handle"] == include_window for row in rows):
+        raise RuntimeError("The requested placement-test window belongs to another process or disappeared.")
+    return rows
+
+
+def check_test_display_selection():
+    """No GUI: cover reordered, negative-origin, mixed-size, and missing display layouts."""
+    def display(number, work, primary=False):
+        return {"device": rf"\\.\DISPLAY{number}", "work": work, "primary": primary}
+    first = display(1, [0, 0, 1920, 1040], True)
+    second = display(2, [-1280, 113, 0, 785])
+    third = display(3, [1920, -1200, 3000, 720])
+    for _ in range(3):
+        for layout, expected in [([first], first), ([second], second),
+                ([first, second], second), ([second, first], second),
+                ([third, first, second], second), ([first, third], third),
+                ([dict(second, primary=True), dict(first, primary=False)], dict(second, primary=True))]:
+            assert select_test_display(layout) == expected, layout
+        for layout in ([], [first, first], [first, display(2, [0, 0, 639, 479])]):
+            try: select_test_display(layout)
+            except RuntimeError: pass
+            else: raise AssertionError(layout)
+    print("display-policy: PASS (identity selection, screen-1 exclusion, failure boundaries)")
+
+
+def check_behavior_worker_lifecycle(work_root):
+    """No GUI: repeat normal exit and app failure on both sides of worker launch."""
+    import tempfile
+    work_root.mkdir(parents=True, exist_ok=True)
+    for boundary in ("normal", "before", "after"):
+        for _ in range(2):
+            with tempfile.TemporaryDirectory(prefix="_worker-lifecycle-", dir=work_root) as directory:
+                root = Path(directory)
+                (root / "_app.log").write_text("owned app failure evidence", encoding="utf-8")
+                # Observe the worker's effect instead of guessing its startup
+                # speed: loaded CI hosts must reach the same interruption point.
+                ready = root / "_worker_ready"
+                app_code = ("import sys,time;from pathlib import Path\n"
+                    "while not Path(sys.argv[1]).exists(): time.sleep(.01)\n"
+                    "sys.exit(197)") if boundary == "after" else (
+                    "import time,sys;time.sleep(" + ("10" if boundary == "normal" else "0") + ");sys.exit(197)")
+                app = subprocess.Popen([sys.executable, "-c", app_code, str(ready)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                if boundary == "before": assert app.wait(timeout=5) == 197
+                command = [sys.executable, "-c", "import sys,time;print('worker output',flush=True);"
+                    "print('worker errors',file=sys.stderr,flush=True);"
+                    "from pathlib import Path;Path(sys.argv[1]).write_text('ready');time.sleep(" +
+                    ("0" if boundary == "normal" else "10") + ")", str(ready)]
+                started = time.monotonic()
+                try:
+                    try:
+                        result = run_behavior_worker(command, os.environ.copy(), app, root)
+                    except RuntimeError as error:
+                        assert boundary != "normal", str(error)
+                        assert "status 197" in str(error), str(error)
+                        if boundary == "before":
+                            assert "<not started>" in str(error)
+                            assert not (root / "_commands.log").exists()
+                        else:
+                            assert "worker output" in (root / "_commands.log").read_text()
+                            assert "worker errors" in (root / "_errors.log").read_text()
+                            assert "owned app failure evidence" in str(error)
+                    else:
+                        assert boundary == "normal" and result.returncode == 0
+                        assert "worker output" in result.stdout and "worker errors" in result.stderr
+                    assert time.monotonic()-started < 5, "Child failure did not stop the worker promptly."
+                finally:
+                    if app.poll() is None: app.terminate()
+                    app.wait(timeout=5)
+    print("worker-lifecycle: PASS (repeated exit, interruption, streams, and child cleanup)")
 
 
 def startup_window_messages(pid):
@@ -100,12 +303,14 @@ class ScriptClient:
         self.client = pipeclient.PipeClient()
 
     def send(self, command, success=True):
+        assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]))
         self.client.write(command)
         if not self.client.reply_ready.wait(240):
             raise RuntimeError("Scripting timeout: " + command)
         reply = self.client.read()
         print(command + "\n" + reply, flush=True)
         assert ("BatchCommand finished: OK" in reply) == success, reply
+        assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]))
         return reply
 
     def data(self, command):
@@ -206,6 +411,7 @@ def drag_owned_video_clip(client, start_time, end_time, track=None, to_track=Non
     user.SetThreadDpiAwarenessContext.argtypes=[ctypes.c_void_p]; user.SetThreadDpiAwarenessContext.restype=ctypes.c_void_p
     user.GetWindowDpiAwarenessContext.argtypes=[ctypes.c_void_p]; user.GetWindowDpiAwarenessContext.restype=ctypes.c_void_p
     previous_dpi=user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    assert_owned_test_display(owner.value)
     root=user.GetAncestor(panel,2); foreground=user.GetForegroundWindow()
     pinned=bool(user.GetWindowLongPtrW(root,-20)&8)
     original=Point(); user.GetCursorPos(ctypes.byref(original))
@@ -291,6 +497,7 @@ def capture_owned_project(panel, path):
     owner = wintypes.DWORD()
     user.GetWindowThreadProcessId(window, ctypes.byref(owner))
     if owner.value != int(os.environ["AUTOPSY_OWNED_APP_PID"]): raise RuntimeError("Screenshot target has another owner.")
+    assert_owned_test_display(owner.value)
     rectangle = wintypes.RECT(); user.GetWindowRect(window, ctypes.byref(rectangle))
     width, height = rectangle.right - rectangle.left, rectangle.bottom - rectangle.top
     if not (0 < width < 6000 and 0 < height < 4000): raise RuntimeError("Unexpected project window size.")
@@ -674,14 +881,42 @@ def check_branding(client, root):
         if time.monotonic() >= deadline:
             raise AssertionError({"windows": windows(), "menus": menu_windows})
         time.sleep(.05)
+
+    # Deliberately request screen 1 while hidden and visible. The in-process
+    # placement adapter must constrain the request before Windows applies it,
+    # including repeated hide/show and an oversized window. No mouse is used.
+    from ctypes import wintypes as w
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.ShowWindow.argtypes = [w.HWND, ctypes.c_int]
+    user.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int,
+                                  ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    original = w.RECT(); assert user.GetWindowRect(main, ctypes.byref(original))
+    displays = connected_test_displays()
+    target = select_test_display(displays)
+    outside = next((row for row in displays if row["device"] != target["device"]), target)
+    for _ in range(2):
+        user.ShowWindow(main, 0)
+        assert user.SetWindowPos(main, None, outside["work"][0], outside["work"][1],
+            2000, 1500, 0x14), ctypes.WinError(ctypes.get_last_error())
+        assert_owned_test_display(pid, main)
+        user.ShowWindow(main, 4)
+        assert_owned_test_display(pid, main)
+        assert user.SetWindowPos(main, None, outside["work"][0], outside["work"][1],
+            2000, 1500, 0x14), ctypes.WinError(ctypes.get_last_error())
+        assert_owned_test_display(pid, main)
+        assert user.SetWindowPos(main, None, original.left, original.top,
+            original.right-original.left, original.bottom-original.top, 0x14)
+        assert_owned_test_display(pid, main)
     help_entries = entries(help_menu)
     labels = [text for text, _, _ in help_entries]
     assert {"AuTopsy Guide", "Audio Manual (Upstream)", "AuTopsy Support", "About AuTopsy"} <= set(labels), labels
     assert not any("Audacity" in text or "Check for Updates" in text for text in labels), labels
     about_id = next(command for text, command, _ in help_entries if text == "About AuTopsy")
     for _ in range(2):
+        assert_owned_test_display(pid)
         assert user.PostMessageW(main, 0x111, about_id, 0), ctypes.WinError(ctypes.get_last_error())
         about = wait_title("About AuTopsy")
+        assert_owned_test_display(pid, about)
         assert user.PostMessageW(about, 0x10, 0, 0), ctypes.WinError(ctypes.get_last_error())
         deadline = time.monotonic() + 5
         while any(text == "About AuTopsy" for text in windows().values()):
@@ -777,22 +1012,37 @@ def retain_behavior_result(work_root, record=None, metrics=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--executable", type=Path, required=True)
-    parser.add_argument("--work-root", type=Path, required=True)
-    parser.add_argument("--case", choices=("groups", "tracks", "video", "preview", "branding"), required=True)
+    parser.add_argument("--executable", type=Path)
+    parser.add_argument("--work-root", type=Path)
+    parser.add_argument("--case", choices=("groups", "tracks", "video", "preview", "branding", "display-policy", "worker-lifecycle"), required=True)
     parser.add_argument("--video-source", type=Path, default=os.environ.get("AUTOPSY_PREVIEW_SOURCE"))
     parser.add_argument("--interrupt-cache", choices=("before-publish", "after-publish"),
                         default=os.environ.get("AUTOPSY_INTERRUPT_PREVIEW"))
     parser.add_argument("--ffmpeg", default="")
     parser.add_argument("--ffprobe", default="")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--reject-display", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.case == "display-policy":
+        check_test_display_selection()
+        return
+    if args.case == "worker-lifecycle":
+        if not args.work_root: parser.error("Worker lifecycle checks require --work-root.")
+        check_behavior_worker_lifecycle(args.work_root.resolve())
+        return
+    if not args.executable or not args.work_root:
+        parser.error("GUI cases require --executable and --work-root.")
     root = args.work_root.resolve() / ("_" + args.case)
+    if args.reject_display: root = root.with_name(root.name + "_display_rejection")
     if args.worker:
         worker(args, root)
         return
     if os.name != "nt": raise RuntimeError("The scripting integration cases require Windows.")
     executable = args.executable.resolve(strict=True)
+    module = executable.parent / "modules/mod-script-pipe.dll"
+    require_test_display_guard(module)
+    display = select_test_display(connected_test_displays())
+    print("GUI test display: " + display["device"], flush=True)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.WaitNamedPipeW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
     kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
@@ -860,22 +1110,39 @@ def main():
     audio = root / "_audio_temp"; audio.mkdir()
     gui = root / "_gui_temp"; gui.mkdir()
     version = ".".join(str(x) for x in version_numbers)
-    module = executable.parent / "modules/mod-script-pipe.dll"
     stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")
+    left, top, right, bottom = display["work"]
+    width, height = min(1100, right-left-32), min(650, bottom-top-32)
+    placement = (f"[Window]\nX={left+16}\nY={top+16}\nWidth={width}\nHeight={height}\n"
+                 f"Normal_X={left+16}\nNormal_Y={top+16}\nNormal_Width={width}\nNormal_Height={height}\n"
+                 "Maximized=0\nIconized=0\n")
     (profile / "autopsy.cfg").write_text(
         f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
         f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
         "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
-        f"[ModuleDateTime]\nmod-script-pipe={stamp}\n", encoding="utf-8")
+        f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement, encoding="utf-8")
     environment = dict(os.environ, TEMP=str(gui), TMP=str(gui), PYTHONDONTWRITEBYTECODE="1",
-                       AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()))
+                       AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
+                       AUTOPSY_TEST_DISPLAY=display["device"] if not args.reject_display else "missing-test-display")
     user = ctypes.WinDLL("user32", use_last_error=True)
     user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     run_id = uuid.uuid4().hex
+    identities = {"executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                  "script_module_sha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+                  "check_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                  "pipe_client_sha256": hashlib.sha256(Path(__file__).with_name("pipeclient.py").read_bytes()).hexdigest()}
     with (root / "_app.log").open("w") as log:
         app = subprocess.Popen([str(executable)], cwd=executable.parent, env=environment,
                                stdout=log, stderr=subprocess.STDOUT)
         try:
+            if args.reject_display:
+                status = app.wait(timeout=30)
+                log.flush()
+                report = (root / "_app.log").read_text(encoding="utf-8", errors="replace")
+                if status != 197 or "AUTOPSY_TEST_WINDOW show" in report or "test display guard:" not in report:
+                    raise RuntimeError(f"Unsafe-display rejection: owned app exit {status}; {report[-4000:]}")
+                print("display-rejection: PASS (missing screen stopped before the first window)")
+                return
             startup = user.WaitForInputIdle(int(app._handle), 30000)
             if startup != 0:
                 raise RuntimeError(f"Owned app startup status {startup}; PID {app.pid}; "
@@ -887,12 +1154,20 @@ def main():
                 time.sleep(.05)
             if app.poll() is not None: raise RuntimeError("The owned test app exited during startup.")
             environment["AUTOPSY_OWNED_APP_PID"] = str(app.pid)
+            previous_display = os.environ.get("AUTOPSY_TEST_DISPLAY")
+            os.environ["AUTOPSY_TEST_DISPLAY"] = display["device"]
+            try:
+                windows = assert_owned_test_display(app.pid)
+            finally:
+                if previous_display is None: os.environ.pop("AUTOPSY_TEST_DISPLAY", None)
+                else: os.environ["AUTOPSY_TEST_DISPLAY"] = previous_display
+            (root / "_display.json").write_text(json.dumps({"display": display, "startup_windows": windows}, indent=2))
             worker_command = [sys.executable, str(Path(__file__)), *sys.argv[1:], "--worker"]
             if args.interrupt_cache:
                 cache = profile / "_video-previews"
                 baseline = set(cache.rglob("_complete")) if cache.exists() else set()
                 operation = subprocess.Popen(worker_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                             text=True, env=environment)
+                                             text=True, env=environment, creationflags=subprocess.CREATE_NO_WINDOW)
                 try:
                     deadline = time.monotonic() + 45
                     observed = None
@@ -912,10 +1187,7 @@ def main():
                     output, errors = operation.communicate(timeout=10)
                     (root / "_commands.log").write_text(output, encoding="utf-8")
                     (root / "_errors.log").write_text(errors, encoding="utf-8")
-            result = subprocess.run(worker_command,
-                                    capture_output=True, text=True, timeout=240, env=environment)
-            (root / "_commands.log").write_text(result.stdout, encoding="utf-8")
-            (root / "_errors.log").write_text(result.stderr, encoding="utf-8")
+            result = run_behavior_worker(worker_command, environment, app, root)
             if result.returncode:
                 raise RuntimeError(f"Command: {subprocess.list2cmdline(worker_command)}\n"
                                    f"Behavior worker exit {result.returncode}\n"
@@ -926,6 +1198,13 @@ def main():
             except subprocess.TimeoutExpired as error:
                 raise RuntimeError("Owned app did not exit; " + startup_window_messages(app.pid)) from error
             if status: raise RuntimeError(f"The owned app exited with status {status}.")
+            log.flush()
+            shows = re.findall(r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
+                (root / "_app.log").read_text(encoding="utf-8", errors="replace"), re.MULTILINE)
+            assert shows, "No pre-show placement observations were recorded."
+            for _, x, y, w, h in shows:
+                x, y, w, h = map(int, (x, y, w, h))
+                assert left <= x and top <= y and x+w <= right and y+h <= bottom, shows
             source = args.video_source.resolve(strict=True) if args.video_source else root / "source.mp4"
             source_identity = None
             if source.is_file():
@@ -933,10 +1212,9 @@ def main():
                 source_identity = {"source": str(source) if args.video_source else "generated:" + args.case,
                                    "bytes": info.st_size, "modified_ns": info.st_mtime_ns if args.video_source else None}
             record = {"run": run_id, "case": args.case, "result": "passed", "version": version.strip(),
+                      "test_display": display, "pre_show_count": len(shows),
                       "input": source_identity,
-                      "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-                      "check_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                      "pipe_client_sha256": hashlib.sha256(Path(__file__).with_name("pipeclient.py").read_bytes()).hexdigest()}
+                      **identities}
             (root / ("_result-" + run_id + ".json")).write_text(json.dumps(record, indent=2), encoding="utf-8")
             observations = root / "_playback.json"
             retain_behavior_result(root.parent, record,
