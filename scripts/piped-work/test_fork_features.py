@@ -3,7 +3,8 @@
 CTest supplies an executable and a dedicated work root. Tests own only marked
 temporary directories and their child process. The native Portable Settings
 name is required by Audacity; a marker protects any unrelated existing profile.
-No installed app, user project, source snapshot or fixed upstream layout is used.
+No user project or source snapshot is used. The compatibility case reads an
+explicit stock installation only to copy its consumer binaries into the test root.
 Visible tests use DISPLAY2 when connected, otherwise another display except
 DISPLAY1 if several are connected. The scripting module constrains windows
 before showing them; the runner refuses modules without that contract.
@@ -29,16 +30,19 @@ from run_fork_test_harness import (
     capture_owned_project,
     check_behavior_worker_lifecycle,
     check_neutral_preview_fixture,
+    check_stock_audacity_projects,
     check_test_display_selection,
     connected_test_displays,
     drag_owned_video_clip,
     executable_version,
     painted_video_tracks,
+    read_audio_project_state,
     ready_video_preview,
     require_test_display_guard,
     run_behavior_worker,
     run_process,
     save_reopen,
+    select_audio_project_tracks,
     select_test_display,
     startup_window_messages,
     write_neutral_preview_video,
@@ -103,6 +107,35 @@ def check_history_view(client, root):
     # The shared worker closes normally after this case. Save only this owned
     # synthetic project so its unsaved-changes dialog cannot block teardown.
     client.file("SaveProject2", root / "_history-view.aup3")
+
+
+def check_project_compatibility(client, root):
+    """Save ordinary full AUP3 projects, with metadata and a video-only edge case."""
+    client.file("ImportVideo", root / "source.mp4")
+    client.file("Import2", root / "tone-b.wav")
+    client.send('GroupAudioClips: Clips="1:0,2:0"')
+    for track, marker in ((0, "c" * 32), (1, "d" * 32)):
+        client.send(f'AddClipMarker: Track={track} At=1 Text="Compatibility flag" Id="{marker}"')
+    client.send("SelectTime: Start=0.5 End=1.5")
+    client.send("AddLabel")
+    client.send('SetLabel: Label=0 Text="Compatibility label"')
+    project = root / "_with-video.aup3"
+    client.file("SaveProject2", project)
+    state = read_audio_project_state(client.data)
+    assert len(state["tracks"]) == 3 and len(state["labels"]) == 1, state
+    select_audio_project_tracks(client.send, client.data)
+    client.send("SelectTime: Start=0 End=5")
+    audio = root / "_original-mix.wav"
+    client.file("Export2", audio, "NumChannels=2")
+    expected = [{"project": project.name, "state": state, "audio": audio.name}]
+    client.send("SelectTracks: Track=1 TrackCount=3 Mode=Set")
+    client.send("RemoveTracks")
+    tracks = client.data("GetInfo: Type=Tracks Format=JSON")
+    assert len(tracks) == 1 and tracks[0]["kind"] == "video", tracks
+    project = root / "_video-only.aup3"
+    client.file("SaveProject2", project)
+    expected.append({"project": project.name, "state": read_audio_project_state(client.data)})
+    (root / "_compatibility-expected.json").write_text(json.dumps(expected), encoding="utf-8")
 
 
 def check_tracks(client, root):
@@ -893,6 +926,8 @@ def worker(args, root):
         check_tracks(client, root)
     elif args.case == "history-view":
         check_history_view(client, root)
+    elif args.case == "project-compatibility":
+        check_project_compatibility(client, root)
     elif args.case == "video":
         check_video(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "media":
@@ -1001,6 +1036,7 @@ def main():
             "groups",
             "tracks",
             "history-view",
+            "project-compatibility",
             "video",
             "media",
             "preview",
@@ -1036,6 +1072,8 @@ def main():
         return
     if not args.executable or not args.work_root:
         parser.error("GUI cases require --executable and --work-root.")
+    if args.case == "project-compatibility" and not os.environ.get("AUTOPSY_STOCK_AUDACITY"):
+        parser.error("Project compatibility requires AUTOPSY_STOCK_AUDACITY, a stock Audacity 3 executable.")
     root = args.work_root.resolve() / ("_" + args.case)
     if args.reject_display:
         root = root.with_name(root.name + "_display_rejection")
@@ -1105,7 +1143,7 @@ def main():
         ("tone-stereo.wav", 2),
     ):
         write_tone(root / name, channels)
-    if args.case in ("video", "media"):
+    if args.case in ("video", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,
@@ -1344,6 +1382,10 @@ def main():
                 ) from error
             if status:
                 raise RuntimeError(f"The owned app exited with status {status}.")
+            stock_result = None
+            if args.case == "project-compatibility":
+                stock_result = check_stock_audacity_projects(
+                    root, os.environ["AUTOPSY_STOCK_AUDACITY"], display, args.ffmpeg)
             log.flush()
             shows = re.findall(
                 r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
@@ -1373,6 +1415,7 @@ def main():
                 "test_display": display,
                 "pre_show_count": len(shows),
                 "input": source_identity,
+                "stock_audacity": stock_result,
                 **identities,
             }
             (root / ("_result-" + run_id + ".json")).write_text(

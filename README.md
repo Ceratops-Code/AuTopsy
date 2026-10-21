@@ -54,6 +54,13 @@ The inherited audio tools are covered by the
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
 
+Projects use standard **`.aup3`** storage. Stock Audacity **3.7.8** has been tested
+opening AuTopsy projects containing video: audio clips and labels remain usable,
+and video tracks are skipped. Its saved copies also reopen with the same audio
+and labels. Saving in Audacity drops AuTopsy's video, links, clip groups and flags;
+keep the original AuTopsy project when those additions matter. Compatibility with
+unreleased Audacity versions cannot be guaranteed.
+
 Preview publication uploads the completed installer and its source/build-check
 manifest. The publisher keeps the original accepted build intact, checks the
 uploaded asset identities, and makes the preview public after both uploads.
@@ -111,6 +118,13 @@ child-process handling, display confinement, media fixtures and GUI gestures;
 Preview tests generate their own neutral 16-second colour-pattern video and
 tone; personal video inputs are not accepted. `fork-fixtures` checks that media
 without opening AuTopsy.
+`fork-project-compatibility` separately exercises a private stock Audacity 3
+consumer with generated projects and compares their rendered audio. See
+[BUILDING.md](BUILDING.md) for its explicit consumer input.
+Inherited upstream CTest suites remain available in a full application build;
+the default fork CI selects the owned portable checks rather than running the
+entire upstream platform matrix. GitHub's CodeQL default setup scans C++, Python
+and Actions. This fork has no SonarQube job.
 The npm overrides select patched lint dependencies while their parent packages
 still constrain older releases.
 

@@ -509,6 +509,23 @@ an explicit native session in the repository test operation. For example,
 `^fork-media$` runs the existing guarded desktop case for linked-media splits
 across video tracks, trims with unrelated audio before zero, saved links, flags
 and exports. Reconfiguration without the selector restores the portable suite.
+For `^fork-project-compatibility$`, also set `AUTOPSY_STOCK_AUDACITY` to a stock
+Audacity 3 executable. The harness reads that installation only to copy its
+binaries into the marked native case directory. Its private portable profile
+disables file association and update changes, separates audio and GUI temporary
+storage, and places its project window on the selected test display. No installed
+profile or user project is an input.
+
+This case opens a generated video/audio/label project and a video-only project,
+twice each, then checks stock save/copy/reopen behavior. It compares decoded
+48-kHz stereo audio with a maximum sample difference of 0.0005 to allow export
+dither, while clip timing, names, track properties and labels must match. Result
+records name the consumer version and executable hash. After all saved-copy
+acknowledgements the harness ends only its private consumer process; stock pipe
+shutdown is outside this file-format test. It removes the private copied app,
+profile, log and working copies on success or failure. Current neutral fixtures
+and original test projects remain in the existing bounded per-case workspace.
+
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
 an existing native build, defaulting to
 `.build/_windows-installer`. For a separate desktop test session,

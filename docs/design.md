@@ -279,6 +279,24 @@ shows their existing use. Native track XML continues to own current track data.
 The native project/history transaction must restore catalog/settings together
 with track changes. Saving errors leave the prior saved project recoverable.
 
+**Audacity project compatibility.** Ordinary Save keeps the existing AUP3
+container, native database schema and native audio/label serialization. Video
+uses optional `videotrack`/`videoclip` XML; audio groups and clip flags use optional
+AuTopsy attributes. Stock readers can skip these additions without changing audio
+or label data. Future feature schema versions belong inside those owned optional
+extensions, rather than changing native required fields or the base file version
+solely for video. Source media stays external. This preserves audio interoperability
+while retaining the complete editable representation in AuTopsy.
+
+The current consumer check passes against unmodified Audacity 3.7.8. It does not
+establish compatibility with every future Audacity reader. Changes to the native
+storage adapter, feature serialization or supported upstream consumer require the
+same focused interoperability case. If a necessary feature makes ordinary audio
+projects unreadable by a supported consumer, add an explicit audio-only copy path
+before adopting that format; do not silently lose feature data on ordinary Save.
+Saving a copy in stock Audacity intentionally drops unknown video/link/group/flag
+metadata. Keep the original AuTopsy file for a later full-feature round trip.
+
 Join rules are explicit: heal contiguous pieces only when source/time mapping,
 properties and relationships are compatible. Otherwise create a compound whose
 sequence contains exactly the visible pieces and intentional gaps. Joining after
@@ -546,6 +564,19 @@ edits, trims/untrim, clipboard/range operations, composition, transport effects,
 flags, relinking and preset bounds. Native scenarios in
 `scripts/piped-work/test_fork_features.py` exercise public commands, project save
 and media outputs. `fork-fixtures` checks generated video without opening the app.
+
+`fork-project-compatibility` saves complete native AUP3 projects, including one
+with video, linked/grouped audio and a label, plus one containing only video.
+An explicitly supplied stock Audacity 3 consumer opens, saves/copies and reopens
+both twice. Standard track/clip/label data must match; decoded five-second audio
+mixes must agree within 0.0005 per sample. Original AuTopsy files remain unchanged.
+The receipt records both application identities and test versions. The harness
+owns the private copied consumer, portable preferences and working files, and
+removes them after the check; it never uses a personal project. Consumer shutdown
+uses owned-process termination after saved-copy acknowledgements, because the
+stock scripting Close path can destroy GUI objects on its worker thread. That
+upstream scripting behavior is outside the format contract. Native AuTopsy tests
+still require their normal application exit.
 
 Dedicated `TestVideoEdits.cpp` cases cover all-or-nothing plans, stale expected
 states, interruption before/after publication, repeated absolute requests, bound
