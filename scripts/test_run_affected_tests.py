@@ -46,6 +46,9 @@ class SelectionTests(unittest.TestCase):
         groups, native = runner.select_groups(["src/video/ShowVideoPreview.cpp"])
         self.assertEqual(groups, [])
         self.assertEqual(native, ["src/video/ShowVideoPreview.cpp"])
+        groups, native = runner.select_groups(["src/tracks/ui/CommonTrackControls.cpp"])
+        self.assertEqual(groups, [])
+        self.assertEqual(native, ["src/tracks/ui/CommonTrackControls.cpp"])
 
     def test_renames_deletions_and_untracked_inputs_reach_selection(self) -> None:
         outputs = ["a" * 40 + "\n", "src/video/PlanVideoEdits.h\0old.py\0", "scripts/new_operation.py\0"]

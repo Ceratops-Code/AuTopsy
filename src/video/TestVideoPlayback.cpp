@@ -437,6 +437,32 @@ TEST_CASE("Video edge trimming is frame snapped, reversible and atomically rejec
    REQUIRE_THROWS(TrimVideoClip(timeline, 1, 0, 3));
    REQUIRE(timeline.clips[0].duration == 2);
    REQUIRE(timeline.clips[1].start == 2);
+
+   // Pointer gestures cover both directions, overshoot and fresh repeated
+   // releases without destroying the hidden source frames.
+   auto dragged = CreateVideoTimeline("movie.mp4", 4, 30);
+   REQUIRE(DragVideoClipEdge(dragged, 1, true, 1));
+   REQUIRE_FALSE(DragVideoClipEdge(dragged, 1, true, 1));
+   REQUIRE(DragVideoClipEdge(dragged, 1, true, -10));
+   REQUIRE(dragged.clips[0].start == Approx(0));
+   REQUIRE(dragged.clips[0].sourceStart == Approx(0));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, 3));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, 20));
+   REQUIRE(KeepsOriginalPicture(dragged));
+   SplitClipAt(dragged, 2);
+   REQUIRE(DragVideoClipEdge(dragged, 2, true, 3));
+   REQUIRE(DragVideoClipEdge(dragged, 2, true, -10));
+   REQUIRE(dragged.clips[1].start == Approx(2));
+   REQUIRE(dragged.clips[1].sourceStart == Approx(2));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, -10));
+   REQUIRE(dragged.clips[0].duration == Approx(1.0 / 30));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, 20));
+   REQUIRE(KeepsOriginalPicture(dragged));
+   const auto before = dragged;
+   REQUIRE_THROWS(DragVideoClipEdge(dragged, 1, true, std::numeric_limits<double>::quiet_NaN()));
+   REQUIRE_THROWS(DragVideoClipEdge(dragged, 999, true, 1));
+   REQUIRE(dragged.clips[0].duration == before.clips[0].duration);
+   REQUIRE(dragged.clips[1].sourceStart == before.clips[1].sourceStart);
 }
 
 TEST_CASE("Native video track order composes upper pictures while exposing lower gaps",

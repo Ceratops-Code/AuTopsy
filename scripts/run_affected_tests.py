@@ -78,6 +78,7 @@ NATIVE_INPUTS = (
     "src/clip-groups/EditClipMarkers.cpp", "src/clip-groups/GroupAudioClips.h",
     "src/clip-groups/GroupAudioClips.cpp",
     "src/menus/*.cpp", "src/commands/GetInfoCommand.cpp",
+    "src/tracks/ui/CommonTrackControls.cpp",
     "libraries/lib-project-history/*", "libraries/lib-viewport/*", "CMakeLists.txt", "CMakePresets.json",
 )
 OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "scripts/*.py", "scripts/build/windows/*")

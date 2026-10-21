@@ -145,6 +145,11 @@ BEGIN_POPUP_MENU(TrackMenuTable)
       //First section in the menu doesn't need BeginSection/EndSection
        AppendItem( "Name", OnSetNameID, XXO("Re&name Track..."), POPUP_MENU_FN( OnSetName ) );
 
+   BeginSection("InsertTrack");
+   // One native submenu owns all relative insertion actions.
+   auto additions = std::make_shared<PopupSubMenu>("AddTrack", XXO("Add track..."), *this);
+   Append(additions);
+   mStack.push_back(additions.get());
    BeginSection("InsertAudioTrack");
       AppendItem("AddTrackBefore", OnAddTrackBeforeID, XXO("Add Audio Track &Before This Track"),
          POPUP_MENU_FN(OnInsertAudioTrack), enableWhenIdle);
@@ -160,6 +165,8 @@ BEGIN_POPUP_MENU(TrackMenuTable)
          POPUP_MENU_FN(OnInsertVideoTrack),enableWhenIdle);
    EndSection();
 #endif
+   mStack.pop_back();
+   EndSection();
 
    BeginSection( "Move" );
       AppendItem( "Up",

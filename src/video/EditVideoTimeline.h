@@ -285,6 +285,32 @@ inline bool TrimVideoClip(Timeline &timeline, uint64_t id, double start, double 
    return true;
 }
 
+// Pointer gestures stop at available source frames and neighboring clips.
+// The strict range-edit command still reports invalid requested bounds.
+inline bool DragVideoClipEdge(Timeline &timeline, uint64_t id, bool left, double at)
+{
+   RequireWellFormedTimeline(timeline);
+   if (!std::isfinite(at)) throw std::runtime_error("Choose a finite video edge time.");
+   const auto found = std::find_if(timeline.clips.begin(), timeline.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == timeline.clips.end()) throw std::runtime_error("The video clip was removed.");
+   const auto source = SourceFor(timeline, *found);
+   const auto origin = found->start - found->sourceStart;
+   auto minimum = left ? std::max(0.0, origin) : found->start + 1 / source.frameRate;
+   auto maximum = left ? found->End() - 1 / source.frameRate : origin + source.duration;
+   for (const auto &other : timeline.clips) if (other.id != id) {
+      if (left && other.End() <= found->start + 1e-7) minimum = std::max(minimum, other.End());
+      if (!left && other.start >= found->End() - 1e-7) maximum = std::min(maximum, other.start);
+   }
+   // Round constraints inward; rounding the pointer alone can cross a
+   // non-frame-aligned neighbor by half a frame.
+   minimum = origin + std::ceil((minimum - origin) * source.frameRate - 1e-7) / source.frameRate;
+   maximum = origin + std::floor((maximum - origin) * source.frameRate + 1e-7) / source.frameRate;
+   if (minimum > maximum + 1e-7) return false;
+   at = std::clamp(at, minimum, maximum);
+   return TrimVideoClip(timeline, id, left ? at : found->start, left ? found->End() : at);
+}
+
 // A borrowed evaluation result is valid only while its input timelines are
 // unchanged. It is used immediately by preview/export adapters, never persisted
 // or retained across native edits. Ordering and gap selection live here so the

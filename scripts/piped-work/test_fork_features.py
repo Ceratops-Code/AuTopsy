@@ -32,9 +32,10 @@ from run_fork_test_harness import (
     check_neutral_preview_fixture,
     check_portable_audacity_projects,
     check_test_display_selection,
+    check_video_interactions,
     connected_test_displays,
-    drag_owned_video_clip,
     executable_version,
+    operate_owned_video_track,
     painted_video_tracks,
     read_audio_project_state,
     ready_video_preview,
@@ -267,12 +268,12 @@ def check_media(client, root, ffmpeg, ffprobe):
     assert client.data("GetLinkedMediaClips") == moved
     client.send("MoveAudioClipGroup: Track=1 At=3 Start=0")
     assert client.data("GetLinkedMediaClips") == linked
-    drag_owned_video_clip(client, 4, 3.5, track=0)
+    operate_owned_video_track(client, 4, 3.5, track=0)
     trimmed = client.data("GetLinkedMediaClips")
     assert all(abs(row["end"] - 3.5) < 0.04 for row in trimmed), trimmed
-    drag_owned_video_clip(client, 3.5, 3, track=0, cancel=True)
+    operate_owned_video_track(client, 3.5, 3, track=0, cancel=True)
     assert client.data("GetLinkedMediaClips") == trimmed
-    drag_owned_video_clip(client, 3.5, 3.5, track=0)
+    operate_owned_video_track(client, 3.5, 3.5, track=0)
     assert client.data("GetLinkedMediaClips") == trimmed
     client.send("Undo")
     assert client.data("GetLinkedMediaClips") == linked
@@ -436,7 +437,7 @@ def check_video(client, root, ffmpeg, ffprobe):
     assert copied.read_bytes() == before
     client.file("ExportVideoMix", source, "Overwrite=1", success=False)
     client.send("SelectAll")
-    drag_owned_video_clip(client, 2.5, 3.5)
+    operate_owned_video_track(client, 2.5, 3.5)
     together = client.data("GetVideoClips")["clips"]
     moved_tracks = client.data("GetInfo: Type=Tracks Format=JSON")
     delta = together[0]["start"]
@@ -454,13 +455,13 @@ def check_video(client, root, ffmpeg, ffprobe):
     client.send("DeleteVideoClip: Id=1")
     client.send("DeleteVideoClip: Id=1")
     before_drag = client.data("GetVideoClips")["clips"]
-    drag_owned_video_clip(client, 2.5, 1.5, cancel=True)
+    operate_owned_video_track(client, 2.5, 1.5, cancel=True)
     assert client.data("GetVideoClips")["clips"] == before_drag
-    panel = drag_owned_video_clip(client, 2.5, 1.5)
+    panel = operate_owned_video_track(client, 2.5, 1.5)
     moved = client.data("GetVideoClips")
     assert len(moved["clips"]) == 1 and moved["clips"][0]["start"] == 1
     capture_owned_project(panel, root / "_main-video-track.png")
-    drag_owned_video_clip(client, 1.5, 1.5)
+    operate_owned_video_track(client, 1.5, 1.5)
     assert client.data("GetVideoClips") == moved
     client.send("MoveVideoClip: Id=2 Start=1")
     assert client.data("GetVideoClips") == moved
@@ -601,7 +602,7 @@ def check_video_tracks(client, root, ffmpeg, ffprobe):
     before = client.data("GetVideoClips")["clips"]
     client.send("MoveVideoClip: Track=0 Id=2 ToTrack=1 Start=0", success=False)
     assert client.data("GetVideoClips")["clips"] == before
-    drag_owned_video_clip(client, 1.5, 1.5, track=0, to_track=1)
+    operate_owned_video_track(client, 1.5, 1.5, track=0, to_track=1)
     assert client.data("GetVideoClips")["clips"] == before
     client.send("MoveVideoClip: Track=1 Id=1 Start=4")
     # With the soundtrack deleted, Space must still use the native transport
@@ -633,7 +634,7 @@ def check_video_tracks(client, root, ffmpeg, ffprobe):
     ), report
     client.send("SelectTime: Start=0 End=0")
     painted_video_tracks(client)
-    drag_owned_video_clip(client, 1.5, 1.5, track=0, to_track=1)
+    operate_owned_video_track(client, 1.5, 1.5, track=0, to_track=1)
     combined = client.data("GetVideoClips")
     assert len(combined["tracks"]) == 2 and {
         clip["track"] for clip in combined["clips"]
@@ -930,6 +931,8 @@ def worker(args, root):
         check_project_compatibility(client, root)
     elif args.case == "video":
         check_video(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "video-interactions":
+        check_video_interactions(client, root)
     elif args.case == "media":
         check_media(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "branding":
@@ -1038,6 +1041,7 @@ def main():
             "history-view",
             "project-compatibility",
             "video",
+            "video-interactions",
             "media",
             "preview",
             "branding",
@@ -1141,7 +1145,7 @@ def main():
         ("tone-stereo.wav", 2),
     ):
         write_tone(root / name, channels)
-    if args.case in ("video", "media", "project-compatibility"):
+    if args.case in ("video", "video-interactions", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,

@@ -10,7 +10,7 @@ struct VideoTrackStatus {
    int leftOffset{}, width{}, height{}, usableWidth{};
    double viewStart{}, viewEnd{};
    struct Row {
-      int index{}, x{}, y{}, width{}, height{}, dataLeft{}, dataWidth{};
+      int index{}, x{}, y{}, width{}, height{}, dataLeft{}, dataWidth{}, dataTop{};
       bool selected{};
    };
    uintptr_t panelHandle{};

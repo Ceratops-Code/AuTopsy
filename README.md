@@ -53,6 +53,9 @@ The inherited audio tools are covered by the
 [upstream Audacity manual](https://manual.audacityteam.org/).
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
+To locate a moved source, stop playback, choose **File > Relink Video Media...**,
+select the old source and then its replacement file. Clip positions, trims and
+links are retained; the already imported audio remains independently editable.
 
 Projects use standard **`.aup3`** storage. The focused compatibility test opens
 AuTopsy projects in unmodified Audacity **3.7.8** and **3.7.9**, checking audio
@@ -116,7 +119,11 @@ release outputs. Python lint covers the fork's test driver and repository tools;
 inherited scripting examples retain their upstream conventions.
 The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
-`test_fork_features.py` owns the feature scenarios and result records.
+`test_fork_features.py` dispatches the feature scenarios and owns result records.
+The focused `fork-video-interactions` case exercises real clip clicks,
+double-click selection, Delete/Backspace, reversible edge drags, canceled edits,
+right-click clipboard actions in clips and gaps, and the common **Add track...**
+submenu. It uses only generated media and the owned test process.
 Preview tests generate their own neutral 16-second colour-pattern video and
 tone; personal video inputs are not accepted. `fork-fixtures` checks that media
 without opening AuTopsy.

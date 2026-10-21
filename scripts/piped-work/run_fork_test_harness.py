@@ -839,10 +839,20 @@ def ready_video_preview(client):
         time.sleep(0.1)
 
 
-def drag_owned_video_clip(
-    client, start_time, end_time, track=None, to_track=None, cancel=False
+def operate_owned_video_track(
+    client, start_time, end_time=None, track=None, to_track=None, cancel=False,
+    gesture="drag", area="header", menu_steps=(), key=None
 ):
-    """Exercise the real TrackPanel's clip header; target only the owned PID."""
+    """Exercise native clip gestures and popup menus, targeting only the owned PID.
+
+    Coordinates come from the painted native row, including its actual data
+    origin. Menu choices use real keyboard input in the owned foreground window;
+    cancellation always releases held input before restoring the previous focus.
+    """
+    if end_time is None:
+        end_time = start_time
+    if gesture not in ("drag", "click", "double-click", "context"):
+        raise ValueError("Unknown native video gesture: " + gesture)
     info = painted_video_tracks(client)
     if not all(
         info["viewStart"] <= time <= info["viewEnd"] for time in (start_time, end_time)
@@ -873,9 +883,11 @@ def drag_owned_video_clip(
         x = row["dataLeft"] + round(
             (time - info["viewStart"])
             / (info["viewEnd"] - info["viewStart"])
-            * info["videoTrackDataWidth"]
+            * row["dataWidth"]
         )
-        return x, row.get("dataTop", row["y"]) + 12
+        if area == "controls":
+            x = row["x"] + (row["dataLeft"] - row["x"]) // 2
+        return x, row["dataTop"] + (50 if area == "picture" else 12)
 
     x0, y0 = position(start_time, source)
     x1, y1 = position(end_time, target)
@@ -896,8 +908,13 @@ def drag_owned_video_clip(
             ("extra", ctypes.c_size_t),
         ]
 
+    class Key(ctypes.Structure):
+        _fields_ = [("code", ctypes.c_uint16), ("scan", ctypes.c_uint16),
+                    ("flags", ctypes.c_uint32), ("time", ctypes.c_uint32),
+                    ("extra", ctypes.c_size_t)]
+
     class Union(ctypes.Union):
-        _fields_ = [("mouse", Mouse)]
+        _fields_ = [("mouse", Mouse), ("keyboard", Key)]
 
     class Input(ctypes.Structure):
         _fields_ = [("kind", ctypes.c_uint32), ("value", Union)]
@@ -952,6 +969,7 @@ def drag_owned_video_clip(
         ctypes.c_uint,
         ctypes.POINTER(ctypes.c_size_t),
     ]
+    user.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
     user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
     user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
     user.GetWindowDpiAwarenessContext.argtypes = [ctypes.c_void_p]
@@ -990,6 +1008,15 @@ def drag_owned_video_clip(
         packet = Input(0, Union(mouse=Mouse(0, 0, 0, flags, 0, 0)))
         if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
             raise RuntimeError("Windows rejected the owned test's mouse-button event.")
+
+    def keyboard(code):
+        if user.GetForegroundWindow() != root:
+            raise RuntimeError("The owned window lost foreground before keyboard input.")
+        for flags in (0, 2):
+            packet = Input(1, Union(keyboard=Key(code, 0, flags, 0, 0)))
+            if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
+                raise RuntimeError("Windows rejected the owned test's keyboard event.")
+        time.sleep(0.08)
 
     def send(kind, flags, x, y):
         reply = ctypes.c_size_t()
@@ -1062,37 +1089,50 @@ def drag_owned_video_clip(
         positioned = True
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
-        button(2)
-        pressed = True
         thread = user.GetWindowThreadProcessId(panel, None)
-        deadline = time.monotonic() + 1
-        while True:
-            state = Gui()
-            state.size = ctypes.sizeof(state)
-            if (
-                user.GetGUIThreadInfo(thread, ctypes.byref(state))
-                and state.capture == panel
-            ):
-                break
-            if time.monotonic() >= deadline:
-                raise RuntimeError(
-                    "The owned pane did not capture the held mouse input."
-                )
-            time.sleep(0.01)
         user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
-        for step in range(1, 6):
-            send(
-                0x200,
-                1,
-                round(x0 + (x1 - x0) * step / 5),
-                round(y0 + (y1 - y0) * step / 5),
-            )
-        if cancel:
-            for kind in (0x100, 0x101):
-                send(kind, 0x1B, 0, 0)
-        send(0x202, 0, x1, y1)
-        button(4)
-        pressed = False
+        if gesture == "context":
+            button(8)
+            pressed = True
+            time.sleep(0.08)
+            button(16)
+            pressed = False
+            deadline = time.monotonic() + 3
+            while True:
+                state = Gui()
+                state.size = ctypes.sizeof(state)
+                if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.flags & 4:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Right-click did not open an owned native popup menu.")
+                time.sleep(0.01)
+            for code in menu_steps or (0x1B,):
+                keyboard(code)
+        else:
+            for _ in range(2 if gesture == "double-click" else 1):
+                button(2)
+                pressed = True
+                if gesture == "drag":
+                    deadline = time.monotonic() + 1
+                    while True:
+                        state = Gui()
+                        state.size = ctypes.sizeof(state)
+                        if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.capture == panel:
+                            break
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("The owned pane did not capture the held mouse input.")
+                        time.sleep(0.01)
+                    for step in range(1, 6):
+                        send(0x200, 1, round(x0 + (x1-x0)*step/5), round(y0 + (y1-y0)*step/5))
+                    if cancel:
+                        keyboard(0x1B)
+                    send(0x202, 0, x1, y1)
+                button(4)
+                pressed = False
+                time.sleep(0.06)
+        if key is not None:
+            keyboard(key)
+
     finally:
         if pressed:
             try:
@@ -1102,7 +1142,7 @@ def drag_owned_video_clip(
                     send(0x100, 0x1B, 0, 0)
             finally:
                 # Input release must survive a missing HWND or failed Escape.
-                button(4)
+                button(16 if gesture == "context" else 4)
         user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
         current = Point()
         user.GetCursorPos(ctypes.byref(current))
@@ -1198,3 +1238,97 @@ def capture_owned_project(panel, path):
         gdi.DeleteObject(bitmap)
         gdi.DeleteDC(memory)
         user.ReleaseDC(window, screen)
+
+
+def check_video_interactions(client, root):
+    """Mouse/keyboard regressions on synthetic clips, independent of export/playback."""
+    client.file("ImportVideo", root / "source.mp4")
+    client.send('UnlinkMediaClips: Clips="0:0"')
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=2 End=2")
+    client.send("Split")
+    client.send("MoveVideoClip: Track=0 Id=2 Start=3")
+    client.send("FitInWindow")
+
+    def clips():
+        return client.data("GetVideoClips")["clips"]
+
+    def bounds(expected):
+        actual = [(round(row["start"], 2), round(row["end"], 2)) for row in clips()]
+        assert actual == expected, actual
+
+    original = clips()
+    for gesture in ("click", "double-click", "click"):
+        operate_owned_video_track(client, 0.8, track=0, gesture=gesture, area="picture")
+        selection = client.data("GetInfo: Type=Selection Format=JSON")
+        assert selection["Start"] == 0 and selection["End"] == 2, selection
+        assert clips() == original
+    # The same single click must make Delete work through the keyboard command,
+    # not a script that bypasses its selection preconditions.
+    operate_owned_video_track(client, 0.8, track=0, gesture="click", area="picture", key=0x2E)
+    bounds([(1, 3)])
+    client.send("Undo")
+    assert clips() == original
+    operate_owned_video_track(client, 3.8, track=0, gesture="double-click", area="picture", key=0x08)
+    bounds([(0, 2)])
+    client.send("Undo")
+    assert clips() == original
+
+    # Selecting one of two touching clips must not move its neighbor.
+    client.send("MoveVideoClip: Track=0 Id=2 Start=2")
+    operate_owned_video_track(client, 0.8, track=0, gesture="click")
+    operate_owned_video_track(client, 0.8, 0.3, track=0, cancel=True)
+    bounds([(0, 2), (2, 4)])
+    client.send("MoveVideoClip: Track=0 Id=2 Start=3")
+    original = clips()
+    for _ in range(2):
+        operate_owned_video_track(client, 2, 1.5, track=0)
+        bounds([(0, 1.5), (3, 5)])
+        operate_owned_video_track(client, 2.99, 3.5, track=0)
+        bounds([(0, 1.5), (3.5, 5)])
+        operate_owned_video_track(client, 3.5, 3, track=0, cancel=True)
+        bounds([(0, 1.5), (3.5, 5)])
+        operate_owned_video_track(client, 3.5, 3, track=0)
+        bounds([(0, 1.5), (3, 5)])
+        operate_owned_video_track(client, 1.5, 2, track=0)
+        assert clips() == original
+
+    # Popup Copy on a clip, cancel, then Paste in a gap and on an empty row.
+    operate_owned_video_track(client, 0.8, track=0, gesture="context", area="picture",
+                             menu_steps=(0x24, 0x28, 0x0D))
+    assert clips() == original
+    operate_owned_video_track(client, 2.5, track=0, gesture="context", area="picture")
+    assert clips() == original
+    for _ in range(2):
+        operate_owned_video_track(client, 2.5, track=0, gesture="context", area="picture",
+                                 menu_steps=(0x24, 0x0D))
+        inserted = clips()
+        assert len(inserted) == 3 and abs(inserted[1]["start"] - 2.5) < 0.05, inserted
+        client.send("Undo")
+        assert clips() == original
+    client.send("NewVideoTrack")
+    for _ in range(2):
+        operate_owned_video_track(client, 0.5, track=2, gesture="context", area="picture",
+                                 menu_steps=(0x24, 0x28, 0x28, 0x0D))
+        pasted = [clip for clip in clips() if clip["track"] == 2]
+        assert len(pasted) == 1 and abs(pasted[0]["start"] - 0.5) < 0.05, pasted
+        client.send("Undo")
+        assert clips() == original
+    before = client.data("GetInfo: Type=Tracks Format=JSON")
+    # Rename is first, Add track... second. Open the submenu and choose video
+    # after; cancellation and repetition exercise the real common track menu.
+    operate_owned_video_track(client, 0.5, track=0, gesture="context", area="controls",
+                             menu_steps=(0x24, 0x28, 0x27, 0x1B, 0x1B))
+    assert client.data("GetInfo: Type=Tracks Format=JSON") == before
+    for steps, index, kind in (
+        ((0x24,), 0, "wave"), ((0x24, 0x28), 1, "wave"),
+        ((0x23, 0x26), 0, "video"), ((0x23,), 1, "video")
+    ):
+        for _ in range(2):
+            operate_owned_video_track(client, 0.5, track=0, gesture="context", area="controls",
+                                     menu_steps=(0x24, 0x28, 0x27, *steps, 0x0D))
+            after = client.data("GetInfo: Type=Tracks Format=JSON")
+            assert len(after) == len(before) + 1 and after[index]["kind"] == kind, after
+            client.send("Undo")
+            assert client.data("GetInfo: Type=Tracks Format=JSON") == before
+    client.file("SaveProject2", root / "_video-interactions.aup3")

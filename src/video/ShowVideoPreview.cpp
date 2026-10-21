@@ -731,6 +731,7 @@ public:
          out.Key("x"); out.Int(row.x); out.Key("y"); out.Int(row.y);
          out.Key("width"); out.Int(row.width); out.Key("height"); out.Int(row.height);
          out.Key("dataLeft"); out.Int(row.dataLeft); out.Key("dataWidth"); out.Int(row.dataWidth);
+         out.Key("dataTop"); out.Int(row.dataTop);
          out.Key("selected"); out.Bool(row.selected); out.EndObject();
       }
       out.EndArray();
