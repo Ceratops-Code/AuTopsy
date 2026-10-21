@@ -109,7 +109,19 @@ deliverables:
                 - -R
                 - "{test_name}"
                 - --no-tests=error
+  apps:
+    autopsy:
+      source: .
+      manifest: win/Inno_Setup_Wizard/audacity.iss.in
+      prerequisites: [windows-installer]
+      actions:
+        validate:
+          requires:
+            capabilities: []
+          no-op: Installer payload checks belong to the windows-installer package; there is no separate application scan.
         install:
+          requires:
+            capabilities: []
           parameters: [installer_path]
           steps:
             - run:

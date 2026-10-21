@@ -477,7 +477,7 @@ Signing is a separate service approval and is not claimed by this job.
 Selected desktop cases can run through the SDLC package test operation with
 `build_dir` naming the configured native build and `test_name` naming a
 CTest selection, for example `^fork-media$`. An empty selection fails.
-The package's install operation takes `installer_path` from the accepted build
+The application's install operation takes `installer_path` from the accepted build
 manifest and runs that installer silently. It installs into Program Files/AuTopsy;
 close the application first. Deployment never copies a source/build tree.
 The media case covers linked video/audio movement and trim/split behavior,
