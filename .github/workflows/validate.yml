@@ -81,8 +81,6 @@ jobs:
       - name: Build installer from this revision
         id: installer
         run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
-      - name: Check synthetic media fixture without opening AuTopsy
-        run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --test-existing-build
       - name: Upload unsigned installer and source manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

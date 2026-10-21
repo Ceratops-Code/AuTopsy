@@ -234,6 +234,31 @@ def _build_installer(source: Path, build: Path, inno: Path) -> dict:
     for pending in (build / "__build_command_failure.json.pending",
                     build / "package/__build-manifest.json.pending"):
         pending.unlink(missing_ok=True)
+    revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
+    dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
+    if os.environ.get("GITHUB_ACTIONS") == "true" and (dirty or revision != os.environ.get("GITHUB_SHA")):
+        raise RuntimeError("Hosted installer source differs from the workflow's checked-out revision.")
+    dependency_inputs = {name: {"url": value["url"], "sha256": value["sha256"]}
+                         for name, value in SDK_INPUTS.items()}
+    checks = [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}]
+    manifest = build / "package/_build-manifest.json"
+    if manifest.is_file() and not dirty:
+        try:
+            accepted = json.loads(manifest.read_text(encoding="utf-8"))
+            completed = build / "package" / accepted["filename"]
+            if (accepted.get("schema") == "autopsy-windows-installer.v1"
+                    and accepted.get("source_revision") == revision
+                    and accepted.get("source_dirty") is False
+                    and accepted.get("dependency_inputs") == dependency_inputs
+                    and accepted.get("checks") == checks
+                    and completed.parent.resolve() == (build / "package").resolve()
+                    and completed.is_file() and sha256(completed) == accepted.get("sha256")):
+                diagnostics.unlink(missing_ok=True)
+                return accepted
+        except (ValueError, KeyError, TypeError):
+            # An absent or incomplete receipt cannot authorize reuse. The normal
+            # build recreates it only after the media check and packaging pass.
+            pass
     mpv = prepare_sdk("mpv", SDK_INPUTS["mpv"], dependency_root, source, diagnostics)
     ffmpeg = prepare_sdk("ffmpeg", SDK_INPUTS["ffmpeg"], dependency_root, source, diagnostics)
     cmake = shutil.which("cmake")
@@ -249,6 +274,13 @@ def _build_installer(source: Path, build: Path, inno: Path) -> dict:
     ]
     run_command(configure, source, diagnostics)
     run_command([cmake, "--build", str(build), "--config", "Release", "--parallel", "4"], source, diagnostics)
+    ctest = shutil.which("ctest")
+    if not ctest:
+        raise RuntimeError("CTest is missing from the current build environment.")
+    # Source-only CI has no native installer yet. Its portable model and builder
+    # tests run separately; this real encoded-media check gates every new package.
+    run_command([ctest, "--test-dir", str(build), "-C", "Release", "--output-on-failure",
+                 "-R", "^fork-fixtures$", "--no-tests=error"], source, diagnostics)
     run_command([cmake, "--build", str(build), "--config", "Release", "--target", "innosetup"], source, diagnostics)
     descriptor = json.loads((build / "package/_installer-x64.json").read_text(encoding="utf-8"))
     installer = build / "package" / descriptor["filename"]
@@ -256,15 +288,14 @@ def _build_installer(source: Path, build: Path, inno: Path) -> dict:
         raise RuntimeError("The packager did not produce its declared installer.")
     if sha256(installer) != descriptor["sha256"]:
         raise RuntimeError("The packaged installer differs from its declared identity.")
-    revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
-    dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
-    if os.environ.get("GITHUB_ACTIONS") == "true" and (dirty or revision != os.environ.get("GITHUB_SHA")):
-        raise RuntimeError("Hosted installer source differs from the workflow's checked-out revision.")
+    final_revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
+    final_dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
+    if final_revision != revision or final_dirty != dirty:
+        raise RuntimeError("Installer source changed during the build; no accepted manifest was written.")
     result = {
         "schema": "autopsy-windows-installer.v1", "source_revision": revision, "source_dirty": dirty,
         "filename": descriptor["filename"], "sha256": descriptor["sha256"], "signed": False,
-        "dependency_inputs": {name: {"url": value["url"], "sha256": value["sha256"]}
-                              for name, value in SDK_INPUTS.items()},
+        "dependency_inputs": dependency_inputs, "checks": checks,
     }
     write_json(build / "package/_build-manifest.json", result)
     diagnostics.unlink(missing_ok=True)

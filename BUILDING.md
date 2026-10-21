@@ -481,10 +481,16 @@ Its repository checks precede the installer job. The uploaded unsigned installer
 and source manifest are retained for 14 days; failure details for 7 days.
 Signing is a separate service approval and is not claimed by this job.
 
-The SDLC package test operation checks `fork-fixtures` without opening AuTopsy.
+Every new installer build runs `fork-fixtures` after compilation and before
+packaging, without opening AuTopsy. The build manifest records its passing result
+and source revision. Repeated builds reuse that accepted installer only when the
+clean source, dependency inputs and installer integrity still match the receipt.
+Portable model and installer-producer tests run in the repository test operation;
+source-only CI does not require an already-built Windows application.
 The package build operation takes explicit `build_dir` and `inno_compiler`
 inputs, so local builds can reuse their task-owned build and compiler paths.
-`AUTOPSY_VIDEO_BUILD_DIR` selects an existing native build, defaulting to
+For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
+an existing native build, defaulting to
 `.build/_windows-installer`. For a separate desktop test session,
 `AUTOPSY_VIDEO_TEST_NAME` selects a CTest case such as `^fork-media$`; empty
 selections fail. The same builder's `--test-existing-build`, `--build-dir` and

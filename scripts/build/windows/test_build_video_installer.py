@@ -89,7 +89,7 @@ class InstallerBuildTests(unittest.TestCase):
                     process.Close()
 
     def test_repeat_and_interrupt_each_build_command(self):
-        for boundary in range(1, 6):
+        for boundary in range(1, 9):
             for after in (False, True):
                 with self.subTest(boundary=boundary, after=after), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
                     root = Path(temporary)
@@ -136,6 +136,33 @@ class InstallerBuildTests(unittest.TestCase):
                         self.assertEqual(manifest.stat().st_mtime_ns, timestamp)
                         self.assertFalse(first["signed"])
                         self.assertEqual(first["source_revision"], "a" * 40)
+                        self.assertEqual(first["checks"], [{"name": "fork-fixtures", "result": "passed",
+                                                           "source_revision": "a" * 40}])
+
+    def test_failed_media_check_cannot_package_an_installer(self):
+        with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            source, build = root / "source", root / "build"
+            source.mkdir()
+            (source / "CMakeLists.txt").write_text("project(test)")
+            inno = root / "ISCC.exe"
+            inno.write_bytes(b"test compiler")
+            commands = []
+
+            def run(arguments, _source, _diagnostics):
+                commands.append(arguments)
+                if "^fork-fixtures$" in arguments:
+                    raise RuntimeError("encoded-media check failed")
+                return "a" * 40 + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
+
+            with mock.patch.object(builder, "prepare_sdk", return_value=root), \
+                    mock.patch.object(builder.shutil, "which", return_value="cmake"), \
+                    mock.patch.object(builder, "run_command", side_effect=run), \
+                    mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                with self.assertRaisesRegex(RuntimeError, "encoded-media check failed"):
+                    builder.build_installer(source, build, inno)
+            self.assertFalse(any("innosetup" in arguments for arguments in commands))
+            self.assertFalse((build / "package/_build-manifest.json").exists())
 
     def test_sdk_publication_survives_process_exit_at_each_file_effect(self):
         with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
