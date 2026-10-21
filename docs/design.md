@@ -417,12 +417,65 @@ user's responsibility; the product must not delete them to repair a cache.
 | `.build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
 | Installer build `package` | `build_video_installer.py`: completed installer and build manifest | Deterministic builder retains its accepted matching output, cleans pending owned build work; a new candidate receives its own content identity |
 | Test work roots | `run_fork_test_harness.py`: owned processes, generated neutral footage and result records | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
+| Failure diagnostic payloads, target lifecycle | Each operation's existing owner: evidence for a named unresolved question | Default: persist none; when needed, one unresolved report per operation/target, seven-day expiry, declared finite byte/group limits; matching success removes obsolete failure payloads |
 | Future complex-preview chunks | `PrepareVideoPreview` orchestration with renderer | Same source/plan version grouping and leases; finite cache bound before enabling; no unbounded per-play history |
 
 Do not create output groups without declaring owner, grouping, trigger and finite
 retention. Completed user exports are user-owned documents, replaced only with
 explicit overwrite; they are not cache versions. Operational logs never become
 execution progress. New processes use current state rather than replaying logs.
+
+### Cleanup and diagnostic lifecycle
+
+Cleanup belongs to the code that creates the files. Its ownership information and
+live-worker leases distinguish temporary, accepted, obsolete and user-owned work.
+A generic directory sweeper lacks that context and can delete a live preview,
+accepted build or active task workspace. Use the existing owning entry point,
+without a separate cleanup service or manual housekeeping procedure.
+
+Desired state after completion: the requested output and necessary small records
+remain; staging, checkpoints and obsolete failure diagnostics are gone. Predictable
+invalid states include leftover pending files, duplicate diagnostic copies,
+expired reports, an old worker removing a newer failure, and cleanup touching
+live readers, another operation or user media. Owners prevent these through
+scoped paths, exclusive ownership/leases and current target/input identities.
+
+- Report failures through the normal result first. Persist extra diagnostics only
+  when they answer a named unresolved question that the result cannot answer.
+  "Retained for later diagnostics" alone is insufficient. Use the smallest useful
+  capture and one authoritative copy, with secrets removed.
+- A captured report declares its owner, operation, target/input identity, purpose
+  and expiry. Keep at most one unresolved report per operation/target, expiring
+  after seven days by default; each owner declares finite group/file byte limits
+  before enabling capture. Explicitly requested evidence can have a different
+  finite policy or become a user-owned document.
+- After the same operation reaches its declared successful outcome, automatically
+  remove the failure payload it supersedes. Remove staging on success/cancellation.
+  Older or stale workers cannot clear newer diagnostics or another target's files.
+  Success must not depend on an agent remembering a later deletion command.
+- On owner startup and each normal invocation, remove abandoned staging and
+  expired/obsolete reports under exclusive ownership. Expiry is enforced on the
+  next such trigger even if the application was closed when the deadline passed.
+  Preserve leased files and inspect current state after interruption; logs never
+  become a recovery checkpoint or a reason to skip an uncompleted operation.
+- A cleanup error names the remaining owned paths and cause. Keep the completed
+  output's acceptance intact, report cleanup as a separate remaining effect, and
+  attempt only that unmet cleanup on the next normal call. Do not rerun an accepted
+  export, build or test merely to retry deleting its diagnostics.
+
+Acceptance receipts serve a different purpose from diagnostic payloads: retain
+the small result, input/check versions and original identity needed for reuse and
+failure precedence, under the existing finite bounds. Store bulky optional traces
+separately so their deletion cannot rewrite an accepted result or remove the
+record of an applicable failed check. The current affected-test runner embeds
+failure evidence in its bounded immutable receipts; separating disposable payloads
+is still implementation work. This lifecycle is the target for new/revised flows,
+not a claim that every existing owner already implements it.
+
+Focused owner tests cover failure followed by matching success, repeated cleanup,
+expiry, cancellation, stale-worker races and interruption immediately before/after
+diagnostic publication/deletion. The fresh normal entry point must converge on
+the declared retained files while leaving active work and acceptance IDs intact.
 
 Builds publish source/build identities and checks. Keep accepted installer receipts
 stable when later tests/docs change. Interruption during release upload leaves a
@@ -478,6 +531,7 @@ These are proposed thresholds, not measured release guarantees.
 | Crop/PiP, source/proxy resolution changes and nested parents | Composition retains original framing and resolves parent-relative placement | Exact fractional geometry and source time; model cases pass, rendered/native round-trip still required |
 | Any audio/video edit followed by Undo/Redo at fixed zoom, horizontally and vertically scrolled | Native history retains viewport or clamps only to document bounds | No zoom change or gratuitous jump; `fork-history-view` passed twelve transitions on the corrected build |
 | Seek/edit/cancel during background preparation | Preview ignores obsolete work, cache protects live readers | No stale publication, bounded retained files; worker cancellation and lease cases |
+| Failure then matching success; expiry/cancellation; interruption at diagnostic write/delete | Owning flow removes obsolete payloads without repeating accepted work | Zero superseded diagnostics or staging after successful cleanup; active files and original acceptance IDs survive; focused owner cases required |
 | Native API contract changes | Only adapter contract case fails, model cases still run | Independent core build plus supported-host adapter build/tests |
 
 Before claiming VFR frame accuracy, add timestamp-indexed media and measure actual
@@ -583,7 +637,12 @@ require the applicable approval before creation.
 - **Upstream coupling:** native Track, registry and history contracts can change.
   Owner: adapters; model/evaluator tests must remain independently buildable.
 - **Desktop automation:** held-mouse capture limits existing evidence. Keep the
-  screen guard and the failure report; no display debugging in this task.
+  screen guard; no display debugging in this task. Diagnostic payloads follow the
+  owner/expiry lifecycle above rather than indefinite retention.
+- **Diagnostic lifecycle adoption:** existing bounded check receipts can contain
+  bulky failure evidence. Owner: affected-test runner; separate disposable payloads
+  from immutable result facts when adopting the lifecycle above. A passing new
+  check must not erase the history needed to reject an older applicable pass.
 - **Security/signing:** 136 inherited high/critical findings were recorded for the
   preview, including three critical. They remain open, as requested; current
   publication does not claim they are fixed or that signing sponsorship exists.
