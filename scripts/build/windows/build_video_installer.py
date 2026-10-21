@@ -310,16 +310,45 @@ def build_installer(source: Path, build: Path, inno: Path) -> dict:
         return _build_installer(source, build, inno)
 
 
+def test_existing_installer_build(source: Path, build: Path, test_name: str) -> dict:
+    """Run the selected CTest case without compiling, installing, or opening AuTopsy.
+
+    The default release check is the neutral media fixture. Explicit desktop
+    selections remain available for a separate interactive test session.
+    """
+    source, build = source.resolve(), build.resolve()
+    if not test_name.strip():
+        raise ValueError("Choose a nonempty CTest selection.")
+    if not (build / "CTestTestfile.cmake").is_file():
+        raise RuntimeError(f"Configure the native installer build before testing it: {build}")
+    ctest = shutil.which("ctest")
+    if not ctest:
+        raise RuntimeError("CTest is missing from the current build environment.")
+    diagnostics = build / "_test_command_failure.json"
+    with build_lock(build):
+        diagnostics.with_name("_" + diagnostics.name + ".pending").unlink(missing_ok=True)
+        run_command([ctest, "--test-dir", str(build), "-C", "Release",
+                     "--output-on-failure", "-R", test_name, "--no-tests=error"], source, diagnostics)
+        diagnostics.unlink(missing_ok=True)
+    return {"status": "passed", "build_directory": str(build), "tests": test_name}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
-    parser.add_argument("--build-dir", type=Path, required=True)
+    parser.add_argument("--build-dir", type=Path, default=Path(
+        os.environ.get("AUTOPSY_VIDEO_BUILD_DIR", ".build/_windows-installer")))
+    parser.add_argument("--test-existing-build", action="store_true")
+    parser.add_argument("--test-name", default=os.environ.get("AUTOPSY_VIDEO_TEST_NAME", "^fork-fixtures$"))
     parser.add_argument("--inno-compiler", type=Path, default=Path(
         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     ) / "Inno Setup 6/ISCC.exe")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("The Windows installer requires a Windows build host.")
+    if args.test_existing_build:
+        print(json.dumps(test_existing_installer_build(args.source_dir, args.build_dir, args.test_name)))
+        return
     result = build_installer(args.source_dir, args.build_dir, args.inno_compiler)
     print(json.dumps(result, separators=(",", ":")))
     if output := os.environ.get("GITHUB_OUTPUT"):

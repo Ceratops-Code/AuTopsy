@@ -16,6 +16,87 @@ import wave
 from pathlib import Path
 
 
+def write_neutral_preview_video(ffmpeg, output):
+    """Create a 16-second synthetic picture/tone in a caller-owned test directory.
+
+    The caller supplies a fresh marked work root or a private temporary directory.
+    Only the completed fixture and one private pending sibling belong to this
+    operation. Repeated calls keep the completed fixture; interrupted encoding
+    leaves no published partial video and a fresh call discards abandoned staging.
+    """
+    output = Path(output)
+    pending = output.with_name("_" + output.stem + ".pending.mp4")
+    pending.unlink(missing_ok=True)
+    if output.is_file():
+        return
+    try:
+        run_process(
+            [ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+             "testsrc2=s=1920x1080:r=30:d=16", "-f", "lavfi", "-i",
+             "sine=frequency=440:sample_rate=48000:duration=16",
+             "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-shortest",
+             "-metadata", "comment=AuTopsy synthetic preview fixture 1", str(pending)],
+            timeout=60,
+        )
+        pending.replace(output)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def check_neutral_preview_fixture(work_root, ffmpeg, ffprobe):
+    """Check encoded picture/audio and fresh calls around both publication effects."""
+    import tempfile
+    from unittest import mock
+
+    work_root.mkdir(parents=True, exist_ok=True)
+    real_run, real_replace = run_process, Path.replace
+    for boundary in (None, "encode-before", "encode-after", "publish-before", "publish-after"):
+        with tempfile.TemporaryDirectory(prefix="_neutral-video-", dir=work_root) as directory:
+            output = Path(directory) / "source.mp4"
+
+            def encode(*args, selected_boundary=boundary, **kwargs):
+                if selected_boundary == "encode-before":
+                    raise InterruptedError("before encoder")
+                result = real_run(*args, **kwargs)
+                if selected_boundary == "encode-after":
+                    raise InterruptedError("after encoder")
+                return result
+
+            def publish(source, target, selected_boundary=boundary):
+                if selected_boundary == "publish-before":
+                    raise InterruptedError("before publication")
+                result = real_replace(source, target)
+                if selected_boundary == "publish-after":
+                    raise InterruptedError("after publication")
+                return result
+
+            with mock.patch(__name__ + ".run_process", side_effect=encode), \
+                    mock.patch.object(Path, "replace", publish):
+                try:
+                    write_neutral_preview_video(ffmpeg, output)
+                except InterruptedError:
+                    assert boundary is not None
+                else:
+                    assert boundary is None
+            # Represent a hard stop that bypassed cleanup, then use the same
+            # public operation without carrying an execution checkpoint.
+            pending = output.with_name("_source.pending.mp4")
+            pending.write_bytes(b"interrupted encoding")
+            write_neutral_preview_video(ffmpeg, output)
+            timestamp = output.stat().st_mtime_ns
+            write_neutral_preview_video(ffmpeg, output)
+            assert output.stat().st_mtime_ns == timestamp and not pending.exists()
+            media = json.loads(real_run(
+                [ffprobe, "-v", "error", "-count_frames", "-show_streams",
+                 "-show_format", "-of", "json", str(output)], text=True, timeout=60))
+            video = next(row for row in media["streams"] if row["codec_type"] == "video")
+            audio = next(row for row in media["streams"] if row["codec_type"] == "audio")
+            assert (video["width"], video["height"], video["nb_read_frames"]) == (1920, 1080, "480"), video
+            assert audio["codec_name"] == "aac" and abs(float(audio["duration"]) - 16) < 0.1, audio
+            assert media["format"]["tags"]["comment"] == "AuTopsy synthetic preview fixture 1"
+    print("fixtures: PASS (synthetic picture/audio, repeated calls and interrupted publication)")
+
+
 def run_process(arguments, **options):
     if os.name == "nt":
         options.setdefault("creationflags", subprocess.CREATE_NO_WINDOW)

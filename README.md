@@ -109,6 +109,9 @@ inherited scripting examples retain their upstream conventions.
 The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` owns the feature scenarios and result records.
+Preview tests generate their own neutral 16-second colour-pattern video and
+tone; personal video inputs are not accepted. `fork-fixtures` checks that media
+without opening AuTopsy.
 The npm overrides select patched lint dependencies while their parent packages
 still constrain older releases.
 

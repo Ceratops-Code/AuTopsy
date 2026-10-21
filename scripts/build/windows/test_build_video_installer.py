@@ -17,6 +17,36 @@ import build_video_installer as builder
 
 
 class InstallerBuildTests(unittest.TestCase):
+    def test_existing_build_checks_keep_the_installer_unchanged_after_interruption(self):
+        for boundary in ("before", "after"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                root = Path(temporary)
+                build = root / "build"
+                build.mkdir()
+                (build / "CTestTestfile.cmake").write_text("# existing test project")
+                installer = build / "completed.exe"
+                installer.write_bytes(b"accepted installer")
+                effects: list[str] = []
+
+                def check(arguments, source, diagnostics, selected_boundary=boundary, observed=effects):
+                    if selected_boundary == "before":
+                        raise InterruptedError("before test child")
+                    observed.append("checked")
+                    raise InterruptedError("after test child")
+
+                with mock.patch.object(builder.shutil, "which", return_value="ctest"), \
+                        mock.patch.object(builder, "run_command", side_effect=check):
+                    with self.assertRaises(InterruptedError):
+                        builder.test_existing_installer_build(root, build, "^fork-fixtures$")
+                self.assertEqual(effects, [] if boundary == "before" else ["checked"])
+                with mock.patch.object(builder.shutil, "which", return_value="ctest"), \
+                        mock.patch.object(builder, "run_command", return_value="") as runner:
+                    first = builder.test_existing_installer_build(root, build, "^fork-fixtures$")
+                    self.assertEqual(builder.test_existing_installer_build(root, build, "^fork-fixtures$"), first)
+                    self.assertEqual(runner.call_count, 2)
+                self.assertEqual(first["status"], "passed")
+                self.assertEqual(installer.read_bytes(), b"accepted installer")
+
     def test_seven_zip_sdk_uses_the_existing_cmake_extractor(self):
         with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
             root = Path(temporary)

@@ -383,6 +383,13 @@ are needed for those cases. Cases check native video/audio track ownership,
 cross-track clip dragging, clipboard edits, project round trips, group motion,
 track order and scrolling, mixed-source rendering, video-only playback,
 silence, rejected edits and overwrite protection.
+Preview tests always generate a neutral 16-second 1080p colour pattern and tone;
+they accept no personal media path or environment override. The generated
+`_fork-tests/_preview/source.mp4` belongs to the marked test root and is replaced
+when that case starts afresh. The fixture producer atomically publishes only
+completed footage and discards its private pending file after interruption.
+`fork-fixtures` checks the encoded picture/audio and repeated/interrupted calls
+without opening AuTopsy; its temporary media is removed after the check.
 The gesture case waits for the native pane to be enabled, then supplies held
 mouse input only to the owned test window through its normal window procedure.
 The GUI runner selects Windows DISPLAY2 when connected. With several displays
@@ -474,14 +481,17 @@ Its repository checks precede the installer job. The uploaded unsigned installer
 and source manifest are retained for 14 days; failure details for 7 days.
 Signing is a separate service approval and is not claimed by this job.
 
-Selected desktop cases can run through the SDLC package test operation with
-`build_dir` naming the configured native build and `test_name` naming a
-CTest selection, for example `^fork-media$`. An empty selection fails.
+The SDLC package test operation checks `fork-fixtures` without opening AuTopsy.
+`AUTOPSY_VIDEO_BUILD_DIR` selects an existing native build, defaulting to
+`.build/_windows-installer`. For a separate desktop test session,
+`AUTOPSY_VIDEO_TEST_NAME` selects a CTest case such as `^fork-media$`; empty
+selections fail. The same builder's `--test-existing-build`, `--build-dir` and
+`--test-name` options expose those inputs directly. Test child failures own one
+current `_test_command_failure.json` beside the build; success removes it and
+startup discards its abandoned pending sibling.
 The application's install operation takes `installer_path` from the accepted build
 manifest and runs that installer silently. It installs into Program Files/AuTopsy;
 close the application first. Deployment never copies a source/build tree.
-Its `build_dir` and `test_name` inputs also supply the package checks that gate
-promotion and installation; the installer command consumes only `installer_path`.
 The media case covers linked video/audio movement and trim/split behavior,
 saved clip flags, relinking, source frame stepping and modern software exports.
 

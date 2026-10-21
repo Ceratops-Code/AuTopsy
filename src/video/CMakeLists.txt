@@ -148,7 +148,7 @@ if(TARGET video-playback-test)
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-      foreach(_case groups tracks video media preview branding)
+      foreach(_case groups tracks video media preview branding fixtures)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"

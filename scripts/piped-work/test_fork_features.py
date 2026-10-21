@@ -28,6 +28,7 @@ from run_fork_test_harness import (
     assert_owned_test_display,
     capture_owned_project,
     check_behavior_worker_lifecycle,
+    check_neutral_preview_fixture,
     check_test_display_selection,
     connected_test_displays,
     drag_owned_video_clip,
@@ -40,6 +41,7 @@ from run_fork_test_harness import (
     save_reopen,
     select_test_display,
     startup_window_messages,
+    write_neutral_preview_video,
     write_tone,
 )
 
@@ -826,7 +828,7 @@ def worker(args, root):
     elif args.case == "branding":
         check_branding(client, root)
     else:
-        source = args.video_source or root / "source.mp4"
+        source = root / "source.mp4"
         client.file("ImportVideo", source)
         info = ready_video_preview(client)
         assert info["lightweight"] and info["thumbnails"], info
@@ -932,11 +934,9 @@ def main():
             "branding",
             "display-policy",
             "worker-lifecycle",
+            "fixtures",
         ),
         required=True,
-    )
-    parser.add_argument(
-        "--video-source", type=Path, default=os.environ.get("AUTOPSY_PREVIEW_SOURCE")
     )
     parser.add_argument(
         "--interrupt-cache",
@@ -955,6 +955,11 @@ def main():
         if not args.work_root:
             parser.error("Worker lifecycle checks require --work-root.")
         check_behavior_worker_lifecycle(args.work_root.resolve())
+        return
+    if args.case == "fixtures":
+        if not args.work_root or not args.ffmpeg or not args.ffprobe:
+            parser.error("Fixture checks require --work-root, --ffmpeg and --ffprobe.")
+        check_neutral_preview_fixture(args.work_root.resolve(), args.ffmpeg, args.ffprobe)
         return
     if not args.executable or not args.work_root:
         parser.error("GUI cases require --executable and --work-root.")
@@ -1082,32 +1087,8 @@ def main():
             ],
             timeout=30,
         )
-    if args.case == "preview" and not args.video_source:
-        run_process(
-            [
-                args.ffmpeg,
-                "-v",
-                "error",
-                "-nostdin",
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc2=s=1920x1080:r=30:d=16",
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=frequency=440:sample_rate=48000:duration=16",
-                "-c:v",
-                "mpeg4",
-                "-q:v",
-                "5",
-                "-c:a",
-                "aac",
-                "-shortest",
-                str(root / "source.mp4"),
-            ],
-            timeout=60,
-        )
+    if args.case == "preview":
+        write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
     version_numbers = executable_version(executable)
     profile = executable.parent / "Portable Settings"
     profile_owner = profile / "_autopsy_tests"
@@ -1302,20 +1283,14 @@ def main():
                 assert left <= x and top <= y and x + w <= right and y + h <= bottom, (
                     shows
                 )
-            source = (
-                args.video_source.resolve(strict=True)
-                if args.video_source
-                else root / "source.mp4"
-            )
+            source = root / "source.mp4"
             source_identity = None
             if source.is_file():
                 info = source.stat()
                 source_identity = {
-                    "source": str(source)
-                    if args.video_source
-                    else "generated:" + args.case,
+                    "source": "generated:" + args.case,
                     "bytes": info.st_size,
-                    "modified_ns": info.st_mtime_ns if args.video_source else None,
+                    "modified_ns": None,
                 }
             record = {
                 "run": run_id,

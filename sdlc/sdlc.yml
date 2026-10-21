@@ -96,19 +96,21 @@ deliverables:
         test:
           requires:
             capabilities:
-              - ctest
-          parameters: [build_dir, test_name]
+              - uv
           steps:
             - run:
-                - ctest
-                - --test-dir
-                - "{build_dir}"
-                - -C
-                - Release
-                - --output-on-failure
-                - -R
-                - "{test_name}"
-                - --no-tests=error
+                - uv
+                - run
+                - --project
+                - scripts
+                - --locked
+                - --python
+                - "3.12"
+                - --with
+                - cmake==3.31.10
+                - python
+                - scripts/build/windows/build_video_installer.py
+                - --test-existing-build
   apps:
     autopsy:
       source: .
@@ -126,7 +128,7 @@ deliverables:
         install:
           requires:
             capabilities: []
-          parameters: [installer_path, build_dir, test_name]
+          parameters: [installer_path]
           steps:
             - run:
                 - "{installer_path}"
