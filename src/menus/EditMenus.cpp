@@ -3,6 +3,7 @@
 #include "../CommonCommandFlags.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "../video/CreateVideoTrack.h"
+#include "../clip-groups/LinkMediaClips.h"
 #endif
 #include "LabelTrack.h"
 #include "../MenuCreator.h"
@@ -482,6 +483,9 @@ std::shared_ptr<const TrackList> FindSourceTracks(const CommandContext &context)
    else
       srcTracks = clipboard.GetTracks().shared_from_this();
 
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   srcTracks = ClipGroups::CopyMediaForPaste(*srcTracks);
+#endif
    return srcTracks;
 }
 
@@ -756,6 +760,9 @@ void OnDuplicate(const CommandContext &context)
    auto &project = context.project;
    auto &tracks = TrackList::Get(project);
    auto &selectedRegion = ViewInfo::Get(project).selectedRegion;
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   ClipGroups::MediaCopyGroups mediaCopyGroups;
+#endif
 
    // This iteration is unusual because we add to the list inside the loop
    auto range = tracks.Selected();
@@ -767,6 +774,7 @@ void OnDuplicate(const CommandContext &context)
       // Make copies not for clipboard but for direct addition to the project
       auto dest = n->Copy(selectedRegion.t0(), selectedRegion.t1(), false);
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      mediaCopyGroups.AssignToCopiedTrack(*dest);
       if (dynamic_cast<AuTopsyVideoTrack*>(dest.get()))
          dest->ShiftBy(-1,selectedRegion.t0());
       else
@@ -872,6 +880,9 @@ void OnTrim(const CommandContext &context)
    if (selectedRegion.isPoint())
       return;
 
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   ClipGroups::TrimLinkedMediaToSelection(project, selectedRegion.t0(), selectedRegion.t1());
+#endif
    tracks.Selected().Visit( [&](WaveTrack &wt) {
       //Hide the section before the left selector
       wt.Trim(selectedRegion.t0(), selectedRegion.t1());
@@ -891,21 +902,15 @@ void OnSplit(const CommandContext &context)
    auto &project = context.project;
    auto &tracks = TrackList::Get(project);
    auto [sel0, sel1] = FindSelection(context);
-   if (auto *pTrack = context.temporarySelection.pTrack) {
-      if (auto pWaveTrack = dynamic_cast<WaveTrack*>(pTrack))
-         pWaveTrack->Split(sel0, sel1);
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
-      else if (dynamic_cast<AuTopsyVideoTrack*>(pTrack))
-         VideoTimeline::SplitSelectedVideoTracks(project,sel0,sel1,pTrack);
-#endif
+   ClipGroups::SplitMediaAtSelection(project, sel0, sel1, context.temporarySelection.pTrack);
+#else
+   if (auto *pTrack = context.temporarySelection.pTrack) {
+      if (auto *wave = dynamic_cast<WaveTrack*>(pTrack)) wave->Split(sel0, sel1);
       else return;
    }
-   else {
-      for (auto wt : tracks.Selected<WaveTrack>()) wt->Split(sel0,sel1);
-#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
-      VideoTimeline::SplitSelectedVideoTracks(project,sel0,sel1);
+   else for (auto *wave : tracks.Selected<WaveTrack>()) wave->Split(sel0, sel1);
 #endif
-   }
 
    ProjectHistory::Get( project ).PushState(XO("Split"), XO("Split"));
 #if 0

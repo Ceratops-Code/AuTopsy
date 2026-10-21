@@ -1,6 +1,10 @@
 name: Validate
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -55,3 +59,44 @@ jobs:
           path: |
             ${{ runner.temp }}/repository-validation.log
             .build/deploy-validation/repository-validation.log
+
+  build-windows-installer:
+    name: Windows x64 installer (unsigned)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-windows-installer'))
+    needs: validate-repository
+    runs-on: windows-2022
+    timeout-minutes: 360
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Prepare Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Build installer from this revision
+        id: installer
+        run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+      - name: Upload unsigned installer and source manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: AuTopsy-Windows-x64-unsigned
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            ${{ steps.installer.outputs.installer }}
+            ${{ steps.installer.outputs.manifest }}
+      - name: Upload build failure details
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer-failure
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+          path: .build/_windows-installer/_build_command_failure.json

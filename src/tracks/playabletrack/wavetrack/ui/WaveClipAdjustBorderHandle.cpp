@@ -27,6 +27,9 @@
 #include "TrackPanelMouseEvent.h"
 #include "ViewInfo.h"
 #include "ProjectHistory.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "../../../../clip-groups/LinkMediaClips.h"
+#endif
 #include "UndoManager.h"
 #include "WaveClipUIUtilities.h"
 
@@ -263,6 +266,10 @@ public:
       const auto dt = std::abs(mInitialBorderPosition - mBorderPosition);
       if (dt != 0)
       {
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+         if (!mIsStretchMode && ClipGroups::CommitLinkedAudioTrim(
+               project, *mInterval, mAdjustingLeftBorder, mInitialBorderPosition)) return;
+#endif
          if (mIsStretchMode)
          {
             WaveClipUIUtilities::PushClipSpeedChangedUndoState(

@@ -38,6 +38,7 @@ repository:
     test:
       requires:
         capabilities:
+          - uv
           - cmake
           - ctest
       steps:
@@ -63,3 +64,48 @@ repository:
             - -C
             - Release
             - --output-on-failure
+deliverables:
+  packages:
+    windows-installer:
+      source: .
+      prerequisites: []
+      artifact:
+        type: windows-installer
+        output-directory: .build/_windows-installer/package
+        filename-pattern: autopsy-win-*-x64.exe
+      actions:
+        build:
+          requires:
+            capabilities:
+              - uv
+          steps:
+            - run:
+                - uv
+                - run
+                - --project
+                - scripts
+                - --locked
+                - --python
+                - "3.12"
+                - --with
+                - cmake==3.31.10
+                - python
+                - scripts/build/windows/build_video_installer.py
+                - --build-dir
+                - .build/_windows-installer
+        test:
+          requires:
+            capabilities:
+              - ctest
+          parameters: [build_dir, test_name]
+          steps:
+            - run:
+                - ctest
+                - --test-dir
+                - "{build_dir}"
+                - -C
+                - Release
+                - --output-on-failure
+                - -R
+                - "{test_name}"
+                - --no-tests=error

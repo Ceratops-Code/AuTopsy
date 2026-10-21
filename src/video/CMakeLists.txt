@@ -27,6 +27,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    add_test(NAME product-branding-core COMMAND product-branding-core-test)
    find_package(Python3 QUIET COMPONENTS Interpreter)
    if(Python3_Interpreter_FOUND)
+      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests")
+      add_test(NAME fork-installer-build COMMAND uv run --project
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
+         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows" -p test_build_video_installer.py)
+      set_tests_properties(fork-installer-build PROPERTIES
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_installer-tests")
       add_test(NAME fork-display-policy COMMAND "${Python3_EXECUTABLE}"
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work/test_fork_features.py"
          --case display-policy)
@@ -78,7 +84,9 @@ endif()
 target_sources(Audacity PRIVATE ShowVideoPreview.cpp SyncVideoPlayback.h
    ExportVideoMix.cpp ExportVideoMix.h EditVideoTimeline.cpp EditVideoTimeline.h
    PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h
-   CreateVideoTrack.cpp CreateVideoTrack.h)
+   CreateVideoTrack.cpp CreateVideoTrack.h ChooseVideoExport.cpp ChooseVideoExport.h RelinkVideoMedia.cpp RelinkVideoMedia.h
+   ../clip-groups/LinkMediaClips.cpp ../clip-groups/LinkMediaClips.h
+   ../clip-groups/EditClipMarkers.cpp ../clip-groups/EditClipMarkers.h)
 target_include_directories(Audacity PRIVATE "${audacity_video_mpv_include}")
 # Only the enabled video build changes the numeric-runtime requirement. Keep
 # this definition on the owning translation unit rather than every app source.
@@ -87,7 +95,11 @@ set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../prefs/GUISettings.cpp"
    AUTOPSY_HAS_VIDEO_PREVIEW=1)
 set_property(SOURCE
    "${CMAKE_CURRENT_SOURCE_DIR}/../menus/EditMenus.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/GroupAudioClips.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/CommonTrackControls.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ProjectFileManager.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../ProjectAudioManager.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../TransportUtilities.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../toolbars/ControlToolBar.cpp"
@@ -120,6 +132,12 @@ if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")
    find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests")
+      add_test(NAME fork-installer-build COMMAND uv run --project
+         "${CMAKE_SOURCE_DIR}/scripts" --locked python -m unittest discover
+         -s "${CMAKE_SOURCE_DIR}/scripts/build/windows" -p test_build_video_installer.py)
+      set_tests_properties(fork-installer-build PROPERTIES
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_installer-tests")
        add_test(NAME fork-display-policy COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py" --case display-policy)
        add_test(NAME fork-worker-lifecycle COMMAND "${Python3_EXECUTABLE}"
@@ -130,7 +148,7 @@ if(TARGET video-playback-test)
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-      foreach(_case groups tracks video preview branding)
+      foreach(_case groups tracks video media preview branding)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"

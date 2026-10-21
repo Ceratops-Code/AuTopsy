@@ -333,7 +333,8 @@ Use the C++ workload and Windows SDK from Visual Studio 2022, and an extracted
 64-bit libmpv development package matching the build architecture. The package
 must contain include/mpv/client.h and libmpv-2.dll at its top level.
 Windows package links are listed on [mpv's installation page](https://mpv.io/installation/).
-Also provide the Windows x64 FFmpeg 8.1 shared runtime, available from
+Also provide the Windows x64 FFmpeg 8.1 GPL shared runtime, including libx264,
+libx265 and libsvtav1 encoders, available from
 [BtbN's FFmpeg builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 Keep ffmpeg.exe, ffprobe.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
 swresample-6.dll, swscale-9.dll, avfilter-11.dll, avdevice-62.dll, and the
@@ -346,7 +347,7 @@ Configure the normal AuTopsy build with these additional options:
 
     cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -Daudacity_has_tests=ON -Daudacity_has_video_preview=ON -Daudacity_video_mpv_sdk="<extracted-mpv-sdk>" -Daudacity_video_ffmpeg_runtime="<ffmpeg-runtime>"
     cmake --build _build --config Release --parallel 4
-    ctest --test-dir _build -C Release -R "^(video-playback|video-timeline|fork-groups|fork-tracks|fork-video|fork-preview)$" --output-on-failure
+    ctest --test-dir _build -C Release -R "^(video-playback|video-timeline|fork-groups|fork-tracks|fork-video|fork-media|fork-preview)$" --output-on-failure
     cmake -S . -B _build -DINNO_SETUP_COMPILER="<Inno-Setup-6.7.3>/ISCC.exe"
     cmake --build _build --config Release --target innosetup
 
@@ -391,11 +392,12 @@ launching. That process-local adapter constrains each wx top-level window before
 Windows applies its placement, covering the loading splash, editor, welcome,
 About, and video preview. A missing or too-small target stops the test instead
 of falling back to screen 1. It changes no system display settings or user windows.
-Placement and display-change checks obtain a fresh monitor handle from the last
-checked target area and require the same device name. They never select the
-nearest or primary monitor as a fallback, retain a monitor handle between
-callbacks, or accept a removed/reassigned target. Desktop enumeration is needed
-only for initial named-device discovery.
+Each placement resolves the selected device afresh in the callback's DPI
+coordinate space. The guard retains neither monitor handles nor geometry as an
+identity, and never falls back to screen 1. Private test windows use wx's
+stay-on-top style so the host retains their exposure during activation; the
+runner also checks the window under the target point before sending input.
+Its held mouse button is released even when the owned window disappears.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
 `fork-branding` also repeats hidden/visible placement requests toward the other
@@ -436,6 +438,47 @@ separate.
 
 Keep the libmpv package's applicable license and corresponding-source material
 with any distributed build, alongside AuTopsy's existing license material.
+
+### Windows installer workflow
+
+Run the same repository-owned builder used by the GitHub-hosted Windows job:
+
+    uv run --project scripts --locked --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+
+Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
+`--inno-compiler` for a nondefault compiler location. The builder uses CMake's
+archive reader, so a separate 7-Zip installation is unnecessary. Python build
+dependencies, including the Windows process-tree wrapper, come from the locked
+`scripts` environment.
+
+The builder owns `_video-dependencies` under its selected build directory:
+one pinned archive and current SDK per component, private extraction/download
+siblings, and one identity record per SDK. Startup discards only abandoned
+owned staging; successful publication removes staging immediately. Required
+SDK filenames are kept because native linkers and encoders require them.
+A live-worker lock protects cleanup. A Windows job terminates remaining
+extractor/compiler children when their worker exits, including abrupt exits.
+
+The packager publishes `package/_installer-x64.json` atomically, naming the
+exact installer and its SHA-256. The builder consumes that descriptor and writes
+one current `package/_build-manifest.json` with the source revision, unsigned
+status, installer hash and pinned dependency identities. Failure replaces
+`_build_command_failure.json` with the exact invocation, exit and both output
+streams; success removes it. Pending record files are removed on the next call.
+The existing per-architecture installer retention remains current plus two
+predecessors. Building never installs or publishes an application.
+
+GitHub's `Validate` workflow builds on `windows-2022` when manually
+dispatched, or when a pull request has the `build-windows-installer` label.
+Its repository checks precede the installer job. The uploaded unsigned installer
+and source manifest are retained for 14 days; failure details for 7 days.
+Signing is a separate service approval and is not claimed by this job.
+
+Selected desktop cases can run through the SDLC package test operation with
+`build_dir` naming the configured native build and `test_name` naming a
+CTest selection, for example `^fork-media$`. An empty selection fails.
+The media case covers linked video/audio movement and trim/split behavior,
+saved clip flags, relinking, source frame stepping and modern software exports.
 
 ### Independent feature checks
 

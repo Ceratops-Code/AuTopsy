@@ -26,6 +26,9 @@
 #include "ViewInfo.h"
 #include "WaveTrack.h"
 #include "WaveClip.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "clip-groups/EditClipMarkers.h"
+#endif
 #include "TimeStretching.h"
 #include "UndoManager.h"
 #include "ShuttleGui.h"
@@ -351,6 +354,12 @@ void WaveTrackAffordanceControls::Draw(TrackPanelDrawingContext& context, const 
                 else if (TrackArt::DrawClipTitle(
                             context.dc, affordanceRect, interval->GetName()))
                    mVisibleIntervals.push_back(it);
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+             {
+                wxDCClipper flagClipper{context.dc, clipRect};
+                ClipMarkers::DrawAudioClipMarkers(clip, context.dc, zoomInfo, rect);
+             }
+#endif
          }
       }      
    }

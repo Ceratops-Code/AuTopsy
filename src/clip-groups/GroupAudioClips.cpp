@@ -1,4 +1,7 @@
 #include "GroupAudioClips.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "LinkMediaClips.h"
+#endif
 #include "WaveClip.h"
 #include "WaveTrack.h"
 #include "Project.h"
@@ -92,23 +95,26 @@ WaveClipPointers ExpandClipGroupMembers(
 
 bool ExpandMovingClipGroups(ClipMoveState &state, TrackList &trackList)
 {
-      WaveClipPointers moving;
-      size_t before{};
-      for (const auto &pair : state.shifters) {
-         before += pair.second->MovingIntervals().size();
-         for (const auto &interval : pair.second->MovingIntervals())
-            if (auto *clip = dynamic_cast<WaveClip *>(interval.get())) moving.push_back(clip);
-      }
-      const auto grouped = ClipGroups::ExpandClipGroupMembers(trackList, moving);
-      size_t after{};
-      for (auto &pair : state.shifters) {
-         pair.second->UnfixIntervals([&](const ChannelGroupInterval &interval) {
-            const auto *clip = dynamic_cast<const WaveClip *>(&interval);
-            return clip && std::find(grouped.begin(), grouped.end(), clip) != grouped.end();
-         });
-         after += pair.second->MovingIntervals().size();
-      }
-      return after != before;
+   (void)trackList;
+   std::unordered_set<std::string> groups;
+   const auto groupOf = [](const ChannelGroupInterval &interval) -> std::string {
+      if (const auto *audio = dynamic_cast<const WaveClip*>(&interval)) return GetClipGroupId(*audio);
+      if (const auto *media = dynamic_cast<const LinkedClipInterval*>(&interval)) return media->MediaGroupId();
+      return {};
+   };
+   size_t before{};
+   for (const auto &pair : state.shifters) for (const auto &interval : pair.second->MovingIntervals()) {
+      ++before; const auto group = groupOf(*interval);
+      if (!group.empty()) groups.insert(group);
+   }
+   size_t after{};
+   for (auto &pair : state.shifters) {
+      pair.second->UnfixIntervals([&](const auto &interval) {
+         const auto group = groupOf(interval); return !group.empty() && groups.count(group);
+      });
+      after += pair.second->MovingIntervals().size();
+   }
+   return after != before;
 
 }
 }
@@ -218,6 +224,9 @@ public:
       std::vector<std::string> prepared(members.size(), group);
       for (size_t i = 0; i < members.size(); ++i)
          ClipGroups::SetClipGroupId(*members[i], std::move(prepared[i]));
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      ClipGroups::UpdateVideoGroupIds(project, {groups.begin(), groups.end()}, group);
+#endif
       ProjectHistory::Get(project).PushState(
          Ungroup() ? XO("Ungrouped audio clips") : XO("Grouped audio clips"),
          Ungroup() ? XO("Ungroup Clips") : XO("Group Clips"));

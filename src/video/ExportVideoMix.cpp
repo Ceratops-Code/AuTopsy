@@ -329,24 +329,28 @@ void CleanAbandonedWorkspace()
 }
 
 bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *parent,
-   const wxString &title, const wxString &status)
+   const wxString &title, const wxString &status, std::string *output, VideoTool tool)
 {
-   const auto executable = wxFileName(wxStandardPaths::Get().GetExecutablePath())
-      .GetPathWithSep() + "ffmpeg.exe";
+   const auto name = tool == VideoTool::Probe ? "ffprobe.exe" : "ffmpeg.exe";
+   const auto executable = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPathWithSep() + name;
    if (!wxFileExists(executable))
-      throw std::runtime_error("The bundled ffmpeg.exe is missing. Reinstall AuTopsy.");
+      throw std::runtime_error(std::string{"The bundled "} + name + " is missing. Reinstall AuTopsy.");
    std::vector<std::wstring> native{executable.ToStdWstring()};
    for (const auto &argument : arguments) native.push_back(argument.ToStdWstring());
    FfmpegProcess process{native};
-   return process.Wait(parent, title, status);
+   if (!process.Wait(parent, title, status)) return false;
+   if (output) *output = std::move(process.output);
+   return true;
 }
 
 bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline,
-   const wxString &destination, bool overwrite, wxWindow *parent)
+   const wxString &destination, bool overwrite, wxWindow *parent, const ExportSettings &settings)
 {
+   RequireUsableExportSettings(settings);
    VideoTimeline::RequireWellFormedTimeline(timeline);
    const auto duration = timeline.End();
-   const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline);
+   const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline) && AllowsOriginalPictureCopy(settings);
+   const auto outputRate = settings.frameRate > 0 ? settings.frameRate : timeline.frameRate;
    const fs::path target = fs::absolute(fs::path(destination.ToStdWstring()));
    if (!std::isfinite(duration) || duration <= 0 || timeline.clips.empty() || destination.empty())
       throw std::runtime_error("Choose video clips and an output filename before exporting.");
@@ -387,6 +391,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    if (!copyPicture) {
       pictureSize = ReadExportPictureSize(inputs.front(), parent);
       if (!pictureSize) return false;
+      if (settings.width) pictureSize = std::pair{settings.width, settings.height};
    }
    ExportWorkspace workspace{ target };
    const auto mix = workspace.path / "_mix.wav";
@@ -448,7 +453,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
          else graph << "trim=start=" << span.sourceStart << ":duration=" << span.duration
             << ",setpts=PTS-STARTPTS";
          const auto [width, height] = *pictureSize;
-         graph << ",fps=" << timeline.frameRate
+         graph << ",fps=" << outputRate
             << ",scale=" << width << ":" << height << ":force_original_aspect_ratio=decrease:force_divisible_by=2"
             << ",pad=" << width << ":" << height << ":(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v" << i << "];\n";
       }
@@ -460,11 +465,11 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
       filterFile.write(script.data(), script.size()); filterFile.close();
       if (!filterFile) throw std::runtime_error("Could not write the temporary video rendering instructions.");
       std::wostringstream frameRate; frameRate.imbue(std::locale::classic());
-      frameRate << std::setprecision(17) << timeline.frameRate;
-      // MPEG-4 Part 2 is supplied by the bundled LGPL build without a GPU or
-      // extra encoder installation. Unchanged pictures always use stream copy.
+      frameRate << std::setprecision(17) << outputRate;
       arguments.insert(arguments.end(), {L"-filter_complex_script", filterPath.wstring(),
-         L"-map", L"[vout]", L"-c:v", L"mpeg4", L"-q:v", L"2", L"-r", frameRate.str()});
+         L"-map", L"[vout]", L"-r", frameRate.str()});
+      for (const auto &argument : VideoEncoderArguments(settings))
+         arguments.push_back(wxString::FromUTF8(argument).ToStdWstring());
    }
    const auto audioMap = std::to_wstring(inputs.size()) + L":a:0";
    arguments.insert(arguments.end(), {L"-map", audioMap, L"-map_metadata", L"0",

@@ -1,5 +1,6 @@
 // Feature-owned video timing. The model has no Audacity, wxWidgets or mpv types.
 #pragma once
+#include "../clip-groups/EditClipMarkers.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -22,6 +23,8 @@ struct Clip {
    // An empty override uses the track's default source. Clipboard and
    // cross-track transfers resolve it into a self-contained source value.
    MediaSource media;
+   std::string linkGroup;
+   std::vector<ClipMarkers::Marker> markers;
    double End() const { return start + duration; }
 };
 
@@ -65,6 +68,10 @@ inline void RequireWellFormedTimeline(const Timeline &timeline)
    for (const auto &clip : timeline.clips) {
       const auto source = SourceFor(timeline, clip);
       RequireUsableVideoSource(source);
+      ClipMarkers::RequireUsableMarkers(clip.markers);
+      if (!clip.linkGroup.empty() && (clip.linkGroup.size() != 32 ||
+          clip.linkGroup.find_first_not_of("0123456789abcdef") != std::string::npos))
+         throw std::runtime_error("A video clip has an invalid saved link.");
       if (!clip.id || clip.id >= timeline.nextId || !ids.insert(clip.id).second ||
           !std::isfinite(clip.start) || !std::isfinite(clip.sourceStart) ||
           !std::isfinite(clip.duration) || clip.start < 0 || clip.sourceStart < 0 ||
@@ -115,7 +122,7 @@ inline bool SplitClipAt(Timeline &timeline, double time)
    const auto index = static_cast<size_t>(clip - timeline.clips.data());
    auto &left = changed.clips[index];
    const Clip right{changed.nextId++, left.start + offset,
-      left.sourceStart + offset, left.duration - offset, left.media};
+      left.sourceStart + offset, left.duration - offset, left.media, left.linkGroup, left.markers};
    left.duration = offset;
    changed.clips.insert(changed.clips.begin() + index + 1, right);
    RequireWellFormedTimeline(changed);
