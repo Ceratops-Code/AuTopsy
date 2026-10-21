@@ -54,6 +54,15 @@ The inherited audio tools are covered by the
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
 
+Projects use standard **`.aup3`** storage. The focused compatibility test opens
+AuTopsy projects in unmodified Audacity **3.7.8** and **3.7.9**, checking audio
+clips and labels while video tracks are skipped, then stock save/copy/reopen.
+Tests download pinned official portable packages automatically; no installed
+Audacity is required by either AuTopsy or this test. Saving in Audacity drops
+AuTopsy's video, links, clip groups and flags; keep the original AuTopsy project
+when those additions matter. Compatibility with unreleased Audacity versions
+cannot be guaranteed.
+
 Preview publication uploads the completed installer and its source/build-check
 manifest. The publisher keeps the original accepted build intact, checks the
 uploaded asset identities, and makes the preview public after both uploads.
@@ -85,17 +94,11 @@ features. The Windows release build disables inherited application networking;
 opening help or repository links uses the user's browser. Installed components
 can be removed using Windows Installed Apps.
 
-## Video backlog
+## Development design
 
-These are planned ideas, not features included in the current release.
-
-| Priority | Feature | Practical result |
-| --- | --- | --- |
-| Next | Collect project media | Copy referenced videos into a portable project folder. |
-| Later | Ripple edits and magnetic snapping | Close gaps and align video/audio edges while preserving later timing. |
-| Later | Background proxy preparation | Keep editing while lightweight previews are prepared; show progress and cache controls. |
-| Later | Video fades, dissolves, crop, and rotation | Handle basic picture transitions and framing. |
-| Later | Titles and subtitle tracks | Add captions and simple overlays without leaving the project. |
+[The design](docs/design.md) describes the planned editing model, native adapter
+boundaries and preview/export contracts. The detailed product backlog is
+maintained outside this source repository.
 
 ## Developers
 
@@ -117,6 +120,13 @@ child-process handling, display confinement, media fixtures and GUI gestures;
 Preview tests generate their own neutral 16-second colour-pattern video and
 tone; personal video inputs are not accepted. `fork-fixtures` checks that media
 without opening AuTopsy.
+`fork-project-compatibility` separately exercises a private stock Audacity 3
+consumer with generated projects and compares their rendered audio. See
+[BUILDING.md](BUILDING.md) for its explicit consumer input.
+Inherited upstream CTest suites remain available in a full application build;
+the default fork CI selects the owned portable checks rather than running the
+entire upstream platform matrix. GitHub's CodeQL default setup scans C++, Python
+and Actions. This fork has no SonarQube job.
 The npm overrides select patched lint dependencies while their parent packages
 still constrain older releases.
 
@@ -272,6 +282,14 @@ only when focus or an unambiguous clip ID identifies the track. Empty tracks
 can be added through `NewVideoTrack`, `AddVideoTrackBefore: Track=1`, and
 `AddVideoTrackAfter: Track=1`. Repeating a split at an existing boundary,
 an absolute move to the same start, or deletion of an absent ID makes no change.
+
+## Undo and Redo
+
+Undo and Redo keep the current timeline zoom and scroll position instead of
+jumping to the first selected track. Removing tracks can still constrain the
+scroll range. Scripting clients can observe the current view using
+`GetInfo: Type=View Format=JSON`, which returns `horizontalStart`,
+`verticalOffset` and `pixelsPerSecond` without changing the view.
 
 ## Audio clip groups and track insertion
 

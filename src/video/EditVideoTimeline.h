@@ -9,8 +9,6 @@
 #include <unordered_set>
 #include <vector>
 
-class AudacityProject;
-
 namespace VideoTimeline {
 struct MediaSource {
    std::string path;
@@ -287,12 +285,36 @@ inline bool TrimVideoClip(Timeline &timeline, uint64_t id, double start, double 
    return true;
 }
 
+// A borrowed evaluation result is valid only while its input timelines are
+// unchanged. It is used immediately by preview/export adapters, never persisted
+// or retained across native edits. Ordering and gap selection live here so the
+// two rendering paths cannot acquire different picture precedence rules.
+// The owning track checks ranges when publishing its state; this query borrows
+// those values without a per-frame rebuild of the timeline.
+struct EvaluatedVideoPicture {
+   const Timeline *timeline{};
+   const Clip *clip{};
+   double sourceTime{};
+};
+
+inline EvaluatedVideoPicture EvaluateVideoLayers(
+   const std::vector<const Timeline*> &layers, double projectTime)
+{
+   for (const auto *layer : layers)
+      if (!layer) throw std::runtime_error("A video layer requires a timeline.");
+   for (const auto *layer : layers)
+      if (const auto *clip = ClipAt(*layer, projectTime))
+         return {layer, clip, clip->sourceStart + projectTime - clip->start};
+   return {};
+}
+
 // Upper tracks take visual precedence. Flatten only at preview/export boundaries;
 // native tracks and their clips remain independent, editable project objects.
 inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
 {
    std::vector<double> edges;
    for (const auto *layer : layers) {
+      if (!layer) throw std::runtime_error("A video layer requires a timeline.");
       RequireWellFormedTimeline(*layer);
       for (const auto &clip : layer->clips) { edges.push_back(clip.start); edges.push_back(clip.End()); }
    }
@@ -301,25 +323,20 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
    Timeline result;
    for (size_t i = 1; i < edges.size(); ++i) {
       if (edges[i] - edges[i-1] <= 1e-7) continue;
-      for (const auto *layer : layers) if (const auto *clip = ClipAt(*layer, (edges[i]+edges[i-1])/2)) {
-         auto part = *clip;
-         part.id = result.nextId++; part.start = edges[i-1]; part.duration = edges[i] - edges[i-1];
-         part.sourceStart += part.start - clip->start; part.media = SourceFor(*layer, *clip);
-         if (result.sourcePath.empty()) {
-            result.sourcePath = part.media.path; result.sourceDuration = part.media.duration;
-            result.frameRate = part.media.frameRate; result.sourceWidth = part.media.width; result.sourceHeight = part.media.height;
-         }
-         result.clips.push_back(std::move(part)); break;
+      const auto picture = EvaluateVideoLayers(layers, (edges[i]+edges[i-1])/2);
+      if (!picture.clip) continue;
+      auto part = *picture.clip;
+      part.id = result.nextId++; part.start = edges[i-1]; part.duration = edges[i] - edges[i-1];
+      part.sourceStart += part.start - picture.clip->start;
+      part.media = SourceFor(*picture.timeline, *picture.clip);
+      if (result.sourcePath.empty()) {
+         result.sourcePath = part.media.path; result.sourceDuration = part.media.duration;
+         result.frameRate = part.media.frameRate; result.sourceWidth = part.media.width; result.sourceHeight = part.media.height;
       }
+      result.clips.push_back(std::move(part));
    }
    RequireWellFormedTimeline(result);
    return result;
 }
 
-// Native project adapters are implemented in the .cpp, separate from the model.
-Timeline GetProjectTimeline(const AudacityProject &project);
-bool SplitProjectVideo(AudacityProject &project, double at);
-bool MoveProjectVideoClip(AudacityProject &project, uint64_t id, double start);
-bool RemoveProjectVideoClip(AudacityProject &project, uint64_t id);
-void ShowProjectVideoPreview(AudacityProject &project, bool raise = false);
 }

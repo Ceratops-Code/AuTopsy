@@ -3,7 +3,8 @@
 CTest supplies an executable and a dedicated work root. Tests own only marked
 temporary directories and their child process. The native Portable Settings
 name is required by Audacity; a marker protects any unrelated existing profile.
-No installed app, user project, source snapshot or fixed upstream layout is used.
+No user project or source snapshot is used. The compatibility case uses pinned
+official portable packages and copies consumer binaries into the test root.
 Visible tests use DISPLAY2 when connected, otherwise another display except
 DISPLAY1 if several are connected. The scripting module constrains windows
 before showing them; the runner refuses modules without that contract.
@@ -29,16 +30,19 @@ from run_fork_test_harness import (
     capture_owned_project,
     check_behavior_worker_lifecycle,
     check_neutral_preview_fixture,
+    check_portable_audacity_projects,
     check_test_display_selection,
     connected_test_displays,
     drag_owned_video_clip,
     executable_version,
     painted_video_tracks,
+    read_audio_project_state,
     ready_video_preview,
     require_test_display_guard,
     run_behavior_worker,
     run_process,
     save_reopen,
+    select_audio_project_tracks,
     select_test_display,
     startup_window_messages,
     write_neutral_preview_video,
@@ -72,6 +76,66 @@ def check_groups(client, root):
     client.send("Undo")
     assert client.data("GetAudioClipGroups") == moved
     client.send("Save")
+
+
+def check_history_view(client, root):
+    """History restores content while retaining the user's current viewport."""
+    for _ in range(12):
+        client.file("Import2", root / "tone-a.wav")
+    # Insertion uses the normal native command to bring the bottom track into
+    # view. The following selection commands do not choose another viewport.
+    client.send("AddAudioTrackAfter: Track=11")
+    client.send("SelectAll")
+    client.send("SelectTime: Start=0.25 End=1")
+    client.send("ZoomSel")
+    for operation in ("Split", "Trim"):
+        client.send(operation)
+        expected = client.data("GetInfo: Type=View Format=JSON")
+        assert expected["verticalOffset"] > 0, expected
+        assert expected["horizontalStart"] > 0, expected
+        assert expected["pixelsPerSecond"] > 0, expected
+        # Each command is one intentional history transition. Repeating the
+        # Undo/Redo pair exercises both directions without replaying a lost UI
+        # command or assuming that another Undo is the same user action.
+        for _ in range(3):
+            client.send("Undo")
+            actual = client.data("GetInfo: Type=View Format=JSON")
+            assert actual == expected, ("Undo", operation, expected, actual)
+            client.send("Redo")
+            actual = client.data("GetInfo: Type=View Format=JSON")
+            assert actual == expected, ("Redo", operation, expected, actual)
+    # The shared worker closes normally after this case. Save only this owned
+    # synthetic project so its unsaved-changes dialog cannot block teardown.
+    client.file("SaveProject2", root / "_history-view.aup3")
+
+
+def check_project_compatibility(client, root):
+    """Save ordinary full AUP3 projects, with metadata and a video-only edge case."""
+    client.file("ImportVideo", root / "source.mp4")
+    client.file("Import2", root / "tone-b.wav")
+    client.send('GroupAudioClips: Clips="1:0,2:0"')
+    for track, marker in ((0, "c" * 32), (1, "d" * 32)):
+        client.send(f'AddClipMarker: Track={track} At=1 Text="Compatibility flag" Id="{marker}"')
+    client.send("SelectTime: Start=0.5 End=1.5")
+    client.send("AddLabel")
+    client.send('SetLabel: Label=0 Text="Compatibility label"')
+    project = root / "_with-video.aup3"
+    client.file("SaveProject2", project)
+    state = read_audio_project_state(client.data)
+    assert len(state["tracks"]) == 3 and len(state["labels"]) == 1, state
+    select_audio_project_tracks(client.send, client.data)
+    client.send("SelectTime: Start=0 End=5")
+    audio = root / "_original-mix.wav"
+    client.file("Export2", audio, "NumChannels=2")
+    expected = [{"project": project.name, "state": state, "audio": audio.name}]
+    client.send("SelectTracks: Track=1 TrackCount=3 Mode=Set")
+    client.send("RemoveTracks")
+    tracks = client.data("GetInfo: Type=Tracks Format=JSON")
+    assert len(tracks) == 1 and tracks[0]["kind"] == "video", tracks
+    project = root / "_video-only.aup3"
+    client.file("SaveProject2", project)
+    expected.append({"project": project.name, "state": read_audio_project_state(client.data)})
+    (root / "_compatibility-expected.json").write_text(json.dumps(expected), encoding="utf-8")
 
 
 def check_tracks(client, root):
@@ -860,6 +924,10 @@ def worker(args, root):
         check_groups(client, root)
     elif args.case == "tracks":
         check_tracks(client, root)
+    elif args.case == "history-view":
+        check_history_view(client, root)
+    elif args.case == "project-compatibility":
+        check_project_compatibility(client, root)
     elif args.case == "video":
         check_video(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "media":
@@ -967,6 +1035,8 @@ def main():
         choices=(
             "groups",
             "tracks",
+            "history-view",
+            "project-compatibility",
             "video",
             "media",
             "preview",
@@ -1071,7 +1141,7 @@ def main():
         ("tone-stereo.wav", 2),
     ):
         write_tone(root / name, channels)
-    if args.case in ("video", "media"):
+    if args.case in ("video", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,
@@ -1186,6 +1256,9 @@ def main():
         "pipe_client_sha256": hashlib.sha256(
             Path(__file__).with_name("pipeclient.py").read_bytes()
         ).hexdigest(),
+        "consumer_preparation_sha256": hashlib.sha256(
+            Path(__file__).with_name("prepare_audacity_consumer.py").read_bytes()
+        ).hexdigest() if args.case == "project-compatibility" else None,
     }
     with (root / "_app.log").open("w") as log:
         app = subprocess.Popen(
@@ -1310,6 +1383,9 @@ def main():
                 ) from error
             if status:
                 raise RuntimeError(f"The owned app exited with status {status}.")
+            stock_result = None
+            if args.case == "project-compatibility":
+                stock_result = check_portable_audacity_projects(root, display, args.ffmpeg)
             log.flush()
             shows = re.findall(
                 r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
@@ -1339,6 +1415,7 @@ def main():
                 "test_display": display,
                 "pre_show_count": len(shows),
                 "input": source_identity,
+                "stock_audacity": stock_result,
                 **identities,
             }
             (root / ("_result-" + run_id + ".json")).write_text(

@@ -77,6 +77,7 @@ enum {
    kLabels,
    kBoxes,
    kSelection,
+   kView,
    nTypes
 };
 
@@ -92,6 +93,7 @@ static const EnumValueSymbol kTypes[nTypes] =
    { XO("Labels") },
    { XO("Boxes") },
    { XO("Selection") },
+   { XO("View") },
 };
 
 enum {
@@ -178,6 +180,17 @@ bool GetInfoCommand::ApplyInner(const CommandContext &context)
       case kLabels       : return SendLabels( context );
       case kBoxes        : return SendBoxes( context );
       case kSelection    : return SendSelection( context );
+      case kView: {
+         // Read the actual project viewport for scripting clients. This is
+         // observational: querying the view never moves focus, selection or zoom.
+         const auto &view = ViewInfo::Get(context.project);
+         context.StartStruct();
+         context.AddItem(view.hpos, "horizontalStart");
+         context.AddItem(view.vpos, "verticalOffset");
+         context.AddItem(view.GetZoom(), "pixelsPerSecond");
+         context.EndStruct();
+         return true;
+      }
       default:
          context.Status( "Command options not recognised" );
    }

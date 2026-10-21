@@ -269,13 +269,13 @@ std::shared_ptr<AuTopsyVideoTrack> CreateProjectVideoTrack(AudacityProject &proj
 }
 ProjectPicture FindProjectPicture(AudacityProject &project, double time)
 {
-   for (const auto *track : ProjectVideoTracks(project)) {
-      if (!track->VideoVisible()) continue;
-      const auto &timeline = track->Timeline();
-      if (const auto *clip = ClipAt(timeline, time))
-         return {true, SourceFor(timeline, *clip), clip->sourceStart + time - clip->start, clip->id};
-   }
-   return {};
+   std::vector<const Timeline*> layers;
+   for (const auto *track : ProjectVideoTracks(project))
+      if (track->VideoVisible()) layers.push_back(&track->Timeline());
+   const auto picture = EvaluateVideoLayers(layers, time);
+   if (!picture.clip) return {};
+   return {true, SourceFor(*picture.timeline, *picture.clip),
+      picture.sourceTime, picture.clip->id};
 }
 bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &source,
    AuTopsyVideoTrack &destination, uint64_t id, double start, bool recordHistory)

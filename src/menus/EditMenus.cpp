@@ -216,9 +216,10 @@ void OnUndo(const CommandContext &context)
    auto t = *tracks.Selected().begin();
    if (!t)
       t = *tracks.begin();
+   // History restores edit state, not browsing position. The first selected
+   // track may be far from the object the user is looking at; changing keyboard
+   // focus must not force that track into view.
    TrackFocus::Get(project).Set(t);
-   if (t)
-      Viewport::Get(project).ShowTrack(*t);
 }
 
 void OnRedo(const CommandContext &context)
@@ -244,9 +245,10 @@ void OnRedo(const CommandContext &context)
    auto t = *tracks.Selected().begin();
    if (!t)
       t = *tracks.begin();
+   // History restores edit state, not browsing position. The first selected
+   // track may be far from the object the user is looking at; changing keyboard
+   // focus must not force that track into view.
    TrackFocus::Get(project).Set(t);
-   if (t)
-      Viewport::Get(project).ShowTrack(*t);
 }
 
 void ClearClipboard()

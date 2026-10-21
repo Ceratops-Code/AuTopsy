@@ -43,27 +43,13 @@ repository:
           - ctest
       steps:
         - run:
-            - cmake
-            - -S
-            - src/video
-            - -B
-            - .build/_core
-            - -DCMAKE_BUILD_TYPE=Release
-        - run:
-            - cmake
-            - --build
-            - .build/_core
-            - --config
-            - Release
-            - --parallel
-            - "2"
-        - run:
-            - ctest
-            - --test-dir
-            - .build/_core
-            - -C
-            - Release
-            - --output-on-failure
+            - uv
+            - run
+            - --project
+            - scripts
+            - --locked
+            - python
+            - scripts/run_affected_tests.py
 deliverables:
   packages:
     windows-installer:

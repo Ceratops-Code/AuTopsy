@@ -12,6 +12,7 @@ Paul Licameli split from ProjectManager.cpp
 
 #include "Project.h"
 #include "UndoManager.h"
+#include "MemoryX.h"
 
 static AudacityProject::AttachedObjects::RegisteredFactory sProjectHistoryKey {
    []( AudacityProject &project ) {
@@ -111,6 +112,10 @@ void ProjectHistory::PopState(const UndoState &state, bool doAutosave)
 
    // remaining no-fail operations "commit" the changes of undo manager state
 
+   // Synchronous track-addition notifications must not resize a viewport
+   // against the temporarily incomplete list. Restore the phase even on an
+   // exception or nested restoration; observers refresh after the whole state.
+   auto restoring = valueRestorer(mRestoringState, true);
    // Restore extra state
    for (auto &pExtension : state.extensions)
       if (pExtension)

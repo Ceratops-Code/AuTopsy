@@ -59,6 +59,8 @@ public:
       // a crash, as it can take many seconds for large (eg. 10 track-hours)
       // projects
    void PopState(const UndoState &state, bool doAutosave = true);
+   //! Track lists can be temporarily incomplete while restoring one state.
+   bool IsRestoringState() const { return mRestoringState; }
 
    bool GetDirty() const { return mDirty; }
    void SetDirty( bool value ) { mDirty = value; }
@@ -67,6 +69,7 @@ private:
    AudacityProject &mProject;
 
    bool mDirty{ false };
+   bool mRestoringState{ false };
 };
 
 #endif

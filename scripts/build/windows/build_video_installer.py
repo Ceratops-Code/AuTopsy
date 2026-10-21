@@ -231,6 +231,20 @@ def prepare_sdk(name: str, spec: dict, root: Path, source: Path, diagnostics: Pa
         remove_owned_tree(staging, root)
 
 
+def get_native_test_python() -> Path:
+    """Use the persistent base runtime for standard-library native test clients.
+
+    uv's --with environment can disappear when the build command exits.
+    Persisting its executable in CTest makes later sessions impossible. Native
+    behavior clients use only the standard library; package tests retain their
+    explicitly declared uv project environment.
+    """
+    executable = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
+    if not executable.is_file():
+        raise RuntimeError(f"The persistent native-test Python is missing: {executable}")
+    return executable.resolve()
+
+
 def _build_installer(source: Path, build: Path, inno: Path) -> dict:
     """A normal rerun derives all remaining work from current source and outputs."""
     source, build, inno = source.resolve(), build.resolve(), inno.resolve()
@@ -282,6 +296,7 @@ def _build_installer(source: Path, build: Path, inno: Path) -> dict:
         "-Daudacity_has_asio_support=OFF", "-Daudacity_bundle_gplv3=ON",
         "-Daudacity_video_mpv_sdk=" + str(mpv), "-Daudacity_video_ffmpeg_runtime=" + str(ffmpeg),
         "-DINNO_SETUP_COMPILER=" + str(inno),
+        "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python()),
     ]
     run_command(configure, source, diagnostics)
     run_command([cmake, "--build", str(build), "--config", "Release", "--parallel", "4"], source, diagnostics)
@@ -353,22 +368,26 @@ def build_installer(source: Path, build: Path, inno: Path) -> dict:
 
 
 def test_existing_installer_build(source: Path, build: Path, test_name: str) -> dict:
-    """Run the selected CTest case without compiling, installing, or opening AuTopsy.
+    """Run selected checks without rebuilding or installing the accepted product.
 
-    The default release check is the neutral media fixture. Explicit desktop
-    selections remain available for a separate interactive test session.
+    Refresh CTest's runtime binding from current authoritative inputs before the
+    session. Explicit desktop cases open only an owned private test process;
+    the default fixture case opens no application.
     """
     source, build = source.resolve(), build.resolve()
     if not test_name.strip():
         raise ValueError("Choose a nonempty CTest selection.")
     if not (build / "CTestTestfile.cmake").is_file():
         raise RuntimeError(f"Configure the native installer build before testing it: {build}")
-    ctest = shutil.which("ctest")
-    if not ctest:
-        raise RuntimeError("CTest is missing from the current build environment.")
+    ctest, cmake = shutil.which("ctest"), shutil.which("cmake")
+    if not ctest or not cmake:
+        raise RuntimeError("CMake and CTest are required in the current build environment.")
     diagnostics = build / "_test_command_failure.json"
     with build_lock(build):
         diagnostics.with_name("_" + diagnostics.name + ".pending").unlink(missing_ok=True)
+        run_command([cmake, "-S", str(source), "-B", str(build),
+                     "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python())],
+                    source, diagnostics, operation="native test configuration", target=str(build))
         run_command([ctest, "--test-dir", str(build), "-C", "Release",
                      "--output-on-failure", "-R", test_name, "--no-tests=error"], source, diagnostics)
         diagnostics.unlink(missing_ok=True)

@@ -20,8 +20,12 @@ target-version = "py314"
 include = [
   "scripts/validate-repository.py",
   "scripts/run-actionlint.py",
+  "scripts/run_affected_tests.py",
+  "scripts/test_run_affected_tests.py",
   "scripts/piped-work/test_fork_features.py",
   "scripts/piped-work/run_fork_test_harness.py",
+  "scripts/piped-work/prepare_audacity_consumer.py",
+  "scripts/piped-work/test_prepare_audacity_consumer.py",
   "scripts/build/windows/build_video_installer.py",
   "scripts/build/windows/test_build_video_installer.py",
 ]
@@ -38,8 +42,12 @@ platform = "win32"
 files = [
   "scripts/validate-repository.py",
   "scripts/run-actionlint.py",
+  "scripts/run_affected_tests.py",
+  "scripts/test_run_affected_tests.py",
   "scripts/piped-work/test_fork_features.py",
   "scripts/piped-work/run_fork_test_harness.py",
+  "scripts/piped-work/prepare_audacity_consumer.py",
+  "scripts/piped-work/test_prepare_audacity_consumer.py",
   "scripts/build/windows/build_video_installer.py",
   "scripts/build/windows/test_build_video_installer.py",
 ]

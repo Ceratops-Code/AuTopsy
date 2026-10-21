@@ -93,34 +93,54 @@ class InstallerBuildTests(unittest.TestCase):
                         self.assertEqual(remote["effects"], effects)
 
     def test_existing_build_checks_keep_the_installer_unchanged_after_interruption(self):
-        for boundary in ("before", "after"):
-            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
-                root = Path(temporary)
-                build = root / "build"
-                build.mkdir()
-                (build / "CTestTestfile.cmake").write_text("# existing test project")
-                installer = build / "completed.exe"
-                installer.write_bytes(b"accepted installer")
-                effects: list[str] = []
+        for phase in (0, 1):
+            for boundary in ("before", "after"):
+                with self.subTest(phase=phase, boundary=boundary), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                    root = Path(temporary)
+                    build = root / "build"
+                    build.mkdir()
+                    (build / "CTestTestfile.cmake").write_text("# existing test project")
+                    installer = build / "completed.exe"
+                    installer.write_bytes(b"accepted installer")
+                    effects: list[str] = []
+                    state = {"call": 0}
 
-                def check(arguments, source, diagnostics, selected_boundary=boundary, observed=effects):
-                    if selected_boundary == "before":
-                        raise InterruptedError("before test child")
-                    observed.append("checked")
-                    raise InterruptedError("after test child")
+                    def check(arguments, source, diagnostics, selected_phase=phase,
+                              selected_boundary=boundary, observed=effects, state=state, **_options):
+                        current = state["call"]
+                        state["call"] += 1
+                        if current == selected_phase and selected_boundary == "before":
+                            raise InterruptedError("before child effect")
+                        observed.append("configure" if "-S" in arguments else "check")
+                        if current == selected_phase and selected_boundary == "after":
+                            raise InterruptedError("after child effect")
 
-                with mock.patch.object(builder.shutil, "which", return_value="ctest"), \
-                        mock.patch.object(builder, "run_command", side_effect=check):
-                    with self.assertRaises(InterruptedError):
-                        builder.test_existing_installer_build(root, build, "^fork-fixtures$")
-                self.assertEqual(effects, [] if boundary == "before" else ["checked"])
-                with mock.patch.object(builder.shutil, "which", return_value="ctest"), \
-                        mock.patch.object(builder, "run_command", return_value="") as runner:
-                    first = builder.test_existing_installer_build(root, build, "^fork-fixtures$")
-                    self.assertEqual(builder.test_existing_installer_build(root, build, "^fork-fixtures$"), first)
-                    self.assertEqual(runner.call_count, 2)
-                self.assertEqual(first["status"], "passed")
-                self.assertEqual(installer.read_bytes(), b"accepted installer")
+                    with mock.patch.object(builder.shutil, "which", return_value="ctest"), \
+                            mock.patch.object(builder, "run_command", side_effect=check):
+                        with self.assertRaises(InterruptedError):
+                            builder.test_existing_installer_build(root, build, "^fork-fixtures$")
+                    expected = ["configure", "check"][:phase + (boundary == "after")]
+                    self.assertEqual(effects, expected)
+                    with mock.patch.object(builder.shutil, "which", return_value="ctest"), \
+                            mock.patch.object(builder, "run_command", return_value="") as runner:
+                        first = builder.test_existing_installer_build(root, build, "^fork-fixtures$")
+                        self.assertEqual(builder.test_existing_installer_build(root, build, "^fork-fixtures$"), first)
+                        self.assertEqual(runner.call_count, 4)
+                        configuration = runner.call_args_list[0].args[0]
+                        self.assertIn("-DPython3_EXECUTABLE:FILEPATH=" + str(builder.get_native_test_python()), configuration)
+                    self.assertEqual(first["status"], "passed")
+                    self.assertEqual(installer.read_bytes(), b"accepted installer")
+
+    def test_native_runtime_binding_rejects_missing_base_without_using_overlay(self):
+        with tempfile.TemporaryDirectory(prefix="_runtime-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            base = Path(temporary)
+            with mock.patch.object(builder.sys, "base_prefix", str(base)):
+                with self.assertRaisesRegex(RuntimeError, "persistent native-test Python"):
+                    builder.get_native_test_python()
+                executable = base / ("python.exe" if os.name == "nt" else "bin/python3")
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_bytes(b"stable runtime")
+                self.assertEqual(builder.get_native_test_python(), executable.resolve())
 
     def test_seven_zip_sdk_uses_the_existing_cmake_extractor(self):
         with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:

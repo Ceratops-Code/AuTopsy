@@ -78,6 +78,10 @@ If you install Graphviz, then an image file modules.dot.svg is generated in the 
 
 You will also be able to change to the scripts directory and run ./graph.pl to generate a diagram of dependencies among source code files within the executable.
 
+Native CTest clients use the persistent base Python runtime, rather than a
+temporary uv dependency environment. An explicit test session refreshes that
+CTest configuration without rebuilding or changing the accepted installer.
+
 ## Building on Windows
 
 1. Ensure the Python installer option `Add Python 3.x to PATH` is checked. Go to Windows Settings "Add or Remove Programs" and check the `Add Python to environment variables` in Python settings if Python is not in `PATH`.
@@ -477,8 +481,10 @@ predecessors. Building never installs or publishes an application.
 
 GitHub's `Validate` workflow builds on `windows-2022` when manually
 dispatched, or when a pull request has the `build-windows-installer` label.
-Its repository checks precede the installer job. The uploaded unsigned installer
-and source manifest are retained for 14 days; failure details for 7 days.
+Its repository checks precede the installer job. After building, it runs the
+same focused native project-compatibility case used locally, against pinned
+portable Audacity consumers. The uploaded unsigned installer and source manifest
+are retained for 14 days; failure details for 7 days.
 Signing is a separate service approval and is not claimed by this job.
 
 The `deliverables.packages.windows-installer.actions.publish` operation consumes
@@ -505,6 +511,45 @@ an explicit native session in the repository test operation. For example,
 `^fork-media$` runs the existing guarded desktop case for linked-media splits
 across video tracks, trims with unrelated audio before zero, saved links, flags
 and exports. Reconfiguration without the selector restores the portable suite.
+`^fork-project-compatibility$` automatically prepares the baseline Audacity 3.7.8
+and the selected update consumer 3.7.9 from official Windows x64 portable ZIPs.
+`prepare_audacity_consumer.py` owns their release URLs and SHA-256 pins, taken from
+the official [3.7.8 assets](https://github.com/audacity/audacity/releases/expanded_assets/Audacity-3.7.8)
+and [3.7.9 assets](https://github.com/audacity/audacity/releases/expanded_assets/Audacity-3.7.9).
+Changing a supported consumer means updating those pins and running this case;
+upstream updates must keep a baseline while exercising the new consumer.
+No Audacity installation, extracted reader module, installed profile or user
+project is an input. This remains a test dependency, outside AuTopsy's installer.
+
+The cache owner groups bundles under the native build's
+`_fork-tests/_audacity-consumers`. One OS lease covers preparation and use, so a
+live consumer cannot lose its package to another call. Entry removes abandoned
+staging and superseded owned bundles; success keeps only the two declared
+consumers, with accepted payload hashes for integrity reuse. Checksum, download,
+archive path, link, size or extraction failures publish no partial package.
+Archives are removed after extraction; staging is removed after failure, or at
+the next entry after a killed worker. The owner keeps one marker, one lock file
+and one receipt per active package, with no diagnostic history. Unrelated paths
+are left alone. `fork-audacity-consumer-cache` covers repeat, interruption,
+concurrent-owner, corruption, archive safety and cleanup behavior without network
+access or an application window.
+
+Each native consumer runs from a private copy in the marked case directory.
+Its private portable profile disables file association and update changes,
+separates audio and GUI temporary storage, and places its project window on the
+selected test display. The upstream name `Portable Settings` is required for
+that private profile; cache and test-owned names otherwise use `_` prefixes.
+
+This case opens a generated video/audio/label project and a video-only project,
+twice each, then checks stock save/copy/reopen behavior. It compares decoded
+48-kHz stereo audio with a maximum sample difference of 0.0005 to allow export
+dither, while clip timing, names, track properties and labels must match. Result
+records name both consumer versions, official package digests and executable hashes. After all saved-copy
+acknowledgements the harness ends only its private consumer process; stock pipe
+shutdown is outside this file-format test. It removes the private copied app,
+profile, log and working copies on success or failure. Current neutral fixtures
+and original test projects remain in the existing bounded per-case workspace.
+
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
 an existing native build, defaulting to
 `.build/_windows-installer`. For a separate desktop test session,
@@ -521,13 +566,36 @@ saved clip flags, relinking, source frame stepping and modern software exports.
 
 ### Independent feature checks
 
-The same CMake/CTest entry point is used by local contributors and GitHub CI:
+The SDLC `repository.actions.test` operation and GitHub CI call the same owning
+runner. Its direct developer entry point is:
 
-    cmake -S src/video -B _core-build -DCMAKE_BUILD_TYPE=Release
-    cmake --build _core-build --config Release --parallel 2
-    ctest --test-dir _core-build -C Release --output-on-failure
+    uv run --project scripts --locked --with cmake==3.31.10 python scripts/run_affected_tests.py
 
-This mode checks the owned video timing, transport, and product-name policy
+The runner compares against the merge base with `origin/main`, including current
+staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use `--base REF`
+for another comparison. CI supplies the event's base revision; an unavailable
+shallow base conservatively selects all portable checks. `--all` explicitly
+selects that full scope. Docs-only changes need no portable tests.
+
+One input map in `run_affected_tests.py` selects dependent groups; unknown owned
+executable inputs require a map entry or an explicit scope decision. CMake builds
+only their targets, and Catch2/CTest discovers individual compiled case names.
+Separate suites cover edit plans, composition geometry, existing playback,
+branding, installer production, harness policy/lifecycle and affected selection.
+Native adapter inputs are reported separately, without implying desktop acceptance.
+
+The runner owns `.build/_core` and `.build/_test-results`. Immutable results retain
+their original IDs and source/test/fixture/lock/executable/runtime/command inputs.
+Matching passing results can be reused unless a newer applicable failure exists;
+source changes during compilation or execution cannot earn a pass. At startup and
+after publication, receipts retain the current and at most two earlier records per
+named check. An OS lock protects active work; its one lock file persists, while
+pending files are removed under exclusive ownership. Other files are untouched.
+The standard-library test interpreter is bound to persistent `sys.base_prefix`,
+so a CMake cache never depends on a discarded temporary `uv --with` environment.
+Later test changes do not rebuild or revoke an unchanged accepted installer.
+
+This mode checks owned video timing, transport, edit plans, crop/PiP geometry and product-name policy
 without the editor or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
 test interface, pinned to its Git commit. CMake owns the current executables,
 dependency checkout, and generated files in the selected build directory.

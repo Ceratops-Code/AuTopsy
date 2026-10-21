@@ -5,15 +5,263 @@ on the selected secondary display; absent display evidence blocks input.
 """
 
 import ctypes
+import hashlib
 import json
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
 import time
 import wave
 from pathlib import Path
+
+from prepare_audacity_consumer import PINNED_CONSUMERS, AudacityConsumerCache
+
+
+def check_portable_audacity_projects(root, display, ffmpeg):
+    """Use the same pinned consumers locally and in hosted CI, with one cache lease."""
+    expected = root / "_compatibility-expected.json"
+    try:
+        with AudacityConsumerCache(root.parent / "_audacity-consumers", PINNED_CONSUMERS) as cache:
+            # Finish network/package work before opening the first consumer.
+            consumers = [cache.prepare_consumer(package) for package in PINNED_CONSUMERS]
+            outcomes = []
+            for consumer in consumers:
+                result = check_stock_audacity_projects(root, consumer["executable"], display, ffmpeg)
+                result["package"] = {key: value for key, value in consumer.items() if key != "executable"}
+                outcomes.append(result)
+            return outcomes
+    finally:
+        expected.unlink(missing_ok=True)
+
+
+def read_audio_project_state(query):
+    """Compare standard audio/label data while ignoring view state and video IDs."""
+    tracks = query("GetInfo: Type=Tracks Format=JSON")
+    return {
+        "tracks": [{key: item[key] for key in ("kind", "name", "start", "end", "channels", "volume", "pan", "mute", "solo") if key in item}
+                   for item in tracks if item["kind"] != "video"],
+        "clips": [{key: item[key] for key in ("name", "start", "end") if key in item}
+                  for item in query("GetInfo: Type=Clips Format=JSON")],
+        "labels": [item[1] for item in query("GetInfo: Type=Labels Format=JSON")],
+    }
+
+
+def select_audio_project_tracks(send, query):
+    """Select audio by native kind, without invoking label/clip text selection."""
+    mode = "Set"
+    for index, track in enumerate(query("GetInfo: Type=Tracks Format=JSON")):
+        if track["kind"] == "wave":
+            send(f"SelectTracks: Track={index} TrackCount=1 Mode={mode}")
+            mode = "Add"
+
+
+def check_stock_audacity_projects(root, stock_executable, display, ffmpeg):
+    """Open neutral AuTopsy files in an unmodified, privately copied Audacity 3.
+
+    The pinned portable executable is a read-only test dependency. Only the
+    marked root holds private binaries, preferences, test inputs and outputs.
+    File association and update changes are disabled. Saved window placement
+    is on the already-selected test display. IPC server
+    PID checks occur before any command, and existing stock pipes block launch.
+    Finally removes the private tree and stops only this owned child, including
+    on failure. Completed acceptance retains only returned identities/outcomes.
+    """
+    from array import array
+    from datetime import datetime
+
+    stock_executable = Path(stock_executable).resolve(strict=True)
+    if not (root / "_owner").is_file() or (root / "_owner").read_text() != "AuTopsy behavior tests 1":
+        raise RuntimeError("Stock compatibility requires the marked, exclusively owned native test root.")
+    version = executable_version(stock_executable)
+    if version[0] != 3:
+        raise RuntimeError("The AUP3 compatibility consumer must be stock Audacity 3.")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.WaitNamedPipeW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+    kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32,
+                                  ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel.GetNamedPipeServerProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    kernel.PeekNamedPipe.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+                                   ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
+    kernel.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+                               ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
+    kernel.WriteFile.argtypes = kernel.ReadFile.argtypes
+    pipes = [r"\\.\pipe\ToSrvPipe", r"\\.\pipe\FromSrvPipe"]
+    for pipe in pipes:
+        if kernel.WaitNamedPipeW(pipe, 1) or ctypes.get_last_error() != 2:
+            raise RuntimeError("An existing stock Audacity pipe blocks an isolated compatibility session.")
+    private = root / "_stock-audacity"
+    if private.exists():
+        raise RuntimeError("A previous stock compatibility workspace needs its owning test cleanup.")
+    private.mkdir()
+    app = None
+    command = [str(stock_executable)]
+    handles = []
+    expected_file = root / "_compatibility-expected.json"
+    expected = json.loads(expected_file.read_text(encoding="utf-8"))
+    try:
+        copied = private / "_app"
+        shutil.copytree(stock_executable.parent, copied,
+                        ignore=shutil.ignore_patterns("Portable Settings", "*.aup3", "*.aup4", "*.aup"))
+        executable = copied / stock_executable.name
+        profile = copied / "Portable Settings"
+        profile.mkdir()
+        temporary = private / "_temp"
+        temporary.mkdir()
+        # Audacity rejects project storage inside the OS temporary directory.
+        # Keep its two private temp purposes separate, as in the AuTopsy harness.
+        gui_temporary = private / "_gui_temp"
+        gui_temporary.mkdir()
+        module = copied / "modules/mod-script-pipe.dll"
+        stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: DTZ006 -- native module preference uses local file time.
+        left, top, right, bottom = display["work"]
+        width, height = min(1100, right-left-32), min(650, bottom-top-32)
+        (profile / "audacity.cfg").write_text(
+            "WantAssociateFiles=0\n[Version]\n" +
+            f"Major={version[0]}\nMinor={version[1]}\nMicro={version[2]}\n" +
+            f"[Directories]\nTempDir={temporary.as_posix()}\n" +
+            "[GUI]\nShowSplashScreen=0\nShowHowTo=0\n[Update]\nDefaultUpdatesChecking=0\n" +
+            "[Module]\nmod-script-pipe=1\n[ModuleDateTime]\nmod-script-pipe=" + stamp + "\n" +
+            f"[Window]\nX={left+16}\nY={top+16}\nWidth={width}\nHeight={height}\n" +
+            f"Normal_X={left+16}\nNormal_Y={top+16}\nNormal_Width={width}\nNormal_Height={height}\n" +
+            "Maximized=0\nIconized=0\n", encoding="utf-8")
+        environment = dict(os.environ, TEMP=str(gui_temporary), TMP=str(gui_temporary))
+        for name in ("AUTOPSY_BEHAVIOR_ROOT", "AUTOPSY_TEST_DISPLAY", "AUTOPSY_OWNED_APP_PID"):
+            environment.pop(name, None)
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 1
+        command = [str(executable)]
+        with (private / "_app.log").open("w", encoding="utf-8") as log:
+            app = subprocess.Popen(command, cwd=copied, env=environment, startupinfo=startup,
+                                   creationflags=subprocess.CREATE_NO_WINDOW, stdout=log, stderr=subprocess.STDOUT)
+            deadline = time.monotonic() + 40
+            while not kernel.WaitNamedPipeW(pipes[0], 100):
+                if app.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Stock Audacity did not expose its owned pipe: " + startup_window_messages(app.pid))
+            # Stock publishes its pipe during ModuleInitialize, before a project
+            # exists. Its relay returns an empty reply for commands in that gap.
+            # Require the native project pane and an idle GUI before connecting.
+            user = ctypes.WinDLL("user32", use_last_error=True)
+            user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            while "Track Panel" not in startup_window_messages(app.pid, visible_only=True):
+                if app.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Stock project startup failed: " + startup_window_messages(app.pid))
+                time.sleep(0.05)
+            if user.WaitForInputIdle(int(app._handle), 30000):  # type: ignore[attr-defined]  # CPython Windows process handle.
+                raise RuntimeError("Stock Audacity did not finish project startup.")
+            for pipe in pipes:
+                handle = kernel.CreateFileW(pipe, 0xC0000000, 0, None, 3, 0, None)
+                if handle == ctypes.c_void_p(-1).value:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                handles.append(handle)
+                pid = ctypes.c_uint32()
+                if not kernel.GetNamedPipeServerProcessId(handle, ctypes.byref(pid)) or pid.value != app.pid:
+                    raise RuntimeError("Stock scripting pipe belongs to another process; no command sent.")
+
+            def send(text):
+                # Stock Windows mod-script-pipe consumes a NUL-terminated line.
+                data = (text + "\r\n\0").encode("utf-8")
+                count = ctypes.c_uint32()
+                if not kernel.WriteFile(handles[0], data, len(data), ctypes.byref(count), None):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                response = b""
+                deadline = time.monotonic() + 45
+                while time.monotonic() < deadline:
+                    available = ctypes.c_uint32()
+                    if not kernel.PeekNamedPipe(handles[1], None, 0, None, ctypes.byref(available), None):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    if available.value:
+                        buffer = ctypes.create_string_buffer(available.value)
+                        if not kernel.ReadFile(handles[1], buffer, len(buffer), ctypes.byref(count), None):
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        response += buffer.raw[:count.value]
+                        reply = response.decode("utf-8").replace("\x00", "").replace("\r\n", "\n")
+                        if "BatchCommand finished:" in reply and reply.endswith("\n\n"):
+                            if "BatchCommand finished: OK" not in reply:
+                                raise RuntimeError(f"Stock Audacity rejected {text}: {reply}")
+                            return reply.split("BatchCommand", 1)[0].strip()
+                    time.sleep(0.01)
+                raise RuntimeError(f"Stock Audacity command timed out: {text}; reply {response!r}; "
+                                   + startup_window_messages(app.pid))
+
+            def query(text):
+                return json.loads(send(text))
+
+            query("GetInfo: Type=Tracks Format=JSON")
+            outcomes: list[str] = []
+            for case in expected:
+                original = root / case["project"]
+                original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
+                for repeat in range(2):
+                    working = private / f"_input-{len(outcomes)}-{repeat}.aup3"
+                    shutil.copyfile(original, working)
+                    # Stock OpenProject2 reports success only when it reuses the
+                    # command's empty project, even when opening another succeeds.
+                    send("New")
+                    send(f'OpenProject2: Filename="{working.as_posix()}"')
+                    actual = read_audio_project_state(query)
+                    if actual != case["state"]:
+                        raise RuntimeError(f"Stock project content differs: expected {case['state']}; got {actual}")
+                    if case.get("audio"):
+                        audio = private / "_mix.wav"
+                        select_audio_project_tracks(send, query)
+                        send("SelectTime: Start=0 End=5")
+                        send(f'Export2: Filename="{audio.as_posix()}" NumChannels=2')
+                        pcm = []
+                        for path in (root / case["audio"], audio):
+                            samples = array("f")
+                            samples.frombytes(run_process([ffmpeg, "-v", "error", "-i", str(path), "-f", "f32le",
+                                                           "-ac", "2", "-ar", "48000", "-"], text=False, timeout=30))
+                            pcm.append(samples)
+                        lengths = [len(samples) for samples in pcm]
+                        difference = max((abs(a-b) for a, b in zip(*pcm, strict=True)), default=0) if lengths[0] == lengths[1] else None
+                        if difference is None or difference > 0.0005:
+                            raise RuntimeError(f"Stock Audacity audio mix differs: sample lengths {lengths}, "
+                                               f"largest sample difference {difference}.")
+                        audio.unlink()
+                    output = private / f"_saved-{len(outcomes)}-{repeat}.aup3"
+                    send(f'SaveProject2: Filename="{output.as_posix()}"')
+                    # A closed SaveCopy is safe to reopen without copying a live
+                    # database/WAL or destroying GUI objects on stock's pipe thread.
+                    reopened = private / f"_reopened-{len(outcomes)}-{repeat}.aup3"
+                    send(f'SaveCopy: Filename="{reopened.as_posix()}"')
+                    send("New")
+                    send(f'OpenProject2: Filename="{reopened.as_posix()}"')
+                    if read_audio_project_state(query) != case["state"]:
+                        raise RuntimeError("Stock save/reopen changed standard audio or labels.")
+                if hashlib.sha256(original.read_bytes()).hexdigest() != original_hash:
+                    raise RuntimeError("The original AuTopsy test project was changed by the consumer.")
+                outcomes.append(case["project"])
+            # Consumer shutdown is not an AUP3 contract. Stock's scripting Close
+            # can destroy GUI objects on its worker thread; end only this owned
+            # private consumer after all SaveCopy/reopen acknowledgements. No
+            # accepted project or user profile depends on its live databases.
+            for handle in handles:
+                kernel.CloseHandle(handle)
+            handles.clear()
+            app.terminate()
+            app.wait(timeout=20)
+            return {"version": list(version), "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                    "script_module_sha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+                    "projects": outcomes, "open_save_reopen_repeats": 2, "audio_tolerance": 0.0005}
+    except Exception as error:
+        output = private / "_app.log"
+        evidence = output.read_text(encoding="utf-8", errors="replace")[-8000:] if output.exists() else "<absent>"
+        exit_status = app.poll() if app else "not-started"
+        raise RuntimeError(f"Stock compatibility operation at {private}: {error}; command {command!r}; "
+                           f"exit status {exit_status}; child stdout/stderr combined: {evidence}") from error
+    finally:
+        for handle in handles:
+            kernel.CloseHandle(handle)
+        if app and app.poll() is None:
+            app.terminate()
+            app.wait(timeout=20)
+        shutil.rmtree(private)
 
 
 def write_neutral_preview_video(ffmpeg, output):
@@ -480,8 +728,8 @@ def check_behavior_worker_lifecycle(work_root):
     )
 
 
-def startup_window_messages(pid):
-    """Keep dialogs from the owned child in startup failure diagnostics."""
+def startup_window_messages(pid, visible_only=False):
+    """Read owned child captions, optionally only after its main frame is shown."""
     user = ctypes.WinDLL("user32", use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_ssize_t)
     user.GetWindowThreadProcessId.argtypes = [
@@ -489,6 +737,7 @@ def startup_window_messages(pid):
         ctypes.POINTER(ctypes.c_uint32),
     ]
     user.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    user.IsWindowVisible.argtypes = [ctypes.c_void_p]
     user.EnumWindows.argtypes = [callback_type, ctypes.c_ssize_t]
     user.EnumChildWindows.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_ssize_t]
     messages = []
@@ -505,7 +754,7 @@ def startup_window_messages(pid):
     def parent(window, _):
         owner = ctypes.c_uint32()
         user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-        if owner.value == pid:
+        if owner.value == pid and (not visible_only or user.IsWindowVisible(window)):
             child(window, 0)
             user.EnumChildWindows(window, child, 0)
         return 1

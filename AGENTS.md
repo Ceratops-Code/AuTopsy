@@ -12,3 +12,7 @@
 - [FORK-03] Confine upstream-specific names and structural assumptions to
   integration adapters; select targets by semantic identity rather than
   position and reject missing or ambiguous contracts.
+- [FORK-04] As features evolve, keep ordinary AuTopsy projects readable by
+  supported Audacity releases with all content supported by Audacity intact;
+  store AuTopsy-only state in optional extensions Audacity can skip, and run
+  interoperability checks when project storage or supported releases change.
