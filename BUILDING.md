@@ -481,6 +481,17 @@ Its repository checks precede the installer job. The uploaded unsigned installer
 and source manifest are retained for 14 days; failure details for 7 days.
 Signing is a separate service approval and is not claimed by this job.
 
+The `deliverables.packages.windows-installer.actions.publish` operation consumes
+the existing accepted installer and `_build-manifest.json` from
+`AUTOPSY_VIDEO_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
+to select the preview tag and a local UTF-8 notes file. The tag names the original
+build revision, including when later test/documentation commits have advanced
+main. The operation creates a draft only when needed, uploads just those two
+accepted files, checks GitHub's asset digests, then makes the preview public.
+Repeated calls inspect live release state and perform only missing effects;
+conflicting tags/assets stop publication. It preserves the original build
+acceptance and does not compile or install an application.
+
 Every new installer build runs `fork-fixtures` after compilation and before
 packaging, without opening AuTopsy. The build manifest records its passing result
 and source revision. Repeated builds reuse that accepted installer only when the
@@ -489,11 +500,11 @@ Portable model and installer-producer tests run in the repository test operation
 source-only CI does not require an already-built Windows application.
 The package build operation takes explicit `build_dir` and `inno_compiler`
 inputs, so local builds can reuse their task-owned build and compiler paths.
-Setting both `AUTOPSY_VIDEO_BUILD_DIR` and `AUTOPSY_VIDEO_TEST_NAME` adds an
-explicit native session to the repository test operation. For example,
+Setting both `AUTOPSY_VIDEO_BUILD_DIR` and `AUTOPSY_VIDEO_TEST_NAME` selects only
+an explicit native session in the repository test operation. For example,
 `^fork-media$` runs the existing guarded desktop case for linked-media splits
 across video tracks, trims with unrelated audio before zero, saved links, flags
-and exports. Reconfiguration without the selector removes that desktop session.
+and exports. Reconfiguration without the selector restores the portable suite.
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
 an existing native build, defaulting to
 `.build/_windows-installer`. For a separate desktop test session,

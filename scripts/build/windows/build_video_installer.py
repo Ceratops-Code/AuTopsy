@@ -1,9 +1,12 @@
-"""Build the Windows video installer locally or on a GitHub-hosted runner.
+"""Build or publish the Windows video installer without installing it.
 
 The selected build directory owns _video-dependencies (one current SDK copy per
 component), pending extraction/downloads, and package/_build-manifest.json.
 Fresh calls inspect SDK identities, remove only owned abandoned staging, and
-let CMake rebuild unmet targets. They never install or publish an application.
+let CMake rebuild unmet targets. Publication consumes only a completed installer
+and its manifest, inspecting the selected GitHub tag/assets before each effect.
+It never replaces a conflicting tag or asset and publishes only after uploads
+have matching service-reported SHA-256 identities.
 """
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -92,21 +96,27 @@ def remove_owned_tree(path: Path, root: Path) -> None:
     path.rmdir()
 
 
-def run_command(arguments: list[str], source: Path, diagnostics: Path) -> str:
-    """Keep both streams and the exact invocation when a build child fails."""
+def run_command(arguments: list[str], source: Path, diagnostics: Path, *,
+                operation: str = "Windows installer build", missing_ok: bool = False) -> str:
+    """Retain child failures; a selected GitHub GET may report expected absence."""
     print("Running " + subprocess.list2cmdline(arguments), flush=True)
     try:
         ensure_process_tree_cleanup()
         result = subprocess.run(arguments, cwd=source, text=True, capture_output=True, check=False,
                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except (OSError, RuntimeError) as error:
-        record = {"operation": "Windows installer build", "target": str(source),
+        record = {"operation": operation, "target": str(source),
                   "argv": arguments, "exit": None, "stdout": "<absent>", "stderr": str(error)}
         write_json(diagnostics, record)
         raise RuntimeError(f"Cannot start build command; details: {diagnostics}") from error
     if result.returncode:
+        if missing_ok:
+            if arguments[:2] == ["gh", "api"] and "HTTP 404" in result.stderr:
+                return ""
+            if arguments[:3] == ["gh", "release", "view"] and result.stderr.strip() == "release not found":
+                return ""
         write_json(diagnostics, {
-            "operation": "Windows installer build", "target": str(source), "argv": arguments,
+            "operation": operation, "target": str(source), "argv": arguments,
             "exit": result.returncode, "stdout": result.stdout or "<absent>",
             "stderr": result.stderr or "<absent>",
         })
@@ -364,12 +374,128 @@ def test_existing_installer_build(source: Path, build: Path, test_name: str) -> 
     return {"status": "passed", "build_directory": str(build), "tests": test_name}
 
 
+def publish_installer(source: Path, build: Path, repository: str, tag: str, notes: Path) -> dict:
+    """Converge one unsigned public preview on its already accepted package.
+
+    GitHub state, never saved progress, determines missing effects. The tag binds
+    the original build revision; later test/documentation commits do not rebuild
+    an unchanged accepted installer. Existing conflicting releases/assets fail
+    closed. The build lock protects the two local upload inputs while they are
+    read. One current child-failure report belongs to this publication operation.
+    """
+    source, build, notes = source.resolve(), build.resolve(), notes.resolve()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ValueError("Choose an explicit GitHub owner/repository.")
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-autopsy\.[0-9]+", tag):
+        raise ValueError("Choose an AuTopsy preview tag, for example v3.7.10-autopsy.2.")
+    body = notes.read_text(encoding="utf-8")
+    if not body.strip():
+        raise ValueError("Preview release notes must not be empty.")
+    diagnostics = build / "_publish_command_failure.json"
+    with build_lock(build):
+        diagnostics.with_name("_" + diagnostics.name + ".pending").unlink(missing_ok=True)
+        manifest = build / "package/_build-manifest.json"
+        accepted = json.loads(manifest.read_text(encoding="utf-8"))
+        revision = accepted.get("source_revision", "")
+        filename = accepted.get("filename", "")
+        installer = manifest.parent / filename
+        if (accepted.get("schema") != "autopsy-windows-installer.v1"
+                or accepted.get("source_dirty") is not False or accepted.get("signed") is not False
+                or not re.fullmatch(r"[0-9a-f]{40}", revision)
+                or not filename.startswith("autopsy-win-") or not filename.endswith("-x64.exe")
+                or installer.parent.resolve() != manifest.parent.resolve()
+                or not installer.is_file() or sha256(installer) != accepted.get("sha256")
+                or not any(item == {"name": "fork-fixtures", "result": "passed", "source_revision": revision}
+                           for item in accepted.get("checks", []))):
+            raise RuntimeError("Preview publication requires a clean accepted installer and matching media-check receipt.")
+
+        def execute(arguments, *, missing=False):
+            return run_command(arguments, source, diagnostics,
+                               operation="Windows installer publication", missing_ok=missing)
+
+        def read(endpoint, *, missing=False):
+            value = execute(["gh", "api", endpoint], missing=missing)
+            return json.loads(value) if value else None
+
+        def current_release():
+            # The REST tag endpoint only returns published releases. gh owns
+            # draft lookup; read the selected release's full asset identities
+            # through its exact repository-bounded REST endpoint afterward.
+            value = execute(["gh", "release", "view", tag, "--repo", repository,
+                             "--json", "apiUrl"], missing=True)
+            if not value:
+                return None
+            url = json.loads(value)["apiUrl"]
+            prefix = f"https://api.github.com/repos/{repository}/releases/"
+            if not url.lower().startswith(prefix.lower()) or not url[len(prefix):].isdigit():
+                raise RuntimeError("GitHub returned a release endpoint outside the selected repository.")
+            return read(f"repos/{repository}/releases/" + url[len(prefix):])
+
+        def require_tag(*, optional=False):
+            ref = read(f"repos/{repository}/git/ref/tags/{tag}", missing=True)
+            if ref is None:
+                if optional:
+                    return
+                raise RuntimeError("The published preview tag is missing.")
+            target = ref["object"]
+            for _ in range(8):
+                if target["type"] != "tag":
+                    break
+                target = read(f"repos/{repository}/git/tags/{target['sha']}")["object"]
+            if target.get("type") != "commit" or target.get("sha") != revision:
+                raise RuntimeError("The preview tag already points to a different source revision.")
+
+        execute(["git", "merge-base", "--is-ancestor", revision, "HEAD"])
+        require_tag(optional=True)
+        title = "AuTopsy " + tag
+        release = current_release()
+        if release is None:
+            execute(["gh", "release", "create", tag, "--repo", repository, "--target", revision,
+                     "--draft", "--prerelease", "--title", title, "--notes-file", str(notes)])
+        expected = {installer.name: sha256(installer), manifest.name: sha256(manifest)}
+        for path in (installer, manifest):
+            release = current_release()
+            require_tag(optional=True)
+            assets = {asset["name"]: asset for asset in release["assets"]}
+            if release.get("target_commitish") != revision:
+                raise RuntimeError("The preview release targets another source revision.")
+            if set(assets) - set(expected):
+                raise RuntimeError("The selected preview contains unexpected assets; leave them for owner review.")
+            if path.name in assets:
+                if assets[path.name].get("digest") != "sha256:" + expected[path.name]:
+                    raise RuntimeError("An existing preview asset differs from the accepted package.")
+            else:
+                if not release["draft"]:
+                    raise RuntimeError("A public preview is incomplete; choose a new release tag.")
+                execute(["gh", "release", "upload", tag, str(path), "--repo", repository])
+        release = current_release()
+        require_tag(optional=True)
+        if ({asset["name"]: asset.get("digest") for asset in release["assets"]}
+                != {name: "sha256:" + digest for name, digest in expected.items()}):
+            raise RuntimeError("GitHub has not confirmed both accepted preview assets.")
+        if release["draft"]:
+            execute(["gh", "release", "edit", tag, "--repo", repository, "--draft=false",
+                     "--prerelease", "--title", title, "--notes-file", str(notes)])
+        release = current_release()
+        require_tag()
+        if release["draft"] or not release["prerelease"] or release["body"] != body or release["name"] != title:
+            raise RuntimeError("The public preview does not match the requested release metadata.")
+        diagnostics.unlink(missing_ok=True)
+        return {"schema": "autopsy-preview-publication.v1", "status": "published",
+                "url": release["html_url"], "tag": tag, "source_revision": revision,
+                "assets": expected, "signed": False}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--build-dir", type=Path, default=Path(
         os.environ.get("AUTOPSY_VIDEO_BUILD_DIR", ".build/_windows-installer")))
     parser.add_argument("--test-existing-build", action="store_true")
+    parser.add_argument("--publish-installer", action="store_true")
+    parser.add_argument("--repository", default="Ceratops-Code/AuTopsy")
+    parser.add_argument("--release-tag", default=os.environ.get("AUTOPSY_RELEASE_TAG"))
+    parser.add_argument("--release-notes", type=Path, default=os.environ.get("AUTOPSY_RELEASE_NOTES"))
     parser.add_argument("--test-name", default=os.environ.get("AUTOPSY_VIDEO_TEST_NAME", "^fork-fixtures$"))
     parser.add_argument("--inno-compiler", type=Path, default=Path(
         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
@@ -377,6 +503,12 @@ def main() -> None:
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("The Windows installer requires a Windows build host.")
+    if args.publish_installer:
+        if args.test_existing_build or not args.release_tag or not args.release_notes:
+            parser.error("Publication requires a release tag and notes, with no test-only mode.")
+        print(json.dumps(publish_installer(args.source_dir, args.build_dir, args.repository,
+                                           args.release_tag, args.release_notes)))
+        return
     if args.test_existing_build:
         print(json.dumps(test_existing_installer_build(args.source_dir, args.build_dir, args.test_name)))
         return

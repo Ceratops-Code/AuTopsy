@@ -10,6 +10,17 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    cmake_minimum_required(VERSION 3.16)
    project(AuTopsyVideoCoreChecks LANGUAGES CXX)
    enable_testing()
+   # An explicit native session is a separate test scope. Reconfiguration
+   # without these inputs restores the portable source checks for CI/promotion.
+   if(DEFINED ENV{AUTOPSY_VIDEO_BUILD_DIR} AND DEFINED ENV{AUTOPSY_VIDEO_TEST_NAME})
+      add_test(NAME fork-native-media-session COMMAND uv run --project
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked --with cmake==3.31.10
+         python "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows/build_video_installer.py"
+         --test-existing-build --build-dir "$ENV{AUTOPSY_VIDEO_BUILD_DIR}"
+         --test-name "$ENV{AUTOPSY_VIDEO_TEST_NAME}")
+      set_tests_properties(fork-native-media-session PROPERTIES RUN_SERIAL TRUE TIMEOUT 360)
+      return()
+   endif()
    include(FetchContent)
    FetchContent_Declare(Catch2
       GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -39,17 +50,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       add_test(NAME fork-worker-lifecycle COMMAND "${Python3_EXECUTABLE}"
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work/test_fork_features.py"
          --case worker-lifecycle --work-root "${CMAKE_BINARY_DIR}/_fork-tests")
-      # Explicit native sessions reuse the normal repository test entry point.
-      # Reconfiguration without these inputs removes the session from CTest,
-      # so later portable CI/promotion cannot inherit a desktop test request.
-      if(DEFINED ENV{AUTOPSY_VIDEO_BUILD_DIR} AND DEFINED ENV{AUTOPSY_VIDEO_TEST_NAME})
-         add_test(NAME fork-native-media-session COMMAND uv run --project
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked --with cmake==3.31.10
-            python "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows/build_video_installer.py"
-            --test-existing-build --build-dir "$ENV{AUTOPSY_VIDEO_BUILD_DIR}"
-            --test-name "$ENV{AUTOPSY_VIDEO_TEST_NAME}")
-         set_tests_properties(fork-native-media-session PROPERTIES RUN_SERIAL TRUE TIMEOUT 360)
-      endif()
    endif()
    return()
 endif()

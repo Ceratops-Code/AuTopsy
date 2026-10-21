@@ -17,6 +17,81 @@ import build_video_installer as builder
 
 
 class InstallerBuildTests(unittest.TestCase):
+    def test_preview_publication_repeats_and_interrupts_each_remote_effect(self):
+        revision, body = "a" * 40, "Unsigned AuTopsy preview.\n"
+        for boundary in range(5):
+            for after in ((False, True) if boundary else (False,)):
+                with self.subTest(boundary=boundary, after=after), tempfile.TemporaryDirectory(prefix="_release-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                    root = Path(temporary)
+                    source, build = root / "source", root / "build"
+                    source.mkdir()
+                    package = build / "package"
+                    package.mkdir(parents=True)
+                    installer = package / "autopsy-win-test-x64.exe"
+                    installer.write_bytes(b"accepted installer")
+                    manifest = package / "_build-manifest.json"
+                    builder.write_json(manifest, {
+                        "schema": "autopsy-windows-installer.v1", "source_revision": revision,
+                        "source_dirty": False, "signed": False, "filename": installer.name,
+                        "sha256": builder.sha256(installer),
+                        "checks": [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}],
+                    })
+                    notes = root / "notes.md"
+                    notes.write_text(body, encoding="utf-8")
+                    remote: dict[str, Any] = {"release": None, "tag": None, "calls": 0,
+                                               "stopped": False, "effects": []}
+
+                    def command(arguments, _source, _diagnostics, *, state=remote,
+                                selected=boundary, after_effect=after, **_options):
+                        if arguments[0] == "git":
+                            return ""
+                        if arguments[:3] == ["gh", "release", "view"]:
+                            return json.dumps({"apiUrl": "https://api.github.com/repos/Ceratops-Code/AuTopsy/releases/1"}) if state["release"] else ""
+                        if arguments[:2] == ["gh", "api"]:
+                            if "/git/ref/tags/" in arguments[2]:
+                                return json.dumps({"object": {"type": "commit", "sha": state["tag"]}}) if state["tag"] else ""
+                            return json.dumps(state["release"])
+                        state["calls"] += 1
+                        stop = state["calls"] == selected and not state["stopped"]
+                        if stop and not after_effect:
+                            state["stopped"] = True
+                            raise InterruptedError("before remote effect")
+                        action = arguments[2]
+                        state["effects"].append(action)
+                        if action == "create":
+                            state["release"] = {"draft": True, "prerelease": True, "assets": [],
+                                                "target_commitish": revision, "body": body,
+                                                "name": "AuTopsy v3.7.10-autopsy.2",
+                                                "html_url": "https://github.com/Ceratops-Code/AuTopsy/releases/tag/v3.7.10-autopsy.2"}
+                        elif action == "upload":
+                            path = Path(arguments[4])
+                            state["release"]["assets"].append({"name": path.name, "digest": "sha256:" + builder.sha256(path)})
+                        elif action == "edit":
+                            state["release"]["draft"] = False
+                            state["tag"] = revision
+                        else:
+                            raise AssertionError(arguments)
+                        if stop and after_effect:
+                            state["stopped"] = True
+                            raise InterruptedError("after remote effect")
+                        return ""
+
+                    with mock.patch.object(builder, "run_command", side_effect=command):
+                        if boundary:
+                            with self.assertRaises(InterruptedError):
+                                builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
+                        result = builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
+                        effects = list(remote["effects"])
+                        self.assertEqual(builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes), result)
+                        self.assertEqual(remote["effects"], effects)
+                        self.assertEqual(effects, ["create", "upload", "upload", "edit"])
+                        self.assertEqual(result["status"], "published")
+                        self.assertEqual(set(result["assets"]), {installer.name, manifest.name})
+                        remote["tag"] = "b" * 40
+                        with self.assertRaisesRegex(RuntimeError, "different source revision"):
+                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
+                        self.assertEqual(remote["effects"], effects)
+
     def test_existing_build_checks_keep_the_installer_unchanged_after_interruption(self):
         for boundary in ("before", "after"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
@@ -228,6 +303,22 @@ class InstallerBuildTests(unittest.TestCase):
             self.assertEqual(report["exit"], 7)
             self.assertIn("out", report["stdout"])
             self.assertIn("err", report["stderr"])
+
+    def test_release_lookup_accepts_only_expected_absence(self):
+        with tempfile.TemporaryDirectory(prefix="_release-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            diagnostics = root / "_failure.json"
+            command = ["gh", "api", "repos/Ceratops-Code/AuTopsy/git/ref/tags/missing"]
+            for status, absent in ((404, True), (403, False)):
+                failed = subprocess.CompletedProcess(command, 1, "", f"gh: request failed (HTTP {status})")
+                with mock.patch.object(builder, "ensure_process_tree_cleanup"), \
+                        mock.patch.object(builder.subprocess, "run", return_value=failed):
+                    if absent:
+                        self.assertEqual(builder.run_command(command, root, diagnostics, missing_ok=True), "")
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            builder.run_command(command, root, diagnostics, missing_ok=True)
+                        self.assertIn("HTTP 403", json.loads(diagnostics.read_text())["stderr"])
 
 
 def sdk_worker(spec_path: Path, root: Path, boundary: int, phase: str) -> None:

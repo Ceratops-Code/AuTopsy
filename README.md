@@ -54,6 +54,11 @@ The inherited audio tools are covered by the
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
 
+Preview publication uploads the completed installer and its source/build-check
+manifest. The publisher keeps the original accepted build intact, checks the
+uploaded asset identities, and makes the preview public after both uploads.
+See [BUILDING.md](BUILDING.md) for the build and publication inputs.
+
 ## Code signing policy
 
 Current Windows preview installers are **unsigned**. AuTopsy is preparing an

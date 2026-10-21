@@ -177,7 +177,9 @@ def check_media(client, root, ffmpeg, ffprobe):
     client.send('UnlinkMediaClips: Clips="2:0"')
     client.send("SelectTracks: Track=3 TrackCount=1 Mode=Set")
     client.send("SetClip: At=1 Start=-2")
-    drag_owned_video_clip(client, 4, 3.5, track=0)
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=0 End=3.5")
+    client.send("Trim")
     negative = client.data("GetLinkedMediaClips")
     assert all(abs(row["end"] - 3.5) < 0.04 for row in negative if row["track"] < 2), negative
     assert any(row["track"] == 3 and abs(row["start"] + 2) < 1e-7 for row in negative), negative

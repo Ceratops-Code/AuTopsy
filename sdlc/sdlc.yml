@@ -100,6 +100,21 @@ deliverables:
           requires:
             capabilities: []
           no-op: The repository tests exercise the portable installer builder. Every new installer build must pass fork-fixtures before packaging and records that result in its build manifest.
+        publish:
+          requires:
+            capabilities: [uv]
+          steps:
+            - run:
+                - uv
+                - run
+                - --project
+                - scripts
+                - --locked
+                - --python
+                - "3.12"
+                - python
+                - scripts/build/windows/build_video_installer.py
+                - --publish-installer
   apps:
     autopsy:
       source: .
