@@ -49,7 +49,7 @@ pushd temp
     # Configure Audacity so we can collect the required
     # packages.
 
-    cmake ${@} $audacityLocation
+    cmake "$@" "$audacityLocation"
 
     conan remove "*" --src --builds --packages --force
 popd

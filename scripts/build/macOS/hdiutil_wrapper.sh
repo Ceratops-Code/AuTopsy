@@ -7,7 +7,7 @@
 counter=0
 max_retries=10
 
-hdiutil $@
+hdiutil "$@"
 
 while [ $? -ne 0 ]; do
     ((counter++))
@@ -17,5 +17,5 @@ while [ $? -ne 0 ]; do
     fi
 
     sleep $counter
-    hdiutil $@
+    hdiutil "$@"
 done

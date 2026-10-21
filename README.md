@@ -44,13 +44,30 @@ The audio engine and its established editing tools come from Audacity:
 
 ## Users
 
-Build AuTopsy using [BUILDING.md](BUILDING.md). A local installation runs from
+Download the Windows installer from [AuTopsy Releases](https://github.com/Ceratops-Code/AuTopsy/releases).
+Local deployments use the installer, including locally built releases; source
+and build directories are not installation inputs. A local installation runs from
 `%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing
 and [AuTopsy issues](https://github.com/Ceratops-Code/AuTopsy/issues) for support.
 The inherited audio tools are covered by the
 [upstream Audacity manual](https://manual.audacityteam.org/).
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
+
+## Video backlog
+
+These are planned ideas, not features included in the current release.
+
+| Priority | Feature | Practical result |
+| --- | --- | --- |
+| Next | Link video clips with their imported audio | Move, split, and trim picture and sound together; unlink for independent editing. |
+| Next | Relink missing media and collect project media | Move a project to another computer without hunting for every source file. |
+| Next | Frame stepping and timecode | Place cuts and sync dialogue one frame at a time. |
+| Next | Export presets with modern encoders | Choose resolution, frame rate, quality, and hardware encoding instead of the initial fixed edited-picture format. |
+| Later | Ripple edits and magnetic snapping | Close gaps and align video/audio edges while preserving later timing. |
+| Later | Background proxy preparation | Keep editing while lightweight previews are prepared; show progress and cache controls. |
+| Later | Video fades, dissolves, crop, and rotation | Handle basic picture transitions and framing. |
+| Later | Titles and subtitle tracks | Add captions and simple overlays without leaving the project. |
 
 ## Developers
 Build instructions are available [here](BUILDING.md).

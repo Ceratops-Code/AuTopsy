@@ -13,13 +13,9 @@
 #define AppMinor ""
 #define AppRev ""
 #define AppBuild ""
-#define FullVersion ParseVersion(AppExe, AppMajor, AppMinor, AppRev, AppBuild)
+#define FullVersion GetVersionComponents(AppExe, AppMajor, AppMinor, AppRev, AppBuild)
 #define AppVersion Str(AppMajor) + "." + Str(AppMinor) + "." + Str(AppRev)
 #define AppName GetStringFileInfo(AppExe, PRODUCT_NAME)
-
-[UninstallRun]
-; Uninstall prior installations.
-Filename: "{app}\unins*.*";
 
 [Setup]
 ; compiler-related directives
@@ -51,7 +47,7 @@ DefaultDirName={commonpf}\AuTopsy
 VersionInfoProductName={#AppName}
 VersionInfoProductTextVersion={#GetFileProductVersion(AppExe)}
 VersionInfoDescription={#AppName + " " + AppVersion + " Setup"}
-VersionInfoVersion={#GetFileVersion(AppExe)}
+VersionInfoVersion={#GetVersionNumbersString(AppExe)}
 VersionInfoCopyright={#GetFileCopyright(AppExe)}
 
 ; Don't disable the "Select Destination Location" wizard, even if
@@ -138,7 +134,7 @@ Filename: "{app}\AuTopsy.exe"; Description: "{cm:LaunchProgram,AuTopsy}"; Flags:
 ; http://www.jrsoftware.org/files/istrans/
 ;
 ; Set this to the base of the unofficial  Inno Setup translations
-#define UrlBase "http://raw.github.com/jrsoftware/issrc/master/Files/Languages/Unofficial/"
+#define UrlBase "https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_3/Files/Languages/Unofficial/"
 
 ; This macro will use the Windows PowerShell to download the given translation into
 ; the Inno Setup Languages folder if it hasn't already been downloaded.
@@ -147,21 +143,7 @@ Filename: "{app}\AuTopsy.exe"; Description: "{cm:LaunchProgram,AuTopsy}"; Flags:
   Local[0] = ".\Languages\unofficial\" + Copy(URL, RPos("/", URL) + 1), \
   Local[1] = (FileExists(Local[0]) \
     ? "alreadyexists" \
-    : Exec("powershell", "echo 'Downloading: " + URL + "'; $wc = new-object System.Net.WebClient; $wc.DownloadFile('" + URLBase + URL + "', '" + Local[0] + "')", '.\', , SW_NORMAL)), \
-  Local[0]
-
-; Set this to the base of the official  Inno Setup translations
-#define UrlBaseOfficial "http://raw.github.com/jrsoftware/issrc/master/Files/Languages/"
-
-; This macro will use the Windows PowerShell to download the given translation into
-; the Inno Setup Languages folder if it hasn't already been downloaded.
-; InnoSetup has no tags in their repo, so for some languages we have to change the Source
-; of the file
-#define GetOfficial(URL) \
-  Local[0] = ".\Languages\unofficial\" + Copy(URL, RPos("/", URL) + 1), \
-  Local[1] = (FileExists(Local[0]) \
-    ? "alreadyexists" \
-    : Exec("powershell", "echo 'Downloading: " + URL + "'; $wc = new-object System.Net.WebClient; $wc.DownloadFile('" + UrlBaseOfficial + URL + "', '" + Local[0] + "')", '.\', , SW_NORMAL)), \
+    : Exec("powershell", "$ErrorActionPreference='Stop'; $wc = new-object System.Net.WebClient; $wc.DownloadFile('" + URLBase + URL + "', '" + Local[0] + "')", '.\', true, SW_HIDE)), \
   Local[0]
 
 ; This macro will define a dummy translation based on the Defaults.isl
@@ -176,8 +158,10 @@ Filename: "{app}\AuTopsy.exe"; Description: "{cm:LaunchProgram,AuTopsy}"; Flags:
        WriteIni(Local[2], "LangOptions", "LanguageID", "$" + ID))), \
   Local[1]
 
+; English is first so missing unofficial custom messages fall back to English.
+Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "af"; MessagesFile: "{#Get('Afrikaans.isl')}"
-Name: "ar"; MessagesFile: "{#GetOfficial('Arabic.isl')}"
+Name: "ar"; MessagesFile: "compiler:Languages\Arabic.isl"
 Name: "be"; MessagesFile: "{#Get('Belarusian.isl')}"
 Name: "bg"; MessagesFile: "compiler:Languages\Bulgarian.isl"
 Name: "bn"; MessagesFile: "{#Get('Bengali.islu')}"
@@ -190,7 +174,6 @@ Name: "cy"; MessagesFile: "{#Dummy('Welsh', '0452')}"
 Name: "da"; MessagesFile: "compiler:Languages\Danish.isl"
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"
 Name: "el"; MessagesFile: "{#Get('Greek.isl')}"
-Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "eu"; MessagesFile: "{#Get('Basque.isl')}"
 Name: "fa"; MessagesFile: "{#Get('Farsi.isl')}"
@@ -201,7 +184,7 @@ Name: "gl"; MessagesFile: "{#Get('Galician.isl')}"
 Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"
 Name: "hi"; MessagesFile: "{#Get('Hindi.islu')}"
 Name: "hr"; MessagesFile: "{#Get('Croatian.isl')}"
-Name: "hu"; MessagesFile: "{#GetOfficial('Hungarian.isl')}"
+Name: "hu"; MessagesFile: "compiler:Languages\Hungarian.isl"
 Name: "hy"; MessagesFile: "compiler:Languages\Armenian.isl"
 Name: "id"; MessagesFile: "{#Get('Indonesian.isl')}"
 Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
@@ -209,7 +192,7 @@ Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
 Name: "ka"; MessagesFile: "{#Get('Georgian.isl')}"
 Name: "km"; MessagesFile: "{#Dummy('Khmer', '0409')}"
 Name: "ko"; MessagesFile: "{#Dummy('Korean', '0412')}"
-Name: "lt"; MessagesFile: "{#GetOfficial('Lithuanian.isl')}"
+Name: "lt"; MessagesFile: "{#Get('Lithuanian.isl')}"
 Name: "mk"; MessagesFile: "{#Get('Macedonian.isl')}"
 Name: "my"; MessagesFile: "{#Dummy('Burmese', '0409')}"
 Name: "nb"; MessagesFile: "compiler:Languages\Norwegian.isl"
@@ -225,14 +208,14 @@ Name: "sk"; MessagesFile: "compiler:Languages\Slovak.isl"
 Name: "sl"; MessagesFile: "compiler:Languages\Slovenian.isl"
 Name: "sr_RS"; MessagesFile: "{#Get('SerbianCyrillic.isl')}"
 Name: "sr_RS0latin"; MessagesFile: "{#Get('SerbianLatin.isl')}"
-Name: "sv"; MessagesFile: "{#GetOfficial('Swedish.isl')}"
+Name: "sv"; MessagesFile: "compiler:Languages\Swedish.isl"
 Name: "ta"; MessagesFile: "{#Dummy('Tamil', '0449')}"
 Name: "tg"; MessagesFile: "{#Dummy('Tajik', '0428')}"
 Name: "tr"; MessagesFile: "compiler:Languages\Turkish.isl"
 Name: "uk"; MessagesFile: "compiler:Languages\Ukrainian.isl"
 Name: "vi"; MessagesFile: "{#Get('Vietnamese.isl')}"
-Name: "zh_CN"; MessagesFile: "{#GetOfficial('ChineseSimplified.isl')}"
-Name: "zh_TW"; MessagesFile: "{#GetOfficial('ChineseTraditional.isl')}"
+Name: "zh_CN"; MessagesFile: "{#Get('ChineseSimplified.isl')}"
+Name: "zh_TW"; MessagesFile: "{#Get('ChineseTraditional.isl')}"
 
 ; To include additional translations add it to the win/InnoSetupLanguages directory.
 ; The filename must be the locale name and the ".isl" extension.  For example, "af.isl"

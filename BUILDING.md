@@ -338,14 +338,26 @@ Configure the normal AuTopsy build with these additional options:
     cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -Daudacity_has_tests=ON -Daudacity_has_video_preview=ON -Daudacity_video_mpv_sdk="<extracted-mpv-sdk>" -Daudacity_video_ffmpeg_runtime="<ffmpeg-runtime>"
     cmake --build _build --config Release --parallel 4
     ctest --test-dir _build -C Release -R "^(video-playback|video-timeline|fork-groups|fork-tracks|fork-video|fork-preview)$" --output-on-failure
-    cmake --install _build --config Release --prefix "$env:ProgramFiles/AuTopsy"
+    cmake -S . -B _build -DINNO_SETUP_COMPILER="<Inno-Setup-6.7.3>/ISCC.exe"
+    cmake --build _build --config Release --target innosetup
 
 The executable is AuTopsy.exe; internal CMake target names remain upstream's.
 The published product branch is `main`; use `--branch main` when cloning.
 Build the default target before running the app integration cases: it includes
 the runtime modules, including modules that link to the application executable.
 Building only the main executable after renaming it leaves those modules stale.
-The install command is shown for PowerShell and may need an elevated terminal.
+The distributable is `_build/package/autopsy-win-<version>-<content-id>-x64.exe`.
+Install that installer into `%ProgramFiles%\AuTopsy`; do not copy a build tree
+or run `cmake --install` against the installed application. The packaging
+target uses that command only inside its disposable private staging directory.
+The installer is also the asset attached to GitHub Releases. Source archives
+are provided by GitHub for GPL access, not used for local deployment.
+`BuildInnoSetupInstaller.cmake` owns `_build/innosetup`, recreates it for each
+package, stops on failed staging, and removes it after success or failure.
+It publishes completed installers atomically in `_build/package`, with a content
+ID in each filename, and retains the current installer and at most two older
+ones per architecture. Its private pending copy is removed at the next build.
+A process lock prevents simultaneous packaging from removing live staging files.
 Set audacity_has_video_preview=OFF to build without the video feature or SDKs.
 The inherited binary updater is excluded from AuTopsy builds; its service offers
 upstream releases rather than AuTopsy builds. Product help and feedback link to
@@ -370,6 +382,11 @@ launching. That process-local adapter constrains each wx top-level window before
 Windows applies its placement, covering the loading splash, editor, welcome,
 About, and video preview. A missing or too-small target stops the test instead
 of falling back to screen 1. It changes no system display settings or user windows.
+Placement and display-change checks obtain a fresh monitor handle from the last
+checked target area and require the same device name. They never select the
+nearest or primary monitor as a fallback, retain a monitor handle between
+callbacks, or accept a removed/reassigned target. Desktop enumeration is needed
+only for initial named-device discovery.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
 `fork-branding` also repeats hidden/visible placement requests toward the other

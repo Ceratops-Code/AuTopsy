@@ -35,6 +35,8 @@ namespace {
 // then constrain every placement before Windows applies it (including splash).
 class TestDisplayGuard final : public wxEventFilter {
    wxString mDevice;
+   mutable RECT mTargetArea{};
+   mutable bool mTargetResolved{};
    std::set<HWND> mWindows;
 
    [[noreturn]] static void Fail(const char *operation)
@@ -49,6 +51,21 @@ class TestDisplayGuard final : public wxEventFilter {
 
    RECT WorkArea() const
    {
+      // Monitor handles can be invalidated between window callbacks. Resolve
+      // a fresh one from the last checked area, without nearest/primary fallback,
+      // and require the named device before using its current geometry.
+      if (mTargetResolved) {
+         const auto monitor = MonitorFromRect(&mTargetArea, MONITOR_DEFAULTTONULL);
+         MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+         if (!monitor || !GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&info)) ||
+            mDevice != info.szDevice ||
+            (GetSystemMetrics(SM_CMONITORS) > 1 && mDevice == L"\\\\.\\DISPLAY1") ||
+            info.rcWork.right - info.rcWork.left < 640 ||
+            info.rcWork.bottom - info.rcWork.top < 480)
+            Fail("the selected test monitor is unavailable or unsafe");
+         mTargetArea = info.rcWork;
+         return info.rcWork;
+      }
       struct Displays {
          const wxString &device;
          RECT work{};
@@ -80,6 +97,8 @@ class TestDisplayGuard final : public wxEventFilter {
             displays.work.right, displays.work.bottom, displays.queryError);
          Fail("the selected test display is missing, forbidden, or too small");
       }
+      mTargetArea = displays.work;
+      mTargetResolved = true;
       return displays.work;
    }
 
@@ -108,7 +127,10 @@ class TestDisplayGuard final : public wxEventFilter {
          guard.mWindows.erase(window);
          RemoveWindowSubclass(window, WindowProcedure, id);
       }
-      if (message == WM_DISPLAYCHANGE) guard.WorkArea();
+      if (message == WM_DISPLAYCHANGE) {
+         // Resolve the current monitor just as for any other placement.
+         guard.WorkArea();
+      }
       if (message == WM_WINDOWPOSCHANGING) {
          // Let the host enforce its size rules first; the test display is the
          // final bound, so a minimum size cannot push UI onto another screen.

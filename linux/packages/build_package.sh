@@ -18,7 +18,7 @@ if [[ -d "audacity-offline-dependencies" ]]; then
     conan profile update settings.compiler.libcxx=libstdc++11 default
 fi
 
-cmake -S audacity -B build $@
+cmake -S audacity -B build "$@"
 cmake --build build -- -j`nproc`
 
 tar -czf audacity-linux_x86_64.tar.gz -C build/bin .

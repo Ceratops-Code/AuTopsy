@@ -1,5 +1,7 @@
 # Normalize line endings of all files that Git considers to be text
 * text eol=lf
+# Captured third-party libraries retain their own maintenance and check policies.
+lib-src/** linguist-vendored
 #except images and sounds
 *.png -text 
 *.bmp -text
