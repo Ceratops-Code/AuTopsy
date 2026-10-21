@@ -36,6 +36,14 @@
       "decision": "Make full requested functionality explicit in FORK-01, retain native editing integration, extend FORK-02 to independent feature and audacity3 adapter tests with plausible upstream changes, and add FORK-03 for semantic targeting and clear missing or ambiguous contracts.",
       "reason": "The user moves detailed upstream-resilience policy from global rules into this repository. This extends the prior decision 'Rename the fork AuTopsy and supersede the prior decision' without restoring the superseded small-diff objective.",
       "regression": "Continue using native attachments, commands and history rather than copied editing engines; keep behavior tests independent of unrelated UI layout and implementation text. Isolation must preserve every requested feature, and only unavoidable coupling may remain. Existing scope, approval and unchanged-test acceptance rules remain in force."
+    },
+    {
+      "rules": [
+        "FORK-04"
+      ],
+      "decision": "Require ordinary AuTopsy project interoperability with supported Audacity releases as features evolve, keeping feature state optional to stock readers and checking affected storage or supported-consumer changes.",
+      "reason": "The user requested an enduring local compatibility rule. Optional native XML extensions and the stock Audacity 3.7.8 interoperability case demonstrate feasibility; the rule adds future change discipline without claiming control over unreleased readers.",
+      "regression": "Preserve every existing rule, including full requested functionality and narrow native adapters. Reuse the focused interoperability suite for changed persistence or supported consumers, without testing unrelated changes again or pinning a branch or consumer version."
     }
   ]
 }
