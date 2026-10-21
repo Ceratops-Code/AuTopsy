@@ -84,6 +84,11 @@ jobs:
       - name: Build installer from this revision
         id: installer
         run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+      - name: Check project interoperability with portable Audacity
+        env:
+          AUTOPSY_VIDEO_BUILD_DIR: ${{ github.workspace }}/.build/_windows-installer
+          AUTOPSY_VIDEO_TEST_NAME: ^fork-project-compatibility$
+        run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/run_affected_tests.py
       - name: Upload unsigned installer and source manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -102,4 +107,6 @@ jobs:
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
-          path: .build/_windows-installer/_build_command_failure.json
+          path: |
+            .build/_windows-installer/_build_command_failure.json
+            .build/_windows-installer/_test_command_failure.json

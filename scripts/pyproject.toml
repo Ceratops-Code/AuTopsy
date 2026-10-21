@@ -24,6 +24,8 @@ include = [
   "scripts/test_run_affected_tests.py",
   "scripts/piped-work/test_fork_features.py",
   "scripts/piped-work/run_fork_test_harness.py",
+  "scripts/piped-work/prepare_audacity_consumer.py",
+  "scripts/piped-work/test_prepare_audacity_consumer.py",
   "scripts/build/windows/build_video_installer.py",
   "scripts/build/windows/test_build_video_installer.py",
 ]
@@ -44,6 +46,8 @@ files = [
   "scripts/test_run_affected_tests.py",
   "scripts/piped-work/test_fork_features.py",
   "scripts/piped-work/run_fork_test_harness.py",
+  "scripts/piped-work/prepare_audacity_consumer.py",
+  "scripts/piped-work/test_prepare_audacity_consumer.py",
   "scripts/build/windows/build_video_installer.py",
   "scripts/build/windows/test_build_video_installer.py",
 ]

@@ -18,7 +18,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
          python "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows/build_video_installer.py"
          --test-existing-build --build-dir "$ENV{AUTOPSY_VIDEO_BUILD_DIR}"
          --test-name "$ENV{AUTOPSY_VIDEO_TEST_NAME}")
-      set_tests_properties(fork-native-media-session PROPERTIES RUN_SERIAL TRUE TIMEOUT 360)
+      set_tests_properties(fork-native-media-session PROPERTIES RUN_SERIAL TRUE TIMEOUT 660)
       return()
    endif()
    include(FetchContent)
@@ -50,7 +50,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       PROPERTIES TIMEOUT 30)
    find_package(Python3 QUIET COMPONENTS Interpreter)
    if(Python3_Interpreter_FOUND)
-      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests" "${CMAKE_BINARY_DIR}/_selection-tests")
+      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests" "${CMAKE_BINARY_DIR}/_selection-tests"
+         "${CMAKE_BINARY_DIR}/_consumer-tests")
+      add_test(NAME fork-audacity-consumer-cache COMMAND uv run --project
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
+         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work" -p test_prepare_audacity_consumer.py)
+      set_tests_properties(fork-audacity-consumer-cache PROPERTIES TIMEOUT 180
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_consumer-tests")
       add_test(NAME affected-test-selection COMMAND uv run --project
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
          -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" -p test_run_affected_tests.py)
@@ -163,7 +169,12 @@ if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")
    find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
-      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests")
+      file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests" "${CMAKE_BINARY_DIR}/_consumer-tests")
+      add_test(NAME fork-audacity-consumer-cache COMMAND uv run --project
+         "${CMAKE_SOURCE_DIR}/scripts" --locked python -m unittest discover
+         -s "${CMAKE_SOURCE_DIR}/scripts/piped-work" -p test_prepare_audacity_consumer.py)
+      set_tests_properties(fork-audacity-consumer-cache PROPERTIES TIMEOUT 180
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_consumer-tests")
       add_test(NAME fork-installer-build COMMAND uv run --project
          "${CMAKE_SOURCE_DIR}/scripts" --locked python -m unittest discover
          -s "${CMAKE_SOURCE_DIR}/scripts/build/windows" -p test_build_video_installer.py)
@@ -190,5 +201,6 @@ if(TARGET video-playback-test)
                --ffprobe "${audacity_video_ffmpeg_runtime}/ffprobe.exe")
          set_tests_properties(fork-${_case} PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
       endforeach()
+      set_tests_properties(fork-project-compatibility PROPERTIES TIMEOUT 600)
    endif()
 endif()

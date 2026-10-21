@@ -54,12 +54,14 @@ The inherited audio tools are covered by the
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
 
-Projects use standard **`.aup3`** storage. Stock Audacity **3.7.8** has been tested
-opening AuTopsy projects containing video: audio clips and labels remain usable,
-and video tracks are skipped. Its saved copies also reopen with the same audio
-and labels. Saving in Audacity drops AuTopsy's video, links, clip groups and flags;
-keep the original AuTopsy project when those additions matter. Compatibility with
-unreleased Audacity versions cannot be guaranteed.
+Projects use standard **`.aup3`** storage. The focused compatibility test opens
+AuTopsy projects in unmodified Audacity **3.7.8** and **3.7.9**, checking audio
+clips and labels while video tracks are skipped, then stock save/copy/reopen.
+Tests download pinned official portable packages automatically; no installed
+Audacity is required by either AuTopsy or this test. Saving in Audacity drops
+AuTopsy's video, links, clip groups and flags; keep the original AuTopsy project
+when those additions matter. Compatibility with unreleased Audacity versions
+cannot be guaranteed.
 
 Preview publication uploads the completed installer and its source/build-check
 manifest. The publisher keeps the original accepted build intact, checks the

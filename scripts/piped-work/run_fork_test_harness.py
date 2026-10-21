@@ -17,6 +17,25 @@ import time
 import wave
 from pathlib import Path
 
+from prepare_audacity_consumer import PINNED_CONSUMERS, AudacityConsumerCache
+
+
+def check_portable_audacity_projects(root, display, ffmpeg):
+    """Use the same pinned consumers locally and in hosted CI, with one cache lease."""
+    expected = root / "_compatibility-expected.json"
+    try:
+        with AudacityConsumerCache(root.parent / "_audacity-consumers", PINNED_CONSUMERS) as cache:
+            # Finish network/package work before opening the first consumer.
+            consumers = [cache.prepare_consumer(package) for package in PINNED_CONSUMERS]
+            outcomes = []
+            for consumer in consumers:
+                result = check_stock_audacity_projects(root, consumer["executable"], display, ffmpeg)
+                result["package"] = {key: value for key, value in consumer.items() if key != "executable"}
+                outcomes.append(result)
+            return outcomes
+    finally:
+        expected.unlink(missing_ok=True)
+
 
 def read_audio_project_state(query):
     """Compare standard audio/label data while ignoring view state and video IDs."""
@@ -42,8 +61,8 @@ def select_audio_project_tracks(send, query):
 def check_stock_audacity_projects(root, stock_executable, display, ffmpeg):
     """Open neutral AuTopsy files in an unmodified, privately copied Audacity 3.
 
-    The installed executable is a read-only dependency. Only the marked test
-    root holds copied binaries, portable preferences, test inputs and outputs.
+    The pinned portable executable is a read-only test dependency. Only the
+    marked root holds private binaries, preferences, test inputs and outputs.
     File association and update changes are disabled. Saved window placement
     is on the already-selected test display. IPC server
     PID checks occur before any command, and existing stock pipes block launch.
@@ -243,7 +262,6 @@ def check_stock_audacity_projects(root, stock_executable, display, ffmpeg):
             app.terminate()
             app.wait(timeout=20)
         shutil.rmtree(private)
-        expected_file.unlink(missing_ok=True)
 
 
 def write_neutral_preview_video(ffmpeg, output):

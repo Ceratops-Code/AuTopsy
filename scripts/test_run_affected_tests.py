@@ -28,6 +28,10 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.names(["scripts/uv.lock"]), {group.name for group in runner.GROUPS})
         self.assertEqual(self.names(["README.md", "docs/design.md"]), set())
 
+    def test_portable_consumers_have_a_dedicated_check(self) -> None:
+        for name in ("prepare_audacity_consumer.py", "test_prepare_audacity_consumer.py"):
+            self.assertEqual(self.names(["scripts/piped-work/" + name]), {"fork-audacity-consumer-cache"})
+
     def test_unknown_owned_executable_input_requires_a_scope_decision(self) -> None:
         for path in ("scripts/new_operation.py", "src/video/NewVideoOperation.cpp",
                      "src/video/ShowVideoNewFeature.h", "src/clip-groups/ChangeClipLinks.cpp",

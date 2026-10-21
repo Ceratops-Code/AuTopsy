@@ -288,8 +288,21 @@ extensions, rather than changing native required fields or the base file version
 solely for video. Source media stays external. This preserves audio interoperability
 while retaining the complete editable representation in AuTopsy.
 
-The current consumer check passes against unmodified Audacity 3.7.8. It does not
-establish compatibility with every future Audacity reader. Changes to the native
+The consumer matrix uses pinned official portable Audacity 3.7.8 (baseline)
+and 3.7.9 (selected update consumer), through the same cache owner locally and
+on hosted Windows CI. Full unmodified consumers exercise the actual reader;
+extracting a private file-opening module would couple the test to upstream
+internals and would not prove that a stock application opens the project.
+The application has no runtime dependency on these test packages. The package
+cache keeps only the declared pair, prunes abandoned staging under an OS lease,
+and removes archives after extraction; the native case separately owns and
+removes every private app/profile/log/copy. Package receipts retain accepted
+payload identities for integrity reuse, with no execution checkpoints. A
+checksum or extraction failure cannot publish a usable consumer. See BUILDING.md
+for exact output ownership and retention.
+
+This matrix does not establish compatibility with every future Audacity reader.
+Changes to the native
 storage adapter, feature serialization or supported upstream consumer require the
 same focused interoperability case. If a necessary feature makes ordinary audio
 projects unreadable by a supported consumer, add an explicit audio-only copy path

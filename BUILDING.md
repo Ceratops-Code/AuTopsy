@@ -481,8 +481,10 @@ predecessors. Building never installs or publishes an application.
 
 GitHub's `Validate` workflow builds on `windows-2022` when manually
 dispatched, or when a pull request has the `build-windows-installer` label.
-Its repository checks precede the installer job. The uploaded unsigned installer
-and source manifest are retained for 14 days; failure details for 7 days.
+Its repository checks precede the installer job. After building, it runs the
+same focused native project-compatibility case used locally, against pinned
+portable Audacity consumers. The uploaded unsigned installer and source manifest
+are retained for 14 days; failure details for 7 days.
 Signing is a separate service approval and is not claimed by this job.
 
 The `deliverables.packages.windows-installer.actions.publish` operation consumes
@@ -509,18 +511,40 @@ an explicit native session in the repository test operation. For example,
 `^fork-media$` runs the existing guarded desktop case for linked-media splits
 across video tracks, trims with unrelated audio before zero, saved links, flags
 and exports. Reconfiguration without the selector restores the portable suite.
-For `^fork-project-compatibility$`, also set `AUTOPSY_STOCK_AUDACITY` to a stock
-Audacity 3 executable. The harness reads that installation only to copy its
-binaries into the marked native case directory. Its private portable profile
-disables file association and update changes, separates audio and GUI temporary
-storage, and places its project window on the selected test display. No installed
-profile or user project is an input.
+`^fork-project-compatibility$` automatically prepares the baseline Audacity 3.7.8
+and the selected update consumer 3.7.9 from official Windows x64 portable ZIPs.
+`prepare_audacity_consumer.py` owns their release URLs and SHA-256 pins, taken from
+the official [3.7.8 assets](https://github.com/audacity/audacity/releases/expanded_assets/Audacity-3.7.8)
+and [3.7.9 assets](https://github.com/audacity/audacity/releases/expanded_assets/Audacity-3.7.9).
+Changing a supported consumer means updating those pins and running this case;
+upstream updates must keep a baseline while exercising the new consumer.
+No Audacity installation, extracted reader module, installed profile or user
+project is an input. This remains a test dependency, outside AuTopsy's installer.
+
+The cache owner groups bundles under the native build's
+`_fork-tests/_audacity-consumers`. One OS lease covers preparation and use, so a
+live consumer cannot lose its package to another call. Entry removes abandoned
+staging and superseded owned bundles; success keeps only the two declared
+consumers, with accepted payload hashes for integrity reuse. Checksum, download,
+archive path, link, size or extraction failures publish no partial package.
+Archives are removed after extraction; staging is removed after failure, or at
+the next entry after a killed worker. The owner keeps one marker, one lock file
+and one receipt per active package, with no diagnostic history. Unrelated paths
+are left alone. `fork-audacity-consumer-cache` covers repeat, interruption,
+concurrent-owner, corruption, archive safety and cleanup behavior without network
+access or an application window.
+
+Each native consumer runs from a private copy in the marked case directory.
+Its private portable profile disables file association and update changes,
+separates audio and GUI temporary storage, and places its project window on the
+selected test display. The upstream name `Portable Settings` is required for
+that private profile; cache and test-owned names otherwise use `_` prefixes.
 
 This case opens a generated video/audio/label project and a video-only project,
 twice each, then checks stock save/copy/reopen behavior. It compares decoded
 48-kHz stereo audio with a maximum sample difference of 0.0005 to allow export
 dither, while clip timing, names, track properties and labels must match. Result
-records name the consumer version and executable hash. After all saved-copy
+records name both consumer versions, official package digests and executable hashes. After all saved-copy
 acknowledgements the harness ends only its private consumer process; stock pipe
 shutdown is outside this file-format test. It removes the private copied app,
 profile, log and working copies on success or failure. Current neutral fixtures

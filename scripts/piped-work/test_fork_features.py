@@ -3,8 +3,8 @@
 CTest supplies an executable and a dedicated work root. Tests own only marked
 temporary directories and their child process. The native Portable Settings
 name is required by Audacity; a marker protects any unrelated existing profile.
-No user project or source snapshot is used. The compatibility case reads an
-explicit stock installation only to copy its consumer binaries into the test root.
+No user project or source snapshot is used. The compatibility case uses pinned
+official portable packages and copies consumer binaries into the test root.
 Visible tests use DISPLAY2 when connected, otherwise another display except
 DISPLAY1 if several are connected. The scripting module constrains windows
 before showing them; the runner refuses modules without that contract.
@@ -30,7 +30,7 @@ from run_fork_test_harness import (
     capture_owned_project,
     check_behavior_worker_lifecycle,
     check_neutral_preview_fixture,
-    check_stock_audacity_projects,
+    check_portable_audacity_projects,
     check_test_display_selection,
     connected_test_displays,
     drag_owned_video_clip,
@@ -1072,8 +1072,6 @@ def main():
         return
     if not args.executable or not args.work_root:
         parser.error("GUI cases require --executable and --work-root.")
-    if args.case == "project-compatibility" and not os.environ.get("AUTOPSY_STOCK_AUDACITY"):
-        parser.error("Project compatibility requires AUTOPSY_STOCK_AUDACITY, a stock Audacity 3 executable.")
     root = args.work_root.resolve() / ("_" + args.case)
     if args.reject_display:
         root = root.with_name(root.name + "_display_rejection")
@@ -1258,6 +1256,9 @@ def main():
         "pipe_client_sha256": hashlib.sha256(
             Path(__file__).with_name("pipeclient.py").read_bytes()
         ).hexdigest(),
+        "consumer_preparation_sha256": hashlib.sha256(
+            Path(__file__).with_name("prepare_audacity_consumer.py").read_bytes()
+        ).hexdigest() if args.case == "project-compatibility" else None,
     }
     with (root / "_app.log").open("w") as log:
         app = subprocess.Popen(
@@ -1384,8 +1385,7 @@ def main():
                 raise RuntimeError(f"The owned app exited with status {status}.")
             stock_result = None
             if args.case == "project-compatibility":
-                stock_result = check_stock_audacity_projects(
-                    root, os.environ["AUTOPSY_STOCK_AUDACITY"], display, args.ffmpeg)
+                stock_result = check_portable_audacity_projects(root, display, args.ffmpeg)
             log.flush()
             shows = re.findall(
                 r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
