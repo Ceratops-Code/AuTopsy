@@ -78,6 +78,10 @@ If you install Graphviz, then an image file modules.dot.svg is generated in the 
 
 You will also be able to change to the scripts directory and run ./graph.pl to generate a diagram of dependencies among source code files within the executable.
 
+Native CTest clients use the persistent base Python runtime, rather than a
+temporary uv dependency environment. An explicit test session refreshes that
+CTest configuration without rebuilding or changing the accepted installer.
+
 ## Building on Windows
 
 1. Ensure the Python installer option `Add Python 3.x to PATH` is checked. Go to Windows Settings "Add or Remove Programs" and check the `Add Python to environment variables` in Python settings if Python is not in `PATH`.

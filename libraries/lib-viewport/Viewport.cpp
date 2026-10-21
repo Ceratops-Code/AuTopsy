@@ -13,6 +13,7 @@ Paul Licameli split from ProjectWindow.cpp
 #include "PendingTracks.h"
 #include "PlayableTrack.h" // just for AudioTrack
 #include "Project.h"
+#include "ProjectHistory.h"
 #include "ProjectSnap.h"
 #include "TrackFocus.h"
 #include "UndoManager.h"
@@ -268,6 +269,14 @@ bool Viewport::ScrollUpDown(int delta)
 
 void Viewport::UpdateScrollbarsForTracks()
 {
+   // Undo/Redo recreates tracks one at a time and publishes additions
+   // synchronously. Clamping against the first restored track loses the user's
+   // vertical position. Defer the calculation until all restored tracks exist,
+   // including rollback paths that do not emit an UndoOrRedo notification.
+   if (ProjectHistory::Get(mProject).IsRestoringState()) {
+      HandleResize();
+      return;
+   }
    auto &project = mProject;
    auto &tracks = TrackList::Get( project );
    auto &viewInfo = ViewInfo::Get( project );
