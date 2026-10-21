@@ -51,4 +51,7 @@ jobs:
         with:
           if-no-files-found: ignore
           name: repository-validation-evidence-${{ matrix.os }}
-          path: ${{ runner.temp }}/repository-validation.log
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/repository-validation.log
+            .build/deploy-validation/repository-validation.log
