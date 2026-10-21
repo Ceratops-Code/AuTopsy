@@ -301,4 +301,3 @@ void DrawAudioClipMarkers(const WaveClip &clip, wxDC &dc, const ZoomInfo &zoom, 
       clip.GetStretchRatio(), clip.GetPlayStartTime(), clip.GetPlayEndTime());
 }
 }
-

@@ -868,5 +868,3 @@ def capture_owned_project(panel, path):
         gdi.DeleteObject(bitmap)
         gdi.DeleteDC(memory)
         user.ReleaseDC(window, screen)
-
-

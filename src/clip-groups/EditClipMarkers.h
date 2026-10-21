@@ -50,4 +50,3 @@ void DrawClipMarkerFlags(wxDC &dc, const wxRect &rect, const ZoomInfo &zoom,
    const std::vector<Marker> &markers, double origin, double speed, double from, double to);
 void DrawAudioClipMarkers(const WaveClip &clip, wxDC &dc, const ZoomInfo &zoom, const wxRect &rect);
 }
-

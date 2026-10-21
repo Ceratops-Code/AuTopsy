@@ -485,4 +485,3 @@ void CommitVideoClipTrim(AudacityProject &project, AuTopsyVideoTrack &track, Vid
 }
 
 }
-
