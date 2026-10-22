@@ -183,12 +183,19 @@ def check_track_groups(client, root):
     _, group = settled_summary(client, group_id)
     assert abs(group["minimum"]) < 0.00001 and abs(group["maximum"]) < 0.00001, group
     # Repeated collapse requests must not add extra history transitions.
-    history_command(client, "Undo")
-    undone, group = read_group(client, group_id)
-    assert not group["collapsed"]
-    assert {row["id"] for row in undone["tracks"] if row["group"] == group_id} == members
-    history_command(client, "Redo")
-    assert read_group(client, group_id)[1]["collapsed"]
+    # Each restore emits resize events while rebuilding the native track list.
+    # Repeat both directions: hidden members must never enter ruler geometry,
+    # and neither direction may replace their persistent identities.
+    for _ in range(3):
+        history_command(client, "Undo")
+        undone, group = read_group(client, group_id)
+        assert not group["collapsed"]
+        assert {row["id"] for row in undone["tracks"] if row["group"] == group_id} == members
+        history_command(client, "Redo")
+        redone, group = read_group(client, group_id)
+        assert group["collapsed"]
+        assert {row["id"] for row in redone["tracks"] if row["group"] == group_id} == members
+        assert all(row["height"] == 0 for row in redone["tracks"] if row["group"] == group_id)
     collapse(False)
     click_group_toggle(client, group_id, cancel=True)
     assert not read_group(client, group_id)[1]["collapsed"]

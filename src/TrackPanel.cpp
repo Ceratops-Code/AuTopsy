@@ -973,6 +973,12 @@ void TrackPanel::UpdateVRuler(Track *t)
 
 void TrackPanel::UpdateTrackVRuler(Track &t)
 {
+#ifdef AUTOPSY_HAS_TRACK_GROUPS
+   // Restoring history adds collapsed members individually and emits native
+   // resize events. Hidden rows have no ruler; native channel proportions
+   // require a positive height and must only be computed for visible rows.
+   if (TrackGroups::IsTrackHidden(t)) return;
+#endif
    auto heights = FindAdjustedChannelHeights(t);
 
    wxRect rect(mViewInfo->GetVRulerOffset(),
