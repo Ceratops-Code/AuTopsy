@@ -300,8 +300,8 @@ class GroupControls final : public TrackControls {
 public:
    using TrackControls::TrackControls;
    const TrackInfo::TCPLines &GetTCPLines() const override { static const TrackInfo::TCPLines empty; return empty; }
-   wxRect ToggleRect() const { return {mBounds.x + 4, mBounds.y + 4, 24, 25}; }
-   wxRect CloseRect() const { return {mBounds.GetRight() - 24, mBounds.y + 4, 21, 25}; }
+   wxRect ToggleRect() const { return mBounds.IsEmpty() ? wxRect{} : wxRect{mBounds.x + 4, mBounds.y + 4, 24, 25}; }
+   wxRect CloseRect() const { return mBounds.IsEmpty() ? wxRect{} : wxRect{mBounds.GetRight() - 24, mBounds.y + 4, 21, 25}; }
    std::vector<UIHandlePtr> HitTest(const TrackPanelMouseState &state, const AudacityProject *) override {
       auto header = std::dynamic_pointer_cast<AuTopsyTrackGroup>(FindTrack());
       if (!header) return {};

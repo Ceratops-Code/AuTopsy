@@ -286,7 +286,7 @@ std::shared_ptr<AuTopsyTrackGroup> GroupProjectTracks(AudacityProject &project,
    auto first = std::find_if(original.begin(), original.end(), [&](auto *track) {
       return std::find(plan.members.begin(), plan.members.end(), TrackIdentity(*track)) != plan.members.end();
    });
-   header->SetName(tracks.MakeUniqueTrackName(name.empty() ? _("Track Group") : name));
+   header->SetName(name.empty() ? tracks.MakeUniqueTrackName(_("Track Group")) : name);
    tracks.Insert(*first, header, true);
    try {
       header->BuildTrackAdapters();
@@ -294,6 +294,7 @@ std::shared_ptr<AuTopsyTrackGroup> GroupProjectTracks(AudacityProject &project,
       SetTrackOrder(project, plan.order); RefreshPane(project);
       SelectProjectTrackGroup(project, header->GroupId());
       ProjectHistory::Get(project).PushState(XO("Grouped tracks"), XO("Group Tracks"));
+      Viewport::Get(project).ShowTrack(*header);
    }
    catch (...) {
       for (auto *track : members) Member(*track).group.clear();
