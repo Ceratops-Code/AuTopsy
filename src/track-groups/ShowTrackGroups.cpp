@@ -18,6 +18,7 @@
 #include "WaveTrack.h"
 #include "Mix.h"
 #include "HitTestResult.h"
+#include "UIHandle.h"
 #include "RefreshCode.h"
 #include "CommandContext.h"
 #include "CommonCommandFlags.h"
@@ -482,7 +483,7 @@ PopupMenuTable::AttachedItem sUngroupContext{GetCommonTrackMenu(), Registry::Pla
 using namespace MenuRegistry;
 AttachedItem sGroupsMenu{Section("TrackFolders", Menu("TrackGroups", XXO("Track &Groups"),
    Command("GroupSelectedTracks", XXO("&Group Selected Tracks..."), [](const CommandContext &context) { CreateSelectedGroup(context.project); },
-      AudioIONotBusyFlag() | TracksSelectedFlag()),
+      AudioIONotBusyFlag() | AnyTracksSelectedFlag()),
    Command("CollapseTrackGroup", XXO("&Collapse Group"), [](const CommandContext &context) { if (auto *group = SelectedGroup(context.project)) CollapseProjectTrackGroup(context.project, group->GroupId(), true); }, AudioIONotBusyFlag()),
    Command("ExpandTrackGroup", XXO("&Expand Group"), [](const CommandContext &context) { if (auto *group = SelectedGroup(context.project)) CollapseProjectTrackGroup(context.project, group->GroupId(), false); }, AudioIONotBusyFlag()),
    Command("UngroupTracks", XXO("&Ungroup Tracks"), [](const CommandContext &context) { if (auto *group = SelectedGroup(context.project)) UngroupProjectTracks(context.project, group->GroupId()); }, AudioIONotBusyFlag())

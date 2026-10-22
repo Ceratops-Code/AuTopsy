@@ -260,6 +260,8 @@ std::shared_ptr<AuTopsyTrackGroup> GroupProjectTracks(AudacityProject &project,
 {
    RequireStopped(project); Presentation(project);
    auto &tracks = TrackList::Get(project);
+   for (auto *track : members)
+      if (!track || track->GetOwner().get() != &tracks) throw std::runtime_error("A selected track is no longer present.");
    if (members.size() >= 2) {
       const auto existing = MemberGroup(*members.front());
       auto *same = existing.empty() ? nullptr : FindTrackGroup(project, existing);
