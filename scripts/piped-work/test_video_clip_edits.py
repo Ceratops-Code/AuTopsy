@@ -397,6 +397,8 @@ def check_transport_toolbar(client, root):
     user.EnumWindows.argtypes = [callback_type, w.LPARAM]
     user.EnumChildWindows.argtypes = [w.HWND, callback_type, w.LPARAM]
     user.GetParent.argtypes, user.GetParent.restype = [w.HWND], w.HWND
+    user.GetForegroundWindow.restype = w.HWND
+    user.SetForegroundWindow.argtypes = [w.HWND]
     user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
     user.GetWindowDpiAwarenessContext.argtypes = [w.HWND]
     user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
@@ -448,6 +450,14 @@ def check_transport_toolbar(client, root):
             user.SetThreadDpiAwarenessContext(previous_dpi)
     def press(handle, cancel=False):
         assert native.owner(handle) == pid and native.enabled(handle)
+        # Native transport enablement and modifier appearance are refreshed
+        # while the application is active. Exercise a real foreground click's
+        # precondition before sending messages; never bypass a disabled button.
+        if user.GetForegroundWindow() != main:
+            user.SetForegroundWindow(main)
+            wait_for_native_state(lambda: user.GetForegroundWindow() == main,
+                                  "owned toolbar window foreground")
+            time.sleep(0.15)
         reply = ctypes.c_size_t()
 
         def send(message, flags, position):
