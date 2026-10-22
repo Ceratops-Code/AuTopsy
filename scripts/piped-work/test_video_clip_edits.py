@@ -554,6 +554,9 @@ def owned_preview_controls(client):
     handles = {item["action"]: int(item["handle"]) for item in info["transportControls"]}
     for handle in handles.values():
         assert handle and windows.owner(handle) == owner
+    status = int(info["previewStatusHandle"])
+    wait_for_native_state(lambda: bool(re.search(r"\|\s+(-?\d+(?:\.\d+)?) s", windows.control_text(status))),
+                          lambda: "preview timeline label: " + windows.control_text(status))
     return info, handles
 
 
@@ -563,7 +566,7 @@ def press_preview_button(handle):
 
 
 def preview_project_seconds(status):
-    caption = PreviewNativeWindows().caption(status)
+    caption = PreviewNativeWindows().control_text(status)
     match = re.search(r"\|\s+(-?\d+(?:\.\d+)?) s", caption)
     assert match, caption
     return float(match[1])
