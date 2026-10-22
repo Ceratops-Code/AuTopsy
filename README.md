@@ -254,6 +254,11 @@ together with the host's pitch-preserving audio stretch. Flags, hidden trim
 handles and joined content are retained. The clip header shows its percentage.
 An overlapping linked result is rejected without changing any clip. Undo/Redo,
 preview, frame stepping, saved projects and exports use the same time mapping.
+Scripts can use **SetVideoClipBounds** with a persistent clip **Id**, optional
+**Track**, and **Start**/**End** project times to trim or restore either edge.
+It uses the same linked-media operation as dragging a video edge; repeating
+unchanged bounds adds no Undo entry. **SetVideoClipSpeed** uses the same clip
+identity and a **Speed** multiplier (2 means 200%).
 Unlink clips when synchronizing picture and sound independently. Tracks can be resized, reordered,
 scrolled, selected, renamed, and removed with the native controls.
 

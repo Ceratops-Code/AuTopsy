@@ -298,6 +298,41 @@ public:
 const ComponentInterfaceSymbol SetVideoClipSpeedCommand::Symbol{ XO("SetVideoClipSpeed") };
 BuiltinCommandsModule::Registration<SetVideoClipSpeedCommand> sSetVideoClipSpeed;
 
+class SetVideoClipBoundsCommand final : public AudacityCommand {
+   wxString mId;
+   int mTrack{-1};
+   double mStart{}, mEnd{};
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override { return XO("Trim or restore video clip edges at project times, including linked media."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
+      visitor.Define(mId, wxT("Id"), wxString{});
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      visitor.Define(mStart, wxT("Start"), 0.0, 0.0, 100000000.0);
+      visitor.Define(mEnd, wxT("End"), 0.0, 0.0, 100000000.0);
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         if (ProjectAudioIO::Get(context.project).IsAudioActive())
+            throw std::runtime_error("Stop playback or recording before changing clip edges.");
+         unsigned long long id{};
+         if (!mId.ToULongLong(&id) || !id) throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
+         auto &track = FindClipTrack(context.project, id, mTrack);
+         auto candidate = track.Timeline();
+         VideoTimeline::TrimVideoClip(candidate, id, mStart, mEnd);
+         ClipGroups::CommitVideoClipTrim(context.project, track, std::move(candidate));
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+const ComponentInterfaceSymbol SetVideoClipBoundsCommand::Symbol{XO("SetVideoClipBounds")};
+BuiltinCommandsModule::Registration<SetVideoClipBoundsCommand> sSetVideoClipBounds;
+
 class GetVideoClipsCommand final : public AudacityCommand {
 public:
    static const ComponentInterfaceSymbol Symbol;

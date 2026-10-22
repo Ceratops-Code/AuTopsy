@@ -238,6 +238,9 @@ joining previously unlinked pieces spans the whole retained parent timeline;
 trim and speed conversions preserve its audio mapping. A parent's alias of a
 child link is not a second soundtrack occurrence. Existing distinct child links
 continue to identify their separate audio windows.
+`SetVideoClipBounds` routes persistent clip identities and project times to the
+same mixed-media commit used by edge gestures. It supports trim/untrim and
+repeated no-ops independently of the global region-selection Trim command.
 
 `ChangeLinkedVideoClipSpeed` expands the saved link graph before mutation. It
 prepares every video replacement and checks every linked audio stretch, final

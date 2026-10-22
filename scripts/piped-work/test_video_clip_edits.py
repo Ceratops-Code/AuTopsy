@@ -440,9 +440,8 @@ def check_video_clip_structure(client, root, linked, storage_only=False, parent_
             before = client.data("GetLinkedMediaClips")
             client.send('LinkMediaClips: Clips="0:0,1:0"')
             assert client.data("GetLinkedMediaClips") == before
-            baseline = root / f"_parent-link-{speed}.aup3"
-            client.file("SaveProject2", baseline)
             video = next(row for row in before if row["kind"] == "video")
+            restore = f'SetVideoClipBounds: Track=0 Id="1" Start={video["start"]} End={video["end"]}'
             for edge in ("start", "end"):
                 for repeat in range(2):
                     start, end = video["start"], video["end"]
@@ -451,12 +450,12 @@ def check_video_clip_structure(client, root, linked, storage_only=False, parent_
                         start += delta
                     else:
                         end += delta
-                    select_clip_range(client, start, end)
-                    client.send("Trim")
+                    command = f'SetVideoClipBounds: Track=0 Id="1" Start={start} End={end}'
+                    client.send(command)
                     trimmed = client.data("GetLinkedMediaClips")
                     assert all(abs(after[edge] - original[edge] - delta) < 1e-7
                                for after, original in zip(trimmed, before, strict=True)), trimmed
-                    client.send("Trim")
+                    client.send(command)
                     assert client.data("GetLinkedMediaClips") == trimmed
                     client.send("Undo")
                     assert client.data("GetLinkedMediaClips") == before
@@ -464,9 +463,14 @@ def check_video_clip_structure(client, root, linked, storage_only=False, parent_
                     assert client.data("GetLinkedMediaClips") == trimmed
                     save_reopen(client, root / f"_parent-{speed}-{edge}-{repeat}.aup3")
                     assert client.data("GetLinkedMediaClips") == trimmed
-                    client.send("Close")
-                    client.file("OpenProject2", baseline)
+                    client.send(restore)
                     assert client.data("GetLinkedMediaClips") == before
+                    client.send(restore)
+                    client.send("Undo")
+                    assert client.data("GetLinkedMediaClips") == trimmed
+                    client.send("Redo")
+                    assert client.data("GetLinkedMediaClips") == before
+                    client.send("Save")
         return
     if storage_only:
         client.file("ImportVideo", root / "source.mp4")
