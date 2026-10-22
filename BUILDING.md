@@ -452,7 +452,9 @@ keyboard keys.
 
 `fork-preview-navigation` exercises the real timeline and focused preview arrow
 keys, canceled/repeated drags, frame steps, playback-volume changes, live seeks
-and paused seeks/resume. Both transport cases read the live preview status while
+and paused seeks/resume. A neutral 120-fps source forces a 30-fps proxy; captured
+red/blue source frames distinguish precise paused stepping from a timecode-only
+change. Both transport cases read the live preview status while
 playing; Audacity's configured scripting dispatch stops audio before returning
 command data, so it cannot serve as a live clock observer.
 
@@ -460,6 +462,7 @@ Track-folder policy and streaming peak reduction have dedicated `track-groups::`
 core cases. The affected-test runner selects them for changes in their owned
 model/reducer inputs. `fork-track-groups` checks the native header, nonadjacent
 members, repeated/canceled collapse, phase cancellation, native move commands,
+native multi-member duplication with an unrelated following track,
 Undo/Redo, saved identities and project reopening. Its collapsed and expanded
 project fixtures also pass to the same pinned portable Audacity consumers.
 The native group test owns only the marked case directory and uses the existing

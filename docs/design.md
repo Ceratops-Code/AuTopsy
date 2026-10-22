@@ -243,6 +243,10 @@ canceling a drag restores the original order. The header's close action ungroups
 instead of deleting audio. Creation, collapse, movement and ungrouping use one
 native history commit and restore their previous layout if that commit fails.
 The host history API performs autosave before its no-fail history commit.
+Native track/history notifications queue one project-bound refresh rather than
+permuting inside a native iterator. That refresh reads the current complete list,
+arranges its members and updates the current history snapshot without adding a
+second Undo step. Project destruction discards the callback through a weak owner.
 
 A collapsed waveform is reduced from the actual summed mono mix, never from
 individual track peak envelopes. A narrow `Mixer` adapter applies member gain,
