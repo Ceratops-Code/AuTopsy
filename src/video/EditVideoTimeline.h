@@ -1,6 +1,6 @@
 // Feature-owned video timing. The model has no Audacity, wxWidgets or mpv types.
 #pragma once
-#include "../clip-groups/EditClipMarkers.h"
+#include "EditVideoContent.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -10,22 +10,6 @@
 #include <vector>
 
 namespace VideoTimeline {
-struct MediaSource {
-   std::string path;
-   double duration{}, frameRate{30.0};
-   int width{}, height{};
-};
-struct Clip {
-   uint64_t id{};
-   double start{}, sourceStart{}, duration{};
-   // An empty override uses the track's default source. Clipboard and
-   // cross-track transfers resolve it into a self-contained source value.
-   MediaSource media;
-   std::string linkGroup;
-   std::vector<ClipMarkers::Marker> markers;
-   double End() const { return start + duration; }
-};
-
 struct Timeline {
    std::string sourcePath;
    double sourceDuration{}, frameRate{30.0};
@@ -39,9 +23,14 @@ struct Timeline {
 
 inline MediaSource SourceFor(const Timeline &timeline, const Clip &clip)
 {
-   return clip.media.path.empty()
+   const Clip *leaf = &clip;
+   for (size_t depth{}; leaf->content && depth < 17; ++depth) {
+      if (leaf->content->parts.empty()) break;
+      leaf = &leaf->content->parts.front();
+   }
+   return leaf->media.path.empty()
       ? MediaSource{timeline.sourcePath, timeline.sourceDuration, timeline.frameRate,
-         timeline.sourceWidth, timeline.sourceHeight} : clip.media;
+         timeline.sourceWidth, timeline.sourceHeight} : leaf->media;
 }
 
 inline void RequireUsableVideoSource(const MediaSource &source)
@@ -53,20 +42,20 @@ inline void RequireUsableVideoSource(const MediaSource &source)
 }
 
 // A malformed saved timeline must never reach a decoder or an export graph.
-inline void RequireWellFormedTimeline(const Timeline &timeline)
+inline void RequireWellFormedTimeline(const Timeline &timeline,
+   size_t maximumClips = MaximumVideoTrackClips)
 {
    constexpr double tolerance = 1e-7;
    if (!timeline.sourcePath.empty())
       RequireUsableVideoSource({timeline.sourcePath, timeline.sourceDuration, timeline.frameRate,
          timeline.sourceWidth, timeline.sourceHeight});
-   if (timeline.clips.size() > 10000 || !timeline.nextId)
+   if (timeline.clips.size() > maximumClips || !timeline.nextId)
       throw std::runtime_error("The video timeline has invalid clip information.");
    std::unordered_set<uint64_t> ids;
    double previousEnd{};
    for (const auto &clip : timeline.clips) {
       const auto source = SourceFor(timeline, clip);
-      RequireUsableVideoSource(source);
-      ClipMarkers::RequireUsableMarkers(clip.markers);
+      RequireUsableVideoContent(clip, source);
       if (!clip.linkGroup.empty() && (clip.linkGroup.size() != 32 ||
           clip.linkGroup.find_first_not_of("0123456789abcdef") != std::string::npos))
          throw std::runtime_error("A video clip has an invalid saved link.");
@@ -74,7 +63,7 @@ inline void RequireWellFormedTimeline(const Timeline &timeline)
           !std::isfinite(clip.start) || !std::isfinite(clip.sourceStart) ||
           !std::isfinite(clip.duration) || clip.start < 0 || clip.sourceStart < 0 ||
           clip.duration <= 0 || clip.End() > 100000000.0 ||
-          clip.sourceStart + clip.duration > source.duration + tolerance ||
+          clip.ContentTimeAtProjectTime(clip.End()) > VideoContentDuration(clip, source) + tolerance ||
           clip.start < previousEnd - tolerance)
          throw std::runtime_error("Video clips must have unique IDs and valid, non-overlapping ranges.");
       previousEnd = clip.End();
@@ -99,8 +88,11 @@ inline const Clip *ClipAt(const Timeline &timeline, double time)
 struct PicturePosition { bool visible{}; double sourceTime{}; uint64_t clipId{}; };
 inline PicturePosition PictureAt(const Timeline &timeline, double projectTime)
 {
-   if (const auto *clip = ClipAt(timeline, projectTime))
-      return {true, clip->sourceStart + projectTime - clip->start, clip->id};
+   if (const auto *clip = ClipAt(timeline, projectTime)) {
+      const auto picture = SampleVideoContent(*clip, SourceFor(timeline, *clip),
+         clip->ContentTimeAtProjectTime(projectTime));
+      if (picture) return {true, picture.sourceTime, clip->id};
+   }
    return {};
 }
 
@@ -113,14 +105,15 @@ inline bool SplitClipAt(Timeline &timeline, double time)
       throw std::runtime_error("Choose a non-negative split time.");
    const auto *clip = ClipAt(timeline, time);
    if (!clip) return false;
-   const auto rate = SourceFor(timeline, *clip).frameRate;
-   const auto offset = std::round((clip->sourceStart + time - clip->start) * rate) / rate - clip->sourceStart;
+   const auto rate = VideoContentFrameRate(*clip, SourceFor(timeline, *clip));
+   const auto offset = (std::round(clip->ContentTimeAtProjectTime(time) * rate) / rate - clip->sourceStart) / clip->playbackRate;
    if (offset <= 1e-7 || offset >= clip->duration - 1e-7) return false;
    Timeline changed = timeline;
    const auto index = static_cast<size_t>(clip - timeline.clips.data());
    auto &left = changed.clips[index];
-   const Clip right{changed.nextId++, left.start + offset,
-      left.sourceStart + offset, left.duration - offset, left.media, left.linkGroup, left.markers};
+   auto right = left;
+   right.id = changed.nextId++; right.start += offset;
+   right.sourceStart += offset * left.playbackRate; right.duration -= offset;
    left.duration = offset;
    changed.clips.insert(changed.clips.begin() + index + 1, right);
    RequireWellFormedTimeline(changed);
@@ -137,7 +130,7 @@ inline bool MoveClipTo(Timeline &timeline, uint64_t id, double start)
    const auto found = std::find_if(changed.clips.begin(), changed.clips.end(),
       [id](const auto &clip) { return clip.id == id; });
    if (found == changed.clips.end()) throw std::runtime_error("Unknown video clip ID.");
-   const auto rate = SourceFor(timeline, *found).frameRate;
+   const auto rate = VideoContentFrameRate(*found, SourceFor(timeline, *found)) * found->playbackRate;
    start = std::round(start * rate) / rate;
    if (std::abs(found->start - start) < 1e-7) return false;
    found->start = start;
@@ -158,13 +151,44 @@ inline bool RemoveClip(Timeline &timeline, uint64_t id)
    return true;
 }
 
+inline bool ChangeVideoClipCrop(Timeline &timeline, uint64_t id, VideoEditing::VideoFrameCrop crop)
+{
+   RequireWellFormedTimeline(timeline);
+   VideoEditing::RequireUsableVideoFrameCrop(crop);
+   auto changed = timeline;
+   const auto found = std::find_if(changed.clips.begin(), changed.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == changed.clips.end()) throw std::runtime_error("Unknown video clip ID.");
+   if (found->crop == crop) return false;
+   found->crop = crop;
+   RequireWellFormedTimeline(changed);
+   timeline = std::move(changed);
+   return true;
+}
+
+inline bool ChangeVideoClipSpeed(Timeline &timeline, uint64_t id, double playbackRate)
+{
+   RequireWellFormedTimeline(timeline);
+   auto changed = timeline;
+   const auto found = std::find_if(changed.clips.begin(), changed.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == changed.clips.end()) throw std::runtime_error("Unknown video clip ID.");
+   const auto change = PrepareVideoClipRetiming(*found, playbackRate);
+   if (std::abs(change.timeScale - 1) < 1e-12) return false;
+   *found = RetimeVideoClip(*found, SourceFor(changed, *found), change);
+   RequireWellFormedTimeline(changed);
+   timeline = std::move(changed);
+   return true;
+}
+
 inline bool KeepsOriginalPicture(const Timeline &timeline)
 {
    if (timeline.clips.empty()) return false;
    double end{};
    for (const auto &clip : timeline.clips) {
       const auto source = SourceFor(timeline, clip);
-      if (source.path != timeline.sourcePath ||
+      if (clip.content || !(clip.crop == VideoEditing::VideoFrameCrop{}) ||
+          clip.playbackRate != 1 || source.path != timeline.sourcePath ||
           std::abs(source.duration - timeline.sourceDuration) > 1e-7 ||
           std::abs(clip.start - end) > 1e-7 ||
           std::abs(clip.sourceStart - clip.start) > 1e-7) return false;
@@ -186,7 +210,7 @@ inline Timeline CopyVideoRange(const Timeline &timeline, double from, double to)
       const auto begin = std::max(from, clip.start), end = std::min(to, clip.End());
       if (end <= begin + 1e-7) continue;
       auto copy = clip;
-      copy.start = begin - from; copy.sourceStart += begin - clip.start; copy.duration = end - begin;
+      copy.sourceStart = clip.ContentTimeAtProjectTime(begin); copy.start = begin - from; copy.duration = end - begin;
       copy.media = SourceFor(timeline, clip);
       result.clips.push_back(std::move(copy));
    }
@@ -206,7 +230,7 @@ inline void EraseVideoRange(Timeline &timeline, double from, double to, bool clo
       auto piece = original;
       piece.id = newId ? changed.nextId++ : original.id;
       piece.start = begin - (closeGap && begin >= to ? to - from : 0);
-      piece.sourceStart += begin - original.start; piece.duration = end - begin;
+      piece.sourceStart = original.ContentTimeAtProjectTime(begin); piece.duration = end - begin;
       changed.clips.push_back(std::move(piece));
    };
    for (const auto &clip : timeline.clips) {
@@ -237,7 +261,7 @@ inline void InsertVideoGap(Timeline &timeline, double at, double duration)
       const auto original = changed.clips[index];
       auto right = original;
       right.id = changed.nextId++; right.start = at;
-      right.sourceStart += at - original.start; right.duration = original.End() - at;
+      right.sourceStart = original.ContentTimeAtProjectTime(at); right.duration = original.End() - at;
       changed.clips[index].duration = at - original.start;
       changed.clips.insert(changed.clips.begin() + index + 1, right);
    }
@@ -268,21 +292,65 @@ inline bool TrimVideoClip(Timeline &timeline, uint64_t id, double start, double 
    const auto found = std::find_if(changed.clips.begin(), changed.clips.end(),
       [id](const auto &clip) { return clip.id == id; });
    if (found == changed.clips.end()) throw std::runtime_error("Unknown video clip ID.");
-   const auto source = SourceFor(changed, *found);
+   const auto rate = VideoContentFrameRate(*found, SourceFor(changed, *found));
    if (!std::isfinite(start) || !std::isfinite(end))
       throw std::runtime_error("Video trim times must be finite.");
-   const auto sourceStart = std::round((found->sourceStart + start - found->start) *
-      source.frameRate) / source.frameRate;
-   const auto sourceEnd = std::round((found->sourceStart + end - found->start) *
-      source.frameRate) / source.frameRate;
-   start = found->start + sourceStart - found->sourceStart;
-   end = found->start + sourceEnd - found->sourceStart;
-   if (sourceEnd - sourceStart < 0.5 / source.frameRate)
+   const auto sourceStart = std::round(found->ContentTimeAtProjectTime(start) * rate) / rate;
+   const auto sourceEnd = std::round(found->ContentTimeAtProjectTime(end) * rate) / rate;
+   start = found->ProjectTimeAtContentTime(sourceStart);
+   end = found->ProjectTimeAtContentTime(sourceEnd);
+   if (sourceEnd - sourceStart < 0.5 / rate)
       throw std::runtime_error("Keep at least one video frame.");
    if (std::abs(start - found->start) < 1e-7 && std::abs(end - found->End()) < 1e-7) return false;
    found->start = start; found->sourceStart = sourceStart; found->duration = end - start;
    RequireWellFormedTimeline(changed); timeline = std::move(changed);
    return true;
+}
+
+// Pointer gestures stop at available source frames and neighboring clips.
+// The strict range-edit command still reports invalid requested bounds.
+inline bool DragVideoClipEdge(Timeline &timeline, uint64_t id, bool left, double at)
+{
+   RequireWellFormedTimeline(timeline);
+   if (!std::isfinite(at)) throw std::runtime_error("Choose a finite video edge time.");
+   const auto found = std::find_if(timeline.clips.begin(), timeline.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == timeline.clips.end()) throw std::runtime_error("The video clip was removed.");
+   const auto source = SourceFor(timeline, *found);
+   const auto rate = VideoContentFrameRate(*found, source) * found->playbackRate;
+   const auto origin = found->ProjectTimeAtContentTime(0);
+   auto minimum = left ? std::max(0.0, origin) : found->start + 1 / rate;
+   auto maximum = left ? found->End() - 1 / rate : found->ProjectTimeAtContentTime(VideoContentDuration(*found, source));
+   for (const auto &other : timeline.clips) if (other.id != id) {
+      if (left && other.End() <= found->start + 1e-7) minimum = std::max(minimum, other.End());
+      if (!left && other.start >= found->End() - 1e-7) maximum = std::min(maximum, other.start);
+   }
+   // Round constraints inward; rounding the pointer alone can cross a
+   // non-frame-aligned neighbor by half a frame.
+   minimum = origin + std::ceil((minimum - origin) * rate - 1e-7) / rate;
+   maximum = origin + std::floor((maximum - origin) * rate + 1e-7) / rate;
+   if (minimum > maximum + 1e-7) return false;
+   at = std::clamp(at, minimum, maximum);
+   return TrimVideoClip(timeline, id, left ? at : found->start, left ? found->End() : at);
+}
+
+struct VideoTrimEdge { uint64_t id{}; bool left{}; };
+
+// Adjacent clips share one visible seam. Dragging it into either clip trims
+// that side rather than trying to extend its neighbor into occupied space.
+// Once a gap exists, the chosen edge keeps its ordinary trim/untrim behavior.
+inline VideoTrimEdge ChooseVideoTrimEdge(const Timeline &timeline, uint64_t id, bool left, double motion)
+{
+   RequireWellFormedTimeline(timeline);
+   if (!std::isfinite(motion)) throw std::runtime_error("Choose a finite video edge motion.");
+   const auto found = std::find_if(timeline.clips.begin(), timeline.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == timeline.clips.end()) throw std::runtime_error("The video clip was removed.");
+   if ((left && motion < 0) || (!left && motion > 0))
+      for (const auto &other : timeline.clips) if (other.id != id &&
+            std::abs(left ? other.End() - found->start : other.start - found->End()) < 1e-7)
+         return {other.id, !left};
+   return {id, left};
 }
 
 // A borrowed evaluation result is valid only while its input timelines are
@@ -291,10 +359,34 @@ inline bool TrimVideoClip(Timeline &timeline, uint64_t id, double start, double 
 // two rendering paths cannot acquire different picture precedence rules.
 // The owning track checks ranges when publishing its state; this query borrows
 // those values without a per-frame rebuild of the timeline.
+struct VideoLayerVisibility { bool muted{}, solo{}; };
+inline bool IsVideoLayerVisible(const VideoLayerVisibility &visibility, bool anySolo)
+{ return !visibility.muted && (!anySolo || visibility.solo); }
+struct VideoTimelineLayer {
+   const Timeline *timeline{};
+   VideoLayerVisibility visibility;
+};
+// Select once at the native boundary. Empty/gapped solo tracks still suppress
+// other picture layers; mute overrides solo. Audio mixing is outside this model.
+inline std::vector<const Timeline*> VisibleVideoLayers(const std::vector<VideoTimelineLayer> &layers)
+{
+   const bool anySolo = std::any_of(layers.begin(), layers.end(),
+      [](const auto &layer) { return layer.visibility.solo; });
+   std::vector<const Timeline*> result;
+   for (const auto &layer : layers) {
+      if (!layer.timeline) throw std::runtime_error("A video layer requires a timeline.");
+      if (IsVideoLayerVisible(layer.visibility, anySolo)) result.push_back(layer.timeline);
+   }
+   return result;
+}
+
 struct EvaluatedVideoPicture {
    const Timeline *timeline{};
    const Clip *clip{};
    double sourceTime{};
+   MediaSource source;
+   double playbackRate{1};
+   VideoEditing::VideoFrameCrop crop;
 };
 
 inline EvaluatedVideoPicture EvaluateVideoLayers(
@@ -303,20 +395,29 @@ inline EvaluatedVideoPicture EvaluateVideoLayers(
    for (const auto *layer : layers)
       if (!layer) throw std::runtime_error("A video layer requires a timeline.");
    for (const auto *layer : layers)
-      if (const auto *clip = ClipAt(*layer, projectTime))
-         return {layer, clip, clip->sourceStart + projectTime - clip->start};
+      if (const auto *clip = ClipAt(*layer, projectTime)) {
+         const auto sample = SampleVideoContent(*clip, SourceFor(*layer, *clip),
+            clip->ContentTimeAtProjectTime(projectTime));
+         if (sample) return {layer, clip, sample.sourceTime, sample.source, sample.playbackRate, sample.crop};
+      }
    return {};
 }
 
 // Upper tracks take visual precedence. Flatten only at preview/export boundaries;
 // native tracks and their clips remain independent, editable project objects.
+inline constexpr size_t MaximumVideoRenderSegments = 100000;
 inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
 {
    std::vector<double> edges;
    for (const auto *layer : layers) {
       if (!layer) throw std::runtime_error("A video layer requires a timeline.");
       RequireWellFormedTimeline(*layer);
-      for (const auto &clip : layer->clips) { edges.push_back(clip.start); edges.push_back(clip.End()); }
+      for (const auto &clip : layer->clips) {
+         const auto boundaries = VideoContentEdges(clip);
+         if (boundaries.size() > 2 * MaximumVideoRenderSegments - edges.size())
+            throw std::runtime_error("The video composition exceeds its frame-boundary budget.");
+         edges.insert(edges.end(), boundaries.begin(), boundaries.end());
+      }
    }
    std::sort(edges.begin(), edges.end());
    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
@@ -325,17 +426,22 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
       if (edges[i] - edges[i-1] <= 1e-7) continue;
       const auto picture = EvaluateVideoLayers(layers, (edges[i]+edges[i-1])/2);
       if (!picture.clip) continue;
-      auto part = *picture.clip;
-      part.id = result.nextId++; part.start = edges[i-1]; part.duration = edges[i] - edges[i-1];
-      part.sourceStart += part.start - picture.clip->start;
-      part.media = SourceFor(*picture.timeline, *picture.clip);
+       if (result.clips.size() >= MaximumVideoRenderSegments)
+          throw std::runtime_error("The video composition exceeds its segment budget.");
+      Clip part{result.nextId++, edges[i-1],
+          std::max(0.0, picture.sourceTime - (edges[i] - edges[i-1]) * picture.playbackRate / 2), edges[i] - edges[i-1]};
+      part.media = picture.source;
+      part.playbackRate = picture.playbackRate;
+      part.crop = picture.crop;
       if (result.sourcePath.empty()) {
          result.sourcePath = part.media.path; result.sourceDuration = part.media.duration;
          result.frameRate = part.media.frameRate; result.sourceWidth = part.media.width; result.sourceHeight = part.media.height;
       }
       result.clips.push_back(std::move(part));
    }
-   RequireWellFormedTimeline(result);
+   // Flattened render segments are not editable native clips. Several valid
+   // joined roots may produce more segments than one track permits as roots.
+   RequireWellFormedTimeline(result, MaximumVideoRenderSegments);
    return result;
 }
 

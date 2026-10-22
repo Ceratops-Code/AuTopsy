@@ -45,6 +45,11 @@ The audio engine and its established editing tools come from Audacity:
 ## Users
 
 Download the Windows installer from [AuTopsy Releases](https://github.com/Ceratops-Code/AuTopsy/releases).
+
+To remove picture edges, right-click a video clip and choose **Crop Picture...**.
+Set the left/top/right/bottom percentages, or use **Reset Crop**. The source
+footage stays available, and crop follows the clip through saved projects and
+ordinary editing.
 Local deployments use the installer, including locally built releases; source
 and build directories are not installation inputs. A local installation runs from
 `%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing
@@ -53,6 +58,9 @@ The inherited audio tools are covered by the
 [upstream Audacity manual](https://manual.audacityteam.org/).
 The video extension is currently Windows-only; other platforms retain the
 upstream audio build. Video source files stay external to the saved project.
+To locate a moved source, stop playback, choose **File > Relink Video Media...**,
+select the old source and then its replacement file. Clip positions, trims and
+links are retained; the already imported audio remains independently editable.
 
 Projects use standard **`.aup3`** storage. The focused compatibility test opens
 AuTopsy projects in unmodified Audacity **3.7.8** and **3.7.9**, checking audio
@@ -116,7 +124,32 @@ release outputs. Python lint covers the fork's test driver and repository tools;
 inherited scripting examples retain their upstream conventions.
 The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
-`test_fork_features.py` owns the feature scenarios and result records.
+`test_fork_features.py` dispatches the feature scenarios and owns result records.
+`test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate,
+transport-button, video Mute/Solo and multi-source rendering/relinking cases. Native result identities include this
+module when those cases run. `fork-video-speed` covers linked retiming, repeat
+requests, Undo/Redo, canceled edge gestures, source handles, flags, joins, native
+audio pitch and decoded preview/export timing. Project interoperability includes
+a retimed joined clip and its stretched native audio. `fork-video-speed-storage`
+separately covers native save/reopen so a window-lifecycle failure cannot hide
+editing or rendering results.
+`fork-video-clip-storage` checks repeated native round trips of two joined clips
+containing 16,384 retained pieces. The separate-clip and retained-tree bounds
+are independent; the reader and editing model share those limits.
+`fork-video-parent-links` separately checks manually linking previously unlinked
+joined content, both trim edges, differing audio/video placements, speed,
+repeated requests, Undo/Redo and native save/reopen.
+`fork-video-transport` covers the actual preview buttons, pause/resume, live
+picture mute, video-only playback and ownership between projects.
+`fork-video-visibility` covers track buttons and cancellation, Undo/Redo,
+clipboard/save/reopen, visible source selection and decoded picture/audio exports.
+The focused `fork-video-selection`, `fork-video-edges`, `fork-video-clipboard`
+and `fork-video-track-menu` cases exercise real clip clicks,
+double-click selection, Delete/Backspace, reversible edge drags, canceled edits,
+right-click clipboard actions in clips and gaps, and the common **Add track...**
+submenu. `fork-video-linked-edges` separately checks both trim directions
+with the default linked video/audio import. These cases use only generated
+media and the owned test process.
 Preview tests generate their own neutral 16-second colour-pattern video and
 tone; personal video inputs are not accepted. `fork-fixtures` checks that media
 without opening AuTopsy.
@@ -177,9 +210,11 @@ pipes, so it can run alongside an installed copy of Audacity.
    moving, splitting, or trimming either keeps their linked partners together.
    Use **Edit > Clips > Unlink Video / Audio Clips...** for independent edits.
    Edit, mute, or delete audio normally. Silent videos add no audio tracks.
-3. Use the transport controls. Video follows normal-speed playback, pause,
-   stop, timeline seeks, and loop jumps. The preview player itself is muted,
-   so audio plays once through the editable project tracks.
+3. Use **Play**, **Pause** and **Stop** in the preview or the main transport.
+   Preview **Play** becomes **Resume** while paused. Both windows control the same
+   project audio/video playback; preview controls do not interrupt recording or
+   another project's stream. Video follows normal-speed playback, pause, stop,
+   timeline seeks and loop jumps. Audio plays once through the editable tracks.
 4. Closing the preview hides it. **View > Video Preview** shows it again, and
    starting playback also brings it back. Delete a video track using its normal
    close button or **Tracks > Remove Tracks**.
@@ -195,6 +230,18 @@ pipes, so it can run alongside an installed copy of Audacity.
    with silence and later audio is excluded. The current selection does not
    limit this export. Audio is stereo AAC at 48 kHz, 256 kbit/s.
 
+Each video track has visible **Mute** and **Solo** buttons, also available in
+its track menu. They affect picture in both preview and export; the separate
+audio tracks keep their own mix settings. Several video tracks can be soloed.
+Video Mute overrides Solo, and a solo track's gaps remain black unless another
+solo track supplies picture there. Visibility changes support Undo/Redo and
+save/reopen. Hiding the final picture leaves a black tail; hiding every video
+exports black for the full video duration with the edited audio mix. Export does
+not need to open muted sources.
+New imports retain their original display size, including quarter-turn rotation.
+For an older project without saved dimensions, choose an explicit export resolution
+when all video is hidden.
+
 Playback uses the normal audio transport, including when the soundtrack has
 been deleted. Video-only projects supply silence in memory to its clock; no
 hidden audio track or temporary soundtrack is created.
@@ -206,6 +253,17 @@ Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
 Splits and video moves snap to source frames. Linked splits create separate
 left and right groups, so moving the right pair leaves the left pair in place.
 Each paste or duplication creates an independent linked set.
+Right-click a video clip and choose **Change Clip Speed...** to enter a playback
+percentage (1–10000%). Its start stays fixed; linked video and audio retime
+together with the host's pitch-preserving audio stretch. Flags, hidden trim
+handles and joined content are retained. The clip header shows its percentage.
+An overlapping linked result is rejected without changing any clip. Undo/Redo,
+preview, frame stepping, saved projects and exports use the same time mapping.
+Scripts can use **SetVideoClipBounds** with a persistent clip **Id**, optional
+**Track**, and **Start**/**End** project times to trim or restore either edge.
+It uses the same linked-media operation as dragging a video edge; repeating
+unchanged bounds adds no Undo entry. **SetVideoClipSpeed** uses the same clip
+identity and a **Speed** multiplier (2 means 200%).
 Unlink clips when synchronizing picture and sound independently. Tracks can be resized, reordered,
 scrolled, selected, renamed, and removed with the native controls.
 
@@ -231,6 +289,16 @@ of the soundtrack. Projects from the earlier single-video format open as a
 native video track. Source files remain external and must stay accessible.
 Cancelling or failing an import keeps existing tracks. Importing picture with
 audio is one combined Undo action; removing its picture leaves the audio.
+
+Select touching video pieces and use **Edit > Clips > Heal Video Split** to
+remove an accidental seam. **Join** (Ctrl+J) makes one editable clip from selected
+pieces, retaining gaps and outer trim handles. **Separate Joined Video** restores
+the visible source pieces, including nested joins; untrim first to include fully
+hidden pieces. These actions also appear on the video clip's right-click menu.
+They preserve clip flags and linked soundtrack movement, support Undo/Redo and
+save inside the ordinary project file. Picture joins keep the original
+soundtrack clips and samples separate. A gap flag must be moved or removed
+before separating its container.
 
 Synchronization uses the audio clock with periodic drift correction;
 the preview has no guarantee of frame-accurate external
@@ -282,6 +350,10 @@ only when focus or an unambiguous clip ID identifies the track. Empty tracks
 can be added through `NewVideoTrack`, `AddVideoTrackBefore: Track=1`, and
 `AddVideoTrackAfter: Track=1`. Repeating a split at an existing boundary,
 an absolute move to the same start, or deletion of an absent ID makes no change.
+
+With a video track and time range selected, `HealVideoSplit`, `JoinVideoClips`
+and `SeparateVideoClips` call the same structural operations. `GetVideoClips`
+also reports `joined` and the retained direct `pieces` count for each clip.
 
 ## Undo and Redo
 

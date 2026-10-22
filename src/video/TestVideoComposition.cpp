@@ -1,5 +1,7 @@
 // Dedicated composition geometry/eligibility cases, independent of pixel codecs.
 #include "EvaluateVideoTimeline.h"
+#include "RenderVideoComposition.h"
+#include "JoinVideoClips.h"
 #include <catch2/catch.hpp>
 #include <limits>
 
@@ -11,6 +13,24 @@ VideoProjectSnapshot Project()
       {"back", 0, VideoTimeline::CreateVideoTimeline("back.mp4", 20, 24, 1280, 720)}}};
 }
 VideoCompositionSettings Settings() { return {1920, 1080, 25}; }
+}
+
+TEST_CASE("Retimed picture plans and flat exports agree on source clocks", "[video-composition][video-speed]")
+{
+   auto project = Project();
+   auto &front = project.tracks[0].timeline;
+   VideoTimeline::MoveClipTo(front, 1, 2);
+   VideoTimeline::ChangeVideoClipSpeed(front, 1, 2);
+   const auto frame = EvaluateVideoTimeline(project, Settings(), 3.25);
+   REQUIRE(frame.layers.size() == 2);
+   REQUIRE(frame.layers.back().sourceTime == Approx(2.5));
+   REQUIRE(frame.layers.back().playbackRate == 2);
+   const auto flattened = VideoTimeline::ComposeVideoTracks({&front, &project.tracks[1].timeline});
+   const auto exported = VideoTimeline::EvaluateVideoLayers({&flattened}, 3.25);
+   REQUIRE(exported.source.path == frame.layers.back().source.path);
+   REQUIRE(exported.sourceTime == Approx(frame.layers.back().sourceTime));
+   REQUIRE(exported.playbackRate == frame.layers.back().playbackRate);
+   REQUIRE(EvaluateVideoTimeline(project, Settings(), 7.5).layers.size() == 1);
 }
 
 TEST_CASE("Composition retains lower layers and resolves source frames across gaps", "[video-composition]")
@@ -34,7 +54,7 @@ TEST_CASE("Spatial crop retains source pixels and timing independently of proxy 
 {
    auto project = Project();
    auto settings = Settings();
-   settings.layers.push_back({"front", {}, false, false, {{1, {0.1, 0.2, 0.3, 0.1}}}});
+   project.tracks[0].timeline.clips[0].crop = {0.1, 0.2, 0.3, 0.1};
    const auto before = project;
    auto frame = EvaluateVideoTimeline(project, settings, 4);
    REQUIRE(frame.layers.back().crop.left == 0.1);
@@ -48,9 +68,9 @@ TEST_CASE("Spatial crop retains source pixels and timing independently of proxy 
    frame = EvaluateVideoTimeline(project, settings, 4);
    REQUIRE(frame.layers.back().crop.left == 0.1);
    REQUIRE(frame.layers.back().sourceTime == 4);
-   settings.layers[0].clips[0].crop.right = 0.9;
+   project.tracks[0].timeline.clips[0].crop.right = 0.9;
    REQUIRE_THROWS(EvaluateVideoTimeline(project, settings, 4));
-   settings.layers[0].clips[0].crop = {0, 0, 0, std::numeric_limits<double>::quiet_NaN()};
+   project.tracks[0].timeline.clips[0].crop = {0, 0, 0, std::numeric_limits<double>::quiet_NaN()};
    REQUIRE_THROWS(EvaluateVideoTimeline(project, settings, 4));
 }
 
@@ -91,13 +111,52 @@ TEST_CASE("Mute wins over solo and never changes declared output duration", "[vi
    REQUIRE(frame.duration == 25);
    REQUIRE(frame.canvasWidth == 1920);
    settings.layers[0].solo = false;
-   settings.layers.push_back({"back", {}, false, false, {{1, {}, true}}});
+   settings.layers.push_back({"back", {}, false, false, {{1, true}}});
    REQUIRE(EvaluateVideoTimeline(project, settings, 1).layers.empty());
    settings.layers[1].muted = false;
-   settings.layers[0].clips = {{1, {}, true}};
+   settings.layers[0].clips = {{1, true}};
    frame = EvaluateVideoTimeline(project, settings, 1);
    REQUIRE(frame.layers.size() == 1);
    REQUIRE(frame.layers[0].trackId == "front");
+}
+
+TEST_CASE("Native layer selection shares mute and solo precedence with composition and flattened export", "[video-composition]")
+{
+   auto project = Project();
+   auto settings = Settings();
+   settings.layers = {{"front"}, {"back"}};
+   const auto before = project;
+   for (const auto front : {VideoTimeline::VideoLayerVisibility{},
+         VideoTimeline::VideoLayerVisibility{true, false}, VideoTimeline::VideoLayerVisibility{false, true},
+         VideoTimeline::VideoLayerVisibility{true, true}}) {
+      for (const auto back : {VideoTimeline::VideoLayerVisibility{},
+            VideoTimeline::VideoLayerVisibility{false, true}, VideoTimeline::VideoLayerVisibility{true, true}}) {
+         settings.layers[0].muted = front.muted; settings.layers[0].solo = front.solo;
+         settings.layers[1].muted = back.muted; settings.layers[1].solo = back.solo;
+         for (int repeat = 0; repeat < 3; ++repeat) {
+            const auto visible = VideoTimeline::VisibleVideoLayers({
+               {&project.tracks[0].timeline, front}, {&project.tracks[1].timeline, back}});
+            const auto preview = VideoTimeline::EvaluateVideoLayers(visible, 4);
+            const auto exportTimeline = VideoTimeline::ComposeVideoTracks(visible);
+            const auto exported = VideoTimeline::EvaluateVideoLayers({&exportTimeline}, 4);
+            const auto composition = EvaluateVideoTimeline(project, settings, 4);
+            REQUIRE(bool(preview.clip) == !composition.layers.empty());
+            REQUIRE(bool(exported.clip) == bool(preview.clip));
+            if (preview.clip) {
+               REQUIRE(preview.source.path == composition.layers.back().source.path);
+               REQUIRE(exported.source.path == preview.source.path);
+               REQUIRE(exported.sourceTime == Approx(preview.sourceTime));
+            }
+            REQUIRE(composition.duration == 25);
+            REQUIRE(SameVideoProject(project, before));
+         }
+      }
+   }
+   project.tracks[0].timeline.clips.clear();
+   const auto emptySolo = VideoTimeline::VisibleVideoLayers({
+      {&project.tracks[0].timeline, {false, true}}, {&project.tracks[1].timeline, {}}});
+   REQUIRE_FALSE(VideoTimeline::EvaluateVideoLayers(emptySolo, 4).clip);
+   REQUIRE_THROWS(VideoTimeline::VisibleVideoLayers({{nullptr, {true, false}}}));
 }
 
 TEST_CASE("Composition rejects stale properties and invalid geometry before producing a frame", "[video-composition]")
@@ -120,7 +179,7 @@ TEST_CASE("Frame planning repeats and interruptions cannot mutate authoritative 
 {
    auto project = Project();
    auto settings = Settings();
-   settings.layers = {{"front", {}, false, false, {{1, {0.1, 0.1, 0.1, 0.1}}}}};
+   project.tracks[0].timeline.clips[0].crop = {0.1, 0.1, 0.1, 0.1};
    const auto before = project;
    for (int i = 0; i < 50; ++i) {
       // Drop a plan before consumption, or consume its complete owned values.
@@ -133,4 +192,73 @@ TEST_CASE("Frame planning repeats and interruptions cannot mutate authoritative 
    project.tracks.clear();
    REQUIRE(owned.layers.back().source.path == "front.mp4");
    REQUIRE(owned.layers.back().clipId == 1);
+}
+
+TEST_CASE("Picture crop belongs to retained clips through join separate and copying", "[video-composition][video-crop]")
+{
+   auto project = Project();
+   auto &timeline = project.tracks[0].timeline;
+   timeline.clips[0].duration = 5;
+   timeline.clips[0].crop = {0.25, 0, 0, 0};
+   auto second = timeline.clips[0];
+   second.id = timeline.nextId++; second.start = 5; second.sourceStart = 5;
+   second.crop = {0, 0, 0.5, 0};
+   timeline.clips.push_back(second);
+   REQUIRE(VideoTimeline::JoinVideoClips(timeline, 0, 10));
+   REQUIRE(VideoTimeline::ChangeVideoClipCrop(timeline, timeline.clips[0].id, {0, 0.2, 0, 0.1}));
+   const auto before = project;
+   const auto left = EvaluateVideoTimeline(project, Settings(), 1).layers.back();
+   const auto right = EvaluateVideoTimeline(project, Settings(), 6).layers.back();
+   REQUIRE(left.crop.left == Approx(0.25));
+   REQUIRE(right.crop.right == Approx(0.5));
+   REQUIRE(left.crop.top == Approx(0.2));
+   REQUIRE_FALSE(VideoTimeline::ChangeVideoClipCrop(timeline, timeline.clips[0].id, {0, 0.2, 0, 0.1}));
+   REQUIRE(SameVideoProject(project, before));
+   REQUIRE(VideoTimeline::SeparateVideoClips(timeline, 0, 10));
+   REQUIRE_FALSE(VideoTimeline::SeparateVideoClips(timeline, 0, 10));
+   REQUIRE(EvaluateVideoTimeline(project, Settings(), 1).layers.back().crop == left.crop);
+   REQUIRE(EvaluateVideoTimeline(project, Settings(), 6).layers.back().crop == right.crop);
+   const auto copied = VideoTimeline::CopyVideoRange(timeline, 0.5, 9);
+   REQUIRE(VideoTimeline::EvaluateVideoLayers({&copied}, 0.5).crop == left.crop);
+   REQUIRE(VideoTimeline::EvaluateVideoLayers({&copied}, 5.5).crop == right.crop);
+}
+
+TEST_CASE("Rejected picture crops publish no edit and cropped pictures cannot be copied unchanged", "[video-composition][video-crop]")
+{
+   auto project = Project();
+   auto &timeline = project.tracks[0].timeline;
+   const auto before = project;
+   REQUIRE_THROWS(VideoTimeline::ChangeVideoClipCrop(timeline, 1, {0.5, 0, 0.5, 0}));
+   REQUIRE_THROWS(VideoTimeline::ChangeVideoClipCrop(timeline, 1, {0, -0.1, 0, 0}));
+   REQUIRE(SameVideoProject(project, before));
+   REQUIRE(VideoTimeline::KeepsOriginalPicture(timeline));
+   for (int repeat = 0; repeat < 3; ++repeat) {
+      auto candidate = timeline;
+      REQUIRE(VideoTimeline::ChangeVideoClipCrop(candidate, 1, {0.1, 0.2, 0, 0}));
+      REQUIRE(SameVideoProject(project, before)); // discard before publication
+   }
+   REQUIRE(VideoTimeline::ChangeVideoClipCrop(timeline, 1, {0.1, 0.2, 0, 0}));
+   REQUIRE_FALSE(VideoTimeline::KeepsOriginalPicture(timeline));
+   const auto flattened = VideoTimeline::ComposeVideoTracks({&timeline});
+   REQUIRE(VideoTimeline::EvaluateVideoLayers({&flattened}, 2).crop ==
+      VideoTimeline::EvaluateVideoLayers({&timeline}, 2).crop);
+}
+
+TEST_CASE("Oriented picture crops map to original and proxy decoded pixels", "[video-composition][video-crop]")
+{
+   const VideoFrameCrop crop{0.1, 0.2, 0.3, 0.1};
+   const auto original = CalculateVideoCropRectangle(crop, 100, 50, 0);
+   const auto proxy = CalculateVideoCropRectangle(crop, 50, 25, 0);
+   REQUIRE(original.x == 10); REQUIRE(original.y == 10);
+   REQUIRE(original.width == 60); REQUIRE(original.height == 35);
+   REQUIRE(proxy.x == 5); REQUIRE(proxy.y == 5);
+   REQUIRE(proxy.width == 30); REQUIRE(proxy.height == 18);
+   const auto rotated = CalculateVideoCropRectangle({0, 0, 0, 0.5}, 160, 90, 270);
+   REQUIRE(rotated.x == 80); REQUIRE(rotated.y == 0);
+   REQUIRE(rotated.width == 80); REQUIRE(rotated.height == 90);
+   const auto other = CalculateVideoCropRectangle({0.2, 0.1, 0.3, 0.4}, 160, 90, 90);
+   REQUIRE(other.x == 16); REQUIRE(other.y == 27);
+   REQUIRE(other.width == 80); REQUIRE(other.height == 45);
+   REQUIRE_THROWS(CalculateVideoCropRectangle(crop, 0, 50, 0));
+   REQUIRE_THROWS(CalculateVideoCropRectangle(crop, 100, 50, 45));
 }

@@ -4,14 +4,6 @@
 
 namespace VideoEditing {
 namespace {
-void RequireCrop(const VideoFrameCrop &crop)
-{
-   for (const auto value : {crop.left, crop.top, crop.right, crop.bottom})
-      if (!std::isfinite(value) || value < 0 || value >= 1)
-         throw std::runtime_error("Video crop margins must be finite fractions from zero to less than one.");
-   if (crop.left + crop.right >= 1 || crop.top + crop.bottom >= 1)
-      throw std::runtime_error("Video crop must retain a nonempty source rectangle.");
-}
 void RequireRectangle(const VideoFrameRectangle &rect)
 {
    for (const auto value : {rect.x, rect.y, rect.width, rect.height})
@@ -52,7 +44,6 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
              std::none_of(timeline.clips.begin(), timeline.clips.end(),
                 [&](const auto &clip) { return clip.id == appearance.clipId; }))
             throw std::runtime_error("Clip picture properties require unique, existing clip identities.");
-         RequireCrop(appearance.crop);
       }
       styles[index->second] = style;
    }
@@ -73,7 +64,9 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
    struct Pending { size_t index; VideoFrameRectangle parent; };
    std::vector<Pending> pending;
    for (const auto root : roots)
-      if (soloGroups.empty() || soloGroups.count(root)) pending.push_back({root, {}});
+      if (VideoTimeline::IsVideoLayerVisible(
+            {styles[root].muted, soloGroups.count(root) != 0}, !soloGroups.empty()))
+         pending.push_back({root, {}});
    if (time >= settings.duration) return result;
    while (!pending.empty()) {
       const auto item = pending.back(); pending.pop_back();
@@ -84,10 +77,13 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
       const auto appearance = std::find_if(style.clips.begin(), style.clips.end(),
          [&](const auto &value) { return value.clipId == clip->id; });
       if (appearance != style.clips.end() && appearance->muted) continue;
+      const auto sample = VideoTimeline::SampleVideoContent(*clip, VideoTimeline::SourceFor(track.timeline, *clip),
+         clip->ContentTimeAtProjectTime(time));
+      if (!sample) continue;
       const auto rectangle = PlaceWithin(item.parent, style.rectangle);
-      result.layers.push_back({track.id, clip->id, VideoTimeline::SourceFor(track.timeline, *clip),
-         clip->sourceStart + time - clip->start,
-         appearance == style.clips.end() ? VideoFrameCrop{} : appearance->crop, rectangle});
+      result.layers.push_back({track.id, clip->id, sample.source,
+         sample.sourceTime,
+         sample.crop, rectangle, sample.playbackRate});
       // Lower roots are processed first. Children go above their own parent,
       // irrespective of where an upstream pane happens to display their rows.
       for (const auto child : children[item.index]) pending.push_back({child, rectangle});

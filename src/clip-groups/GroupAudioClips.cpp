@@ -97,23 +97,29 @@ bool ExpandMovingClipGroups(ClipMoveState &state, TrackList &trackList)
 {
    (void)trackList;
    std::unordered_set<std::string> groups;
-   const auto groupOf = [](const ChannelGroupInterval &interval) -> std::string {
-      if (const auto *audio = dynamic_cast<const WaveClip*>(&interval)) return GetClipGroupId(*audio);
-      if (const auto *media = dynamic_cast<const LinkedClipInterval*>(&interval)) return media->MediaGroupId();
+   const auto groupsOf = [](const ChannelGroupInterval &interval) -> std::vector<std::string> {
+      if (const auto *audio = dynamic_cast<const WaveClip*>(&interval)) return {GetClipGroupId(*audio)};
+      if (const auto *media = dynamic_cast<const LinkedClipInterval*>(&interval)) return media->MediaGroupIds();
       return {};
    };
    size_t before{};
-   for (const auto &pair : state.shifters) for (const auto &interval : pair.second->MovingIntervals()) {
-      ++before; const auto group = groupOf(*interval);
-      if (!group.empty()) groups.insert(group);
-   }
+   for (const auto &pair : state.shifters) for (const auto &interval : pair.second->MovingIntervals()) ++before;
+   // Closing over relationships is needed when an audio piece selects a joined
+   // picture whose other pieces refer to additional soundtrack groups.
+   bool expanded{};
+   do {
+      expanded = false;
+      for (const auto &pair : state.shifters) for (const auto &interval : pair.second->MovingIntervals())
+         for (const auto &group : groupsOf(*interval))
+            if (!group.empty()) expanded |= groups.insert(group).second;
+      for (auto &pair : state.shifters)
+         pair.second->UnfixIntervals([&](const auto &interval) {
+            for (const auto &group : groupsOf(interval)) if (!group.empty() && groups.count(group)) return true;
+            return false;
+         });
+   } while (expanded);
    size_t after{};
-   for (auto &pair : state.shifters) {
-      pair.second->UnfixIntervals([&](const auto &interval) {
-         const auto group = groupOf(interval); return !group.empty() && groups.count(group);
-      });
-      after += pair.second->MovingIntervals().size();
-   }
+   for (const auto &pair : state.shifters) after += pair.second->MovingIntervals().size();
    return after != before;
 
 }

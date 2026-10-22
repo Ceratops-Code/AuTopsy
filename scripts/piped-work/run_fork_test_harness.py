@@ -839,11 +839,25 @@ def ready_video_preview(client):
         time.sleep(0.1)
 
 
-def drag_owned_video_clip(
-    client, start_time, end_time, track=None, to_track=None, cancel=False
+def operate_owned_video_track(
+    client, start_time, end_time=None, track=None, to_track=None, cancel=False,
+    gesture="drag", area="header", menu_path=(), key=None, painted=None
 ):
-    """Exercise the real TrackPanel's clip header; target only the owned PID."""
-    info = painted_video_tracks(client)
+    """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
+
+    Coordinates come from the painted native row, including its actual data
+    origin. Menu choices use caption-resolved native rectangles in the owned window;
+    cancellation always releases held input before restoring the previous focus.
+    """
+    if end_time is None:
+        end_time = start_time
+    if gesture not in ("drag", "click", "double-click", "context"):
+        raise ValueError("Unknown native video gesture: " + gesture)
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    # Wait before reading window/paint facts: project-open callbacks may replace
+    # those controls while the native double-click interval expires.
+    time.sleep((user.GetDoubleClickTime() + 20) / 1000)
+    info = painted if painted is not None else painted_video_tracks(client)
     if not all(
         info["viewStart"] <= time <= info["viewEnd"] for time in (start_time, end_time)
     ):
@@ -859,7 +873,6 @@ def drag_owned_video_clip(
     )
     if source is None or target is None:
         raise RuntimeError("The requested native video row is missing.")
-    user = ctypes.WinDLL("user32", use_last_error=True)
     user.GetWindowThreadProcessId.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_uint32),
@@ -870,12 +883,24 @@ def drag_owned_video_clip(
         raise RuntimeError("The native TrackPanel belongs to another process.")
 
     def position(time, row):
+        if area in ("mute", "solo"):
+            button = row[area]
+            if button["width"] <= 0 or button["height"] <= 0:
+                raise RuntimeError("The requested native video button is not painted.")
+            return button["x"] + button["width"] // 2, button["y"] + button["height"] // 2
         x = row["dataLeft"] + round(
             (time - info["viewStart"])
             / (info["viewEnd"] - info["viewStart"])
-            * info["videoTrackDataWidth"]
+            * row["dataWidth"]
         )
-        return x, row.get("dataTop", row["y"]) + 12
+        if area == "controls":
+            x = row["x"] + (row["dataLeft"] - row["x"]) // 2
+        else:
+            # At time zero, physical-pixel rounding can put an exact border
+            # point in the ruler cell. Stay inside the painted data pane; edge
+            # hit tolerance and source-frame snapping retain the intended time.
+            x = max(row["dataLeft"] + 2, min(row["dataLeft"] + row["dataWidth"] - 2, x))
+        return x, row["dataTop"] + (50 if area == "picture" else 12)
 
     x0, y0 = position(start_time, source)
     x1, y1 = position(end_time, target)
@@ -896,8 +921,13 @@ def drag_owned_video_clip(
             ("extra", ctypes.c_size_t),
         ]
 
+    class Key(ctypes.Structure):
+        _fields_ = [("code", ctypes.c_uint16), ("scan", ctypes.c_uint16),
+                    ("flags", ctypes.c_uint32), ("time", ctypes.c_uint32),
+                    ("extra", ctypes.c_size_t)]
+
     class Union(ctypes.Union):
-        _fields_ = [("mouse", Mouse)]
+        _fields_ = [("mouse", Mouse), ("keyboard", Key)]
 
     class Input(ctypes.Structure):
         _fields_ = [("kind", ctypes.c_uint32), ("value", Union)]
@@ -936,6 +966,7 @@ def drag_owned_video_clip(
     user.GetClientRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
     user.GetCursorPos.argtypes = [ctypes.POINTER(Point)]
     user.ClientToScreen.argtypes = [ctypes.c_void_p, ctypes.POINTER(Point)]
+    user.ScreenToClient.argtypes = [ctypes.c_void_p, ctypes.POINTER(Point)]
     user.WindowFromPoint.argtypes = [Point]
     user.WindowFromPoint.restype = ctypes.c_void_p
     user.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
@@ -952,6 +983,7 @@ def drag_owned_video_clip(
         ctypes.c_uint,
         ctypes.POINTER(ctypes.c_size_t),
     ]
+    user.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
     user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
     user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
     user.GetWindowDpiAwarenessContext.argtypes = [ctypes.c_void_p]
@@ -986,10 +1018,131 @@ def drag_owned_video_clip(
                 user.ShowWindow(window, 0)
         return 1
 
+    def position_pointer(x, y):
+        """Reach the native client point before sending input across DPI contexts."""
+        for _ in range(3):
+            prior = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
+            native = Point()
+            user.GetCursorPos(ctypes.byref(native))
+            user.ScreenToClient(panel, ctypes.byref(native))
+            user.SetThreadDpiAwarenessContext(prior)
+            dx, dy = x-native.x, y-native.y
+            user.GetCursorPos(ctypes.byref(point))
+            if abs(dx) <= 1 and abs(dy) <= 1:
+                return
+            point.x += round(dx * rectangle[2] / info["videoTrackPanelWidth"])
+            point.y += round(dy * rectangle[3] / info["videoTrackPanelHeight"])
+            user.SetCursorPos(point.x, point.y)
+        raise RuntimeError(f"Cannot reach owned native point {(x,y)}; actual={(native.x,native.y)}.")
+
     def button(flags):
-        packet = Input(0, Union(mouse=Mouse(0, 0, 0, flags, 0, 0)))
+        # Position and button transition share one OS event, so another mouse
+        # movement cannot turn a narrow edge press into a clip-header press.
+        left, top, width, height = (user.GetSystemMetrics(index) for index in (76, 77, 78, 79))
+        x = round((point.x - left) * 65535 / max(1, width - 1))
+        y = round((point.y - top) * 65535 / max(1, height - 1))
+        packet = Input(0, Union(mouse=Mouse(x, y, 0, flags | 0xC001, 0, 0)))
         if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
             raise RuntimeError("Windows rejected the owned test's mouse-button event.")
+
+    def keyboard(code):
+        if user.GetForegroundWindow() != root:
+            raise RuntimeError("The owned window lost foreground before keyboard input.")
+        # wx distinguishes dedicated navigation/Delete keys from their keypad
+        # counterparts by the extended flag, just as a physical keyboard does.
+        extended = 1 if 0x21 <= code <= 0x28 or code in (0x2D, 0x2E) else 0
+        for flags in (extended, extended | 2):
+            packet = Input(1, Union(keyboard=Key(code, user.MapVirtualKeyW(code, 0), flags, 0, 0)))
+            if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
+                raise RuntimeError("Windows rejected the owned test's keyboard event.")
+        time.sleep(0.08)
+
+    def choose_popup_path():
+        # OBJID_CLIENT on a native popup exposes its actual HMENU. Resolve
+        # captions and item rectangles at the moment of input, never by order.
+        class MenuBar(ctypes.Structure):
+            _fields_ = [("size", ctypes.c_uint32), ("rect", ctypes.c_long * 4),
+                        ("menu", ctypes.c_void_p), ("submenu", ctypes.c_void_p),
+                        ("flags", ctypes.c_uint32)]
+        user.GetMenuBarInfo.argtypes = [ctypes.c_void_p, ctypes.c_long, ctypes.c_long, ctypes.POINTER(MenuBar)]
+        user.GetClassNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+        user.GetMenuItemCount.argtypes = [ctypes.c_void_p]
+        user.GetMenuStringW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_int, ctypes.c_uint]
+        user.GetSubMenu.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user.GetSubMenu.restype = ctypes.c_void_p
+        user.GetMenuState.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+        user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        submenu = False
+        for label in menu_path:
+            deadline = time.monotonic() + 3
+            matches: list[tuple[int, int, int]] = []
+            observed: list[str] = []
+            while True:
+                matches.clear()
+                observed.clear()
+
+                @callback
+                def inspect_popup(window, _, label=label, matches=matches, observed=observed):
+                    pid = ctypes.c_uint32()
+                    user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+                    if pid.value != owner.value or not user.IsWindowVisible(window):
+                        return 1
+                    kind = ctypes.create_unicode_buffer(64)
+                    user.GetClassNameW(window, kind, len(kind))
+                    if kind.value != "#32768":
+                        return 1
+                    bar = MenuBar()
+                    bar.size = ctypes.sizeof(bar)
+                    if not user.GetMenuBarInfo(window, -4, 0, ctypes.byref(bar)):
+                        return 1
+                    for index in range(min(64, user.GetMenuItemCount(bar.menu))):
+                        text = ctypes.create_unicode_buffer(256)
+                        user.GetMenuStringW(bar.menu, index, text, len(text), 0x400)
+                        caption = text.value.replace("&", "").split("\t", 1)[0]
+                        observed.append(caption)
+                        if caption == label:
+                            matches.append((bar.menu, index, window))
+                    return 1
+
+                user.EnumWindows(inspect_popup, 0)
+                if len(matches) == 1:
+                    break
+                if len(matches) > 1 or time.monotonic() >= deadline:
+                    raise RuntimeError(f"Expected one visible popup item {label!r}; matches={matches}; captions={observed!r}")
+                time.sleep(0.01)
+            menu, index, popup = matches[0]
+            if user.GetMenuState(menu, index, 0x400) & 3:
+                raise RuntimeError("The requested popup item is disabled: " + label)
+            # Menu item rectangles retain their owner's logical scale. Map
+            # within current logical/physical popup bounds, including its origin.
+            user.GetMenuItemRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long * 4)]
+            user.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
+            bounds, logical, physical = ((ctypes.c_long * 4)() for _ in range(3))
+            prior = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(root))
+            try:
+                readable = user.GetMenuItemRect(None, menu, index, ctypes.byref(bounds)) and user.GetWindowRect(popup, ctypes.byref(logical))
+            finally:
+                user.SetThreadDpiAwarenessContext(prior)
+            if not readable or not user.GetWindowRect(popup, ctypes.byref(physical)) or logical[2] <= logical[0] or logical[3] <= logical[1] or bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
+                raise RuntimeError("The owned popup item has no current screen rectangle: " + label)
+            point.x = round(physical[0] + ((bounds[0] + bounds[2]) / 2 - logical[0]) * (physical[2] - physical[0]) / (logical[2] - logical[0]))
+            point.y = round(physical[1] + ((bounds[1] + bounds[3]) / 2 - logical[1]) * (physical[3] - physical[1]) / (logical[3] - logical[1]))
+            if user.WindowFromPoint(point) != popup or user.GetForegroundWindow() != root:
+                raise RuntimeError("The owned popup item is obstructed or lost foreground: " + label)
+            user.SetCursorPos(point.x, point.y)
+            try:
+                button(2)
+            finally:
+                button(4)
+            submenu = bool(user.GetSubMenu(menu, index))
+            deadline = time.monotonic() + 3
+            while not submenu and user.IsWindowVisible(popup):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("The owned popup did not acknowledge its item click: " + label)
+                time.sleep(0.01)
+        if not menu_path or submenu:
+            for _ in range(len(menu_path) + 1):
+                keyboard(0x1B)
 
     def send(kind, flags, x, y):
         reply = ctypes.c_size_t()
@@ -1013,9 +1166,6 @@ def drag_owned_video_clip(
             raise RuntimeError(
                 "Human input is held; the test will not take over its drag meaning."
             )
-        # Consecutive drags at the same header must start as single clicks.
-        # A real OS down inside its double-click interval is a different action.
-        time.sleep((user.GetDoubleClickTime() + 20) / 1000)
         user.EnumWindows(hide_preview, 0)
         if not user.SetWindowPos(root, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x53):
             raise RuntimeError(f"Cannot expose owned project {root}: Windows error {ctypes.get_last_error()}.")
@@ -1060,39 +1210,70 @@ def drag_owned_video_clip(
             time.sleep(0.01)
         user.SetCursorPos(point.x, point.y)
         positioned = True
+        position_pointer(x0, y0)
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
-        button(2)
-        pressed = True
         thread = user.GetWindowThreadProcessId(panel, None)
-        deadline = time.monotonic() + 1
-        while True:
-            state = Gui()
-            state.size = ctypes.sizeof(state)
-            if (
-                user.GetGUIThreadInfo(thread, ctypes.byref(state))
-                and state.capture == panel
-            ):
-                break
-            if time.monotonic() >= deadline:
-                raise RuntimeError(
-                    "The owned pane did not capture the held mouse input."
-                )
-            time.sleep(0.01)
-        user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
-        for step in range(1, 6):
-            send(
-                0x200,
-                1,
-                round(x0 + (x1 - x0) * step / 5),
-                round(y0 + (y1 - y0) * step / 5),
-            )
-        if cancel:
-            for kind in (0x100, 0x101):
-                send(kind, 0x1B, 0, 0)
-        send(0x202, 0, x1, y1)
-        button(4)
-        pressed = False
+        if gesture == "context":
+            button(8)
+            pressed = True
+            time.sleep(0.08)
+            button(16)
+            pressed = False
+            deadline = time.monotonic() + 3
+            while True:
+                state = Gui()
+                state.size = ctypes.sizeof(state)
+                if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.flags & 4:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Right-click did not open an owned native popup menu.")
+                time.sleep(0.01)
+            choose_popup_path()
+        else:
+            for _ in range(2 if gesture == "double-click" else 1):
+                button(2)
+                pressed = True
+                if gesture == "drag":
+                    deadline = time.monotonic() + 1
+                    while True:
+                        state = Gui()
+                        state.size = ctypes.sizeof(state)
+                        if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.capture == panel:
+                            break
+                        if time.monotonic() >= deadline:
+                            current = Point()
+                            user.GetCursorPos(ctypes.byref(current))
+                            raise RuntimeError(
+                                f"The owned pane did not capture held input; GUI={(state.flags, state.active, state.focus, state.capture, state.menu)}; "
+                                f"button={user.GetAsyncKeyState(1) & 0x8000}; cursor={(current.x, current.y)}; "
+                                f"native_point={(x0, y0)}; row={source}; "
+                                + startup_window_messages(owner.value)
+                            )
+                        time.sleep(0.01)
+                    # Native timers consult the real pointer, so move it as
+                    # well as the button state. One OS input route avoids a
+                    # synthetic motion disagreeing with the global cursor.
+                    for step in range(1, 6):
+                        position_pointer(round(x0 + (x1-x0)*step/5), round(y0 + (y1-y0)*step/5))
+                        time.sleep(0.04)
+                    if cancel:
+                        keyboard(0x1B)
+                button(4)
+                pressed = False
+                deadline = time.monotonic() + 3
+                while gesture == "drag":
+                    state = Gui()
+                    state.size = ctypes.sizeof(state)
+                    if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.capture != panel:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("The owned pane did not release the completed drag.")
+                    time.sleep(0.01)
+                time.sleep(0.06)
+        if key is not None:
+            keyboard(key)
+
     finally:
         if pressed:
             try:
@@ -1102,7 +1283,7 @@ def drag_owned_video_clip(
                     send(0x100, 0x1B, 0, 0)
             finally:
                 # Input release must survive a missing HWND or failed Escape.
-                button(4)
+                button(16 if gesture == "context" else 4)
         user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
         current = Point()
         user.GetCursorPos(ctypes.byref(current))
@@ -1198,3 +1379,134 @@ def capture_owned_project(panel, path):
         gdi.DeleteObject(bitmap)
         gdi.DeleteDC(memory)
         user.ReleaseDC(window, screen)
+
+
+def check_video_interactions(client, root, case):
+    """Mouse/keyboard regressions on synthetic clips, independent of export/playback."""
+    client.file("ImportVideo", root / "source.mp4")
+    if case != "video-linked-edges":
+        client.send('UnlinkMediaClips: Clips="0:0"')
+        client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+        client.send("SelectTime: Start=2 End=2")
+        client.send("Split")
+        client.send("MoveVideoClip: Track=0 Id=2 Start=3")
+    client.send("FitInWindow")
+
+    def clips():
+        return client.data("GetVideoClips")["clips"]
+
+    def bounds(expected):
+        actual = [(round(row["start"], 2), round(row["end"], 2)) for row in clips()]
+        assert actual == expected, actual
+
+    original = clips()
+    if case == "video-selection":
+        for gesture in ("click", "double-click", "click"):
+            operate_owned_video_track(client, 0.8, track=0, gesture=gesture, area="picture")
+            selection = client.data("GetInfo: Type=Selection Format=JSON")
+            assert selection["Start"] == 0 and selection["End"] == 2, selection
+            assert clips() == original
+        # The same single click must make Delete work through the keyboard command,
+        # not a script that bypasses its selection preconditions.
+        operate_owned_video_track(client, 0.8, track=0, gesture="click", area="picture", key=0x2E)
+        bounds([(1, 3)])
+        client.send("Undo")
+        assert clips() == original
+        operate_owned_video_track(client, 3.8, track=0, gesture="double-click", area="picture", key=0x08)
+        bounds([(0, 2)])
+        client.send("Undo")
+        assert clips() == original
+
+    elif case == "video-edges":
+        # Selecting one of two touching clips must not move its neighbor.
+        client.send("MoveVideoClip: Track=0 Id=2 Start=2")
+        operate_owned_video_track(client, 0.8, track=0, gesture="click")
+        operate_owned_video_track(client, 0.8, 0.3, track=0, cancel=True)
+        bounds([(0, 2), (2, 4)])
+        operate_owned_video_track(client, 2.8, track=0, gesture="click")
+        operate_owned_video_track(client, 2.8, 3.3, track=0)
+        bounds([(0, 2), (2.5, 4.5)])
+        client.send("Undo")
+        bounds([(0, 2), (2, 4)])
+        client.send("MoveVideoClip: Track=0 Id=2 Start=3")
+        original = clips()
+        for _ in range(2):
+            operate_owned_video_track(client, 2, 1.5, track=0)
+            bounds([(0, 1.5), (3, 5)])
+            operate_owned_video_track(client, 2.99, 3.5, track=0)
+            bounds([(0, 1.5), (3.5, 5)])
+            operate_owned_video_track(client, 3.5, 3, track=0, cancel=True)
+            bounds([(0, 1.5), (3.5, 5)])
+            operate_owned_video_track(client, 3.5, 3, track=0)
+            bounds([(0, 1.5), (3, 5)])
+            operate_owned_video_track(client, 1.5, 2, track=0)
+            assert clips() == original
+
+    elif case == "video-linked-edges":
+        def linked_bounds(start, end):
+            rows = client.data("GetLinkedMediaClips")
+            assert {row["kind"] for row in rows} == {"video", "audio"}, rows
+            assert all(abs(row["start"]-start) < 0.04 and abs(row["end"]-end) < 0.04 for row in rows), rows
+            return rows
+        linked_bounds(0, 4)
+        for _ in range(2):
+            operate_owned_video_track(client, 4, 3.5, track=0)
+            linked_bounds(0, 3.5)
+            operate_owned_video_track(client, 0, 0.5, track=0)
+            trimmed = linked_bounds(0.5, 3.5)
+            operate_owned_video_track(client, 0.5, 0, track=0, cancel=True)
+            assert client.data("GetLinkedMediaClips") == trimmed
+            operate_owned_video_track(client, 0.5, 0, track=0)
+            linked_bounds(0, 3.5)
+            operate_owned_video_track(client, 3.5, 4, track=0)
+            linked_bounds(0, 4)
+    elif case == "video-clipboard":
+        # Popup Copy on a clip, cancel, then Paste in a gap and on an empty row.
+        operate_owned_video_track(client, 0.8, track=0, gesture="context", area="picture",
+                                 menu_path=("Copy",))
+        assert clips() == original
+        operate_owned_video_track(client, 2.5, track=0, gesture="context", area="picture")
+        assert clips() == original
+        for _ in range(2):
+            operate_owned_video_track(client, 2.5, track=0, gesture="context", area="picture",
+                                     menu_path=("Paste",))
+            inserted = clips()
+            assert len(inserted) == 3 and abs(inserted[1]["start"] - 2.5) < 0.05, inserted
+            client.send("Undo")
+            assert clips() == original
+        client.send("NewVideoTrack")
+        for _ in range(2):
+            operate_owned_video_track(client, 0.5, track=2, gesture="context", area="picture",
+                                     menu_path=("Paste",))
+            pasted = [clip for clip in clips() if clip["track"] == 2]
+            assert len(pasted) == 1 and abs(pasted[0]["start"] - 0.5) < 0.05, pasted
+            client.send("Undo")
+            assert clips() == original
+    elif case == "video-track-menu":
+        client.send("NewVideoTrack")
+        def track_content():
+            return [{key: value for key, value in row.items() if key not in ("selected", "focused")}
+                    for row in client.data("GetInfo: Type=Tracks Format=JSON")]
+        before = track_content()
+        # Open and cancel the submenu, then repeat each relative insertion.
+        client.send("FirstTrack")
+        operate_owned_video_track(client, 0.5, track=0, gesture="context", area="controls",
+                                 menu_path=("Add track...",))
+        assert track_content() == before
+        for label, index, kind in (
+            ("Add Audio Track Before This Track", 0, "wave"),
+            ("Add Audio Track After This Track", 1, "wave"),
+            ("Add Video Track Before This Track", 0, "video"),
+            ("Add Video Track After This Track", 1, "video")
+        ):
+            for _ in range(2):
+                client.send("FirstTrack")
+                operate_owned_video_track(client, 0.5, track=0, gesture="context", area="controls",
+                                         menu_path=("Add track...", label))
+                after = track_content()
+                assert len(after) == len(before) + 1 and after[index]["kind"] == kind, after
+                client.send("Undo")
+                assert track_content() == before
+    else:
+        raise ValueError("Unknown video interaction case: " + case)
+    client.file("SaveProject2", root / "_video-interactions.aup3")

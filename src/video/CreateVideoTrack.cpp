@@ -24,6 +24,15 @@ template<typename Value> bool ReadAttribute(const AttributesList &attributes,
       [name](const auto &attribute) { return attribute.first == name; });
    return found != attributes.end() && found->second.TryGet(value);
 }
+// Absent optional fields use their declared defaults. A present field with
+// an unreadable wire type must fail rather than silently changing saved state.
+template<typename Value> bool ReadOptionalAttribute(const AttributesList &attributes,
+   std::string_view name, Value &value)
+{
+   const auto found = std::find_if(attributes.begin(), attributes.end(),
+      [name](const auto &attribute) { return attribute.first == name; });
+   return found == attributes.end() || found->second.TryGet(value);
+}
 bool ReadAttribute(const AttributesList &attributes, std::string_view name, uint64_t &value)
 {
    long long wire{};
@@ -89,7 +98,7 @@ public:
 AuTopsyVideoTrack::AuTopsyVideoTrack() { SetName(_("Video Track")); }
 AuTopsyVideoTrack::AuTopsyVideoTrack(const AuTopsyVideoTrack &other, ProtectedCreationArg &&arg)
    : UniqueChannelTrack<>(other, std::move(arg)), mTimeline(other.mTimeline),
-     mClipboardDuration(other.mClipboardDuration), mVisible(other.mVisible) {}
+     mClipboardDuration(other.mClipboardDuration), mVisible(other.mVisible), mSolo(other.mSolo) {}
 AuTopsyVideoTrack::~AuTopsyVideoTrack() = default;
 const Track::TypeInfo &AuTopsyVideoTrack::ClassTypeInfo()
 {
@@ -109,6 +118,8 @@ void AuTopsyVideoTrack::SetTimeline(VideoTimeline::Timeline timeline)
 }
 void AuTopsyVideoTrack::SetVideoVisible(bool visible)
 { mVisible = visible; Notify(false); }
+void AuTopsyVideoTrack::SetVideoSolo(bool solo)
+{ mSolo = solo; Notify(false); }
 size_t AuTopsyVideoTrack::NIntervals() const { return mTimeline.clips.size(); }
 std::shared_ptr<WideChannelGroupInterval> AuTopsyVideoTrack::DoGetInterval(size_t index)
 {
@@ -118,7 +129,7 @@ std::shared_ptr<WideChannelGroupInterval> AuTopsyVideoTrack::DoGetInterval(size_
 Track::Holder AuTopsyVideoTrack::Copy(double from, double to, bool) const
 {
    auto result = std::make_shared<AuTopsyVideoTrack>();
-   result->Init(*this); result->mVisible = mVisible;
+   result->Init(*this); result->mVisible = mVisible; result->mSolo = mSolo;
    result->mTimeline = VideoTimeline::CopyVideoRange(mTimeline, from, to);
    result->mClipboardDuration = to - from;
    return result;
@@ -143,7 +154,7 @@ void AuTopsyVideoTrack::Paste(double at, const Track &source)
 Track::Holder AuTopsyVideoTrack::PasteInto(AudacityProject &, TrackList &tracks) const
 {
    auto result = std::make_shared<AuTopsyVideoTrack>();
-   result->Init(*this); result->mVisible = mVisible; result->Paste(0, *this);
+   result->Init(*this); result->mVisible = mVisible; result->mSolo = mSolo; result->Paste(0, *this);
    tracks.Add(result); return result;
 }
 void AuTopsyVideoTrack::MoveTo(double start)
@@ -159,17 +170,24 @@ void AuTopsyVideoTrack::ShiftBy(double from, double delta)
 bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const AttributesList &attributes)
 {
    try {
+      if (mReadError) return false;
       if (tag == "videotrack") {
-         mTimeline = {};
+         mTimeline = {}; mReadingClips.clear(); mReadingCount = 0; mReadError = false;
+         int schema{};
+         if (!ReadOptionalAttribute(attributes, "videoSchema", schema) || schema < 0 || schema > 1) return false;
          int visible = 1;
-         ReadAttribute(attributes, "videoVisible", visible); mVisible = visible != 0;
+         int solo{};
+         if (!ReadOptionalAttribute(attributes, "videoVisible", visible) || visible < 0 || visible > 1 ||
+             !ReadOptionalAttribute(attributes, "videoSolo", solo) || solo < 0 || solo > 1) return false;
+         mVisible = visible != 0;
+         mSolo = solo != 0;
          if (!ReadAttribute(attributes, "videoNextId", mTimeline.nextId)) return false;
          std::string_view source;
          if (ReadAttribute(attributes, "videoSource", source)) mTimeline.sourcePath = source;
-         ReadAttribute(attributes, "videoDuration", mTimeline.sourceDuration);
-         ReadAttribute(attributes, "videoFps", mTimeline.frameRate);
-         ReadAttribute(attributes, "videoWidth", mTimeline.sourceWidth);
-         ReadAttribute(attributes, "videoHeight", mTimeline.sourceHeight);
+         if (!ReadOptionalAttribute(attributes, "videoDuration", mTimeline.sourceDuration) ||
+             !ReadOptionalAttribute(attributes, "videoFps", mTimeline.frameRate) ||
+             !ReadOptionalAttribute(attributes, "videoWidth", mTimeline.sourceWidth) ||
+             !ReadOptionalAttribute(attributes, "videoHeight", mTimeline.sourceHeight)) return false;
          AttachedTrackObjects::BuildAll();
          for (const auto &attribute : attributes) HandleCommonXMLAttribute(attribute.first, attribute.second);
          VideoTimeline::RequireWellFormedTimeline(mTimeline);
@@ -179,7 +197,12 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       VideoTimeline::Clip clip;
       if (!ReadAttribute(attributes, "id", clip.id) || !ReadAttribute(attributes, "start", clip.start) ||
           !ReadAttribute(attributes, "sourceStart", clip.sourceStart) ||
-          !ReadAttribute(attributes, "videoDuration", clip.duration)) return false;
+          !ReadAttribute(attributes, "videoDuration", clip.duration) ||
+          !ReadOptionalAttribute(attributes, "videoRate", clip.playbackRate) ||
+          !ReadOptionalAttribute(attributes, "videoCropLeft", clip.crop.left) ||
+          !ReadOptionalAttribute(attributes, "videoCropTop", clip.crop.top) ||
+          !ReadOptionalAttribute(attributes, "videoCropRight", clip.crop.right) ||
+          !ReadOptionalAttribute(attributes, "videoCropBottom", clip.crop.bottom)) return false;
       std::string_view markers;
       if (ReadAttribute(attributes, "clipMarkers", markers))
          clip.markers = ClipMarkers::DecodeMarkers(std::string(markers));
@@ -187,15 +210,49 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       if (ReadAttribute(attributes, "mediaLink", link)) clip.linkGroup = link;
       std::string_view source;
       if (ReadAttribute(attributes, "mediaSource", source)) clip.media.path = source;
-      ReadAttribute(attributes, "mediaDuration", clip.media.duration);
-      ReadAttribute(attributes, "mediaFps", clip.media.frameRate);
-      ReadAttribute(attributes, "mediaWidth", clip.media.width);
-      ReadAttribute(attributes, "mediaHeight", clip.media.height);
-      auto changed = mTimeline; changed.clips.push_back(std::move(clip));
-      VideoTimeline::RequireWellFormedTimeline(changed); mTimeline = std::move(changed);
-      return true;
+      if (!ReadOptionalAttribute(attributes, "mediaDuration", clip.media.duration) ||
+          !ReadOptionalAttribute(attributes, "mediaFps", clip.media.frameRate) ||
+          !ReadOptionalAttribute(attributes, "mediaWidth", clip.media.width) ||
+          !ReadOptionalAttribute(attributes, "mediaHeight", clip.media.height)) return false;
+      if (mReadingClips.empty()) mReadingCount = 0;
+      if (++mReadingCount > VideoTimeline::MaximumVideoContentClips ||
+          mReadingClips.size() > VideoTimeline::MaximumVideoContentDepth) return false;
+      int version{};
+      if (!ReadOptionalAttribute(attributes, "contentVersion", version) || version < 0) return false;
+      ReadingClip reading{std::move(clip)};
+      if (version) {
+         if (version != 1) return false;
+         reading.content = std::make_shared<VideoTimeline::VideoClipContent>();
+         if (!ReadAttribute(attributes, "contentDuration", reading.content->duration) ||
+             !ReadAttribute(attributes, "contentFps", reading.content->frameRate)) return false;
+      }
+      if (!mReadingClips.empty() && !mReadingClips.back().content) return false;
+      mReadingClips.push_back(std::move(reading)); return true;
    }
-   catch (const std::exception &) { return false; }
+   catch (const std::exception &) { mReadError = true; return false; }
+}
+void AuTopsyVideoTrack::HandleXMLEndTag(const std::string_view &tag)
+{
+   if (mReadError) return;
+   try {
+      if (tag == "videotrack") {
+         VideoTimeline::RequireWellFormedTimeline(mTimeline);
+         return;
+      }
+      if (tag != "videoclip" || mReadingClips.empty()) return;
+      auto reading = std::move(mReadingClips.back()); mReadingClips.pop_back();
+      reading.clip.content = std::move(reading.content);
+      if (!mReadingClips.empty()) mReadingClips.back().content->parts.push_back(std::move(reading.clip));
+      // This track is private to the host's project-load transaction. Append
+      // once and check the complete timeline at its closing tag, rather than
+      // repeatedly copying and checking every earlier clip for a large track.
+      else {
+         if (mTimeline.clips.size() >= VideoTimeline::MaximumVideoTrackClips)
+            throw std::runtime_error("A video track exceeds its clip limit.");
+         mTimeline.clips.push_back(std::move(reading.clip));
+      }
+   }
+   catch (const std::exception &) { mReadError = true; mReadingClips.clear(); }
 }
 XMLTagHandler *AuTopsyVideoTrack::HandleXMLChild(const std::string_view &tag)
 { return tag == "videoclip" ? this : nullptr; }
@@ -203,7 +260,9 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
 {
    VideoTimeline::RequireWellFormedTimeline(mTimeline);
    writer.StartTag("videotrack"); WriteCommonXMLAttributes(writer);
+   writer.WriteAttr("videoSchema", 1);
    writer.WriteAttr("videoVisible", mVisible ? 1 : 0);
+   writer.WriteAttr("videoSolo", mSolo ? 1 : 0);
    writer.WriteAttr("videoNextId", static_cast<long long>(mTimeline.nextId));
    if (!mTimeline.sourcePath.empty()) {
       writer.WriteAttr("videoSource", wxString::FromUTF8(mTimeline.sourcePath));
@@ -211,7 +270,7 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       writer.WriteAttr("videoFps", mTimeline.frameRate, 17);
       writer.WriteAttr("videoWidth", mTimeline.sourceWidth); writer.WriteAttr("videoHeight", mTimeline.sourceHeight);
    }
-   for (const auto &clip : mTimeline.clips) {
+   const auto writeClip = [&](const auto &self, const VideoTimeline::Clip &clip) -> void {
       const auto source = VideoTimeline::SourceFor(mTimeline, clip);
       writer.StartTag("videoclip");
       writer.WriteAttr("id", static_cast<long long>(clip.id));
@@ -219,16 +278,33 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       if (!clip.markers.empty()) writer.WriteAttr("clipMarkers", wxString::FromUTF8(ClipMarkers::EncodeMarkers(clip.markers)));
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);
       writer.WriteAttr("videoDuration", clip.duration, 17);
+      if (clip.playbackRate != 1) writer.WriteAttr("videoRate", clip.playbackRate, 17);
+      if (!(clip.crop == VideoEditing::VideoFrameCrop{})) {
+         writer.WriteAttr("videoCropLeft", clip.crop.left, 17);
+         writer.WriteAttr("videoCropTop", clip.crop.top, 17);
+         writer.WriteAttr("videoCropRight", clip.crop.right, 17);
+         writer.WriteAttr("videoCropBottom", clip.crop.bottom, 17);
+      }
       writer.WriteAttr("mediaSource", wxString::FromUTF8(source.path));
       writer.WriteAttr("mediaDuration", source.duration, 17); writer.WriteAttr("mediaFps", source.frameRate, 17);
       writer.WriteAttr("mediaWidth", source.width); writer.WriteAttr("mediaHeight", source.height);
+      if (clip.content) {
+         writer.WriteAttr("contentVersion", 1);
+         writer.WriteAttr("contentDuration", clip.content->duration, 17);
+         writer.WriteAttr("contentFps", clip.content->frameRate, 17);
+         for (const auto &part : clip.content->parts) self(self, part);
+      }
       writer.EndTag("videoclip");
-   }
+   };
+   for (const auto &clip : mTimeline.clips) writeClip(writeClip, clip);
    writer.EndTag("videotrack");
 }
 std::optional<TranslatableString> AuTopsyVideoTrack::GetErrorOpening() const
 {
-   try { VideoTimeline::RequireWellFormedTimeline(mTimeline); return {}; }
+   try {
+      if (mReadError || !mReadingClips.empty()) throw std::runtime_error("Incomplete video content.");
+      VideoTimeline::RequireWellFormedTimeline(mTimeline); return {};
+   }
    catch (...) { return XO("The video track contains invalid clip data."); }
 }
 
@@ -269,13 +345,39 @@ std::shared_ptr<AuTopsyVideoTrack> CreateProjectVideoTrack(AudacityProject &proj
 }
 ProjectPicture FindProjectPicture(AudacityProject &project, double time)
 {
-   std::vector<const Timeline*> layers;
-   for (const auto *track : ProjectVideoTracks(project))
-      if (track->VideoVisible()) layers.push_back(&track->Timeline());
-   const auto picture = EvaluateVideoLayers(layers, time);
+   const auto picture = EvaluateVideoLayers(GetProjectVisibleVideoLayers(project), time);
    if (!picture.clip) return {};
-   return {true, SourceFor(*picture.timeline, *picture.clip),
-      picture.sourceTime, picture.clip->id};
+   return {true, picture.source,
+       picture.sourceTime, picture.clip->id, picture.playbackRate, picture.crop};
+}
+std::vector<const Timeline*> GetProjectVisibleVideoLayers(const AudacityProject &project)
+{
+   std::vector<VideoTimelineLayer> layers;
+   for (const auto *track : ProjectVideoTracks(const_cast<AudacityProject&>(project)))
+      layers.push_back({&track->Timeline(), {!track->VideoVisible(), track->VideoSolo()}});
+   return VisibleVideoLayers(layers);
+}
+double GetProjectVideoDuration(const AudacityProject &project)
+{
+   double end{};
+   for (const auto *track : ProjectVideoTracks(const_cast<AudacityProject&>(project)))
+      end = std::max(end, track->Timeline().End());
+   return end;
+}
+bool SetProjectVideoTrackVisibility(AudacityProject &project, AuTopsyVideoTrack &track,
+   bool visible, bool solo)
+{
+   if (track.GetOwner().get() != &TrackList::Get(project))
+      throw std::runtime_error("The video track is no longer in this project.");
+   const bool oldVisible = track.VideoVisible(), oldSolo = track.VideoSolo();
+   if (oldVisible == visible && oldSolo == solo) return false;
+   track.SetVideoVisible(visible); track.SetVideoSolo(solo);
+   try {
+      ProjectHistory::Get(project).PushState(XO("Changed video track mute/solo"), XO("Video Mute/Solo"));
+   }
+   catch (...) { track.SetVideoVisible(oldVisible); track.SetVideoSolo(oldSolo); throw; }
+   Viewport::Get(project).Redraw();
+   return true;
 }
 bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &source,
    AuTopsyVideoTrack &destination, uint64_t id, double start, bool recordHistory)
@@ -287,8 +389,8 @@ bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &sou
       throw std::runtime_error("Stop playback before moving video clips.");
    const auto &members = source.Timeline().clips;
    const auto linked = std::find_if(members.begin(), members.end(), [id](const auto &clip) { return clip.id == id; });
-   if (linked != members.end() && !linked->linkGroup.empty()) {
-      const auto rate = SourceFor(source.Timeline(), *linked).frameRate;
+   if (linked != members.end() && !VideoContentLinkGroups(*linked).empty()) {
+      const auto rate = VideoContentFrameRate(*linked, SourceFor(source.Timeline(), *linked));
       const auto target = std::round(start * rate) / rate;
       if (std::abs(target - linked->start) > 1e-10) {
          if (&source == &destination)

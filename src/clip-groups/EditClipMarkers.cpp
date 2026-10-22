@@ -67,7 +67,7 @@ std::vector<ClipRef> Clips(AudacityProject &project)
       else if (auto *video = dynamic_cast<AuTopsyVideoTrack*>(track))
          for (const auto &clip : video->Timeline().clips)
             clips.push_back({track, nullptr, video, clip.id, trackIndex, index++,
-               clip.start, clip.End(), clip.start - clip.sourceStart, 1, clip.markers});
+               clip.start, clip.End(), clip.ProjectTimeAtContentTime(0), 1 / clip.playbackRate, clip.markers});
       ++trackIndex;
    }
    return clips;

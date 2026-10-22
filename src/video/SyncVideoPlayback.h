@@ -20,6 +20,50 @@
 
 namespace VideoPreview {
 
+enum class PreviewTransportAction { Play, Pause, Stop };
+
+// Project transport is authoritative. A foreign stream and recording are never
+// effects of preview controls; the adapter supplies current ownership on every
+// request, including after a stopped or interrupted UI event.
+struct ProjectTransportState {
+   bool hasVideo{}, canControl{true}, playing{}, paused{}, recording{}, stopping{};
+};
+struct PreviewTransportControls {
+   bool play{}, pause{}, stop{};
+};
+inline PreviewTransportControls GetPreviewTransportControls(const ProjectTransportState &state)
+{
+   if (!state.canControl || state.recording || state.stopping) return {};
+   return {state.hasVideo && (!state.playing || state.paused),
+      state.playing && !state.paused, state.playing};
+}
+
+// Each request has at most one native effect. Repeating it reads live state and
+// performs only the unmet effect; Pause is a desired state, not a toggle.
+template<typename Transport>
+bool ApplyPreviewTransport(Transport &transport, PreviewTransportAction action)
+{
+   const auto state = transport.ReadState();
+   const auto controls = GetPreviewTransportControls(state);
+   switch (action) {
+   case PreviewTransportAction::Play:
+      if (!controls.play) return false;
+      if (state.playing) transport.SetPaused(false);
+      else transport.StartPlayback();
+      break;
+   case PreviewTransportAction::Pause:
+      if (!controls.pause) return false;
+      transport.SetPaused(true);
+      break;
+   case PreviewTransportAction::Stop:
+      if (!controls.stop) return false;
+      transport.StopPlayback();
+      break;
+   default: throw std::runtime_error("Choose Play, Pause or Stop for video preview.");
+   }
+   return true;
+}
+
 // Timecode is non-drop-frame: the frame counter uses the nearest nominal
 // integer rate, while conversion to seconds retains the source's exact rate.
 inline std::string FormatFrameTimecode(double seconds, double rate)
@@ -55,16 +99,17 @@ inline double ParseFrameTimecode(const std::string &text, double rate)
 }
 
 inline double AdjacentSourceFrame(double projectTime, double clipStart,
-   double sourceStart, double rate, int direction)
+   double sourceStart, double rate, int direction, double playbackRate = 1)
 {
    if (!std::isfinite(projectTime) || !std::isfinite(clipStart) ||
        !std::isfinite(sourceStart) || !std::isfinite(rate) || rate < 1 || rate > 1000 ||
+       !std::isfinite(playbackRate) || playbackRate < 0.01 || playbackRate > 100 ||
        (direction != -1 && direction != 1))
       throw std::runtime_error("Choose the previous or next video frame.");
-   const auto frame = (projectTime - clipStart + sourceStart) * rate;
+   const auto frame = ((projectTime - clipStart) * playbackRate + sourceStart) * rate;
    const auto target = direction > 0 ? std::floor(frame + 1e-7) + 1
                                     : std::ceil(frame - 1e-7) - 1;
-   return std::max(0.0, clipStart - sourceStart + target / rate);
+   return std::max(0.0, clipStart + (target / rate - sourceStart) / playbackRate);
 }
 
 struct TransportSnapshot {
@@ -92,7 +137,8 @@ struct PlayerSnapshot {
 
 //! Follow one current audio snapshot without ever allowing video to drive audio.
 /*!
-   Player supplies ReadState(), SetPaused(bool), Seek(double), SetSpeed(double).
+   Player supplies ReadPlaybackState(), SetPlaybackPaused(bool),
+   SeekSourceTime(double) and SetPlaybackSpeed(double).
    Effects throw on failure. A later call reads actual player state again,
    including after an interruption on either side of an effect.
 
@@ -104,7 +150,7 @@ template<typename Player>
 void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio,
    bool preciseFrames = false)
 {
-   auto video = player.ReadState();
+   auto video = player.ReadPlaybackState();
    if (!video.ready)
       return;
 
@@ -112,7 +158,7 @@ void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio,
        audio.speed <= 0.0 || !std::isfinite(video.position) ||
        !std::isfinite(video.duration) || video.duration <= 0.0) {
       if (!video.paused)
-         player.SetPaused(true);
+         player.SetPlaybackPaused(true);
       return;
    }
 
@@ -134,26 +180,26 @@ void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio,
 
    if (!video.paused &&
        (!shouldPlay || needsSeek(video) || needsSpeed(video)))
-      player.SetPaused(true);
+      player.SetPlaybackPaused(true);
 
-   video = player.ReadState();
+   video = player.ReadPlaybackState();
    if (!video.ready || video.seeking)
       return;
 
    if (needsSeek(video)) {
-      player.Seek(target);
+      player.SeekSourceTime(target);
       return; // Observe completion on a fresh call before resuming.
    }
 
-   video = player.ReadState();
+   video = player.ReadPlaybackState();
    if (!video.ready || video.seeking)
       return;
    if (needsSpeed(video))
-      player.SetSpeed(audio.speed);
+      player.SetPlaybackSpeed(audio.speed);
 
-   video = player.ReadState();
+   video = player.ReadPlaybackState();
    if (video.ready && !video.seeking && video.paused == shouldPlay)
-      player.SetPaused(!shouldPlay);
+      player.SetPlaybackPaused(!shouldPlay);
 }
 
 } // namespace VideoPreview

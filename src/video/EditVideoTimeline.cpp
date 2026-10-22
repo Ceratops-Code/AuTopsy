@@ -1,7 +1,9 @@
 // Native adapters for project attachment/XML, undo, commands and the clip editor.
 // Picture files remain external references; project XML owns only clip metadata.
 #include "EditVideoTimeline.h"
+#include "EditVideoComposition.h"
 #include "CreateVideoTrack.h"
+#include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "TrackFocus.h"
 #include "Viewport.h"
@@ -265,6 +267,112 @@ public:
 const ComponentInterfaceSymbol DeleteVideoClipCommand::Symbol{ XO("DeleteVideoClip") };
 BuiltinCommandsModule::Registration<DeleteVideoClipCommand> sDeleteVideoClip;
 
+class SetVideoClipSpeedCommand final : public AudacityCommand {
+   wxString mId;
+   int mTrack{-1};
+   double mSpeed{1};
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override { return XO("Set video clip speed (1 is normal), including linked media."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor)
+   {
+      visitor.Define(mId, wxT("Id"), wxString{});
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      visitor.Define(mSpeed, wxT("Speed"), 1.0, 0.01, 100.0);
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override
+   {
+      try {
+         unsigned long long id{};
+         if (!mId.ToULongLong(&id) || !id) throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
+         auto &track = FindClipTrack(context.project, id, mTrack);
+         ClipGroups::ChangeLinkedVideoClipSpeed(context.project, track, id, mSpeed);
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+const ComponentInterfaceSymbol SetVideoClipSpeedCommand::Symbol{ XO("SetVideoClipSpeed") };
+BuiltinCommandsModule::Registration<SetVideoClipSpeedCommand> sSetVideoClipSpeed;
+
+class SetVideoClipBoundsCommand final : public AudacityCommand {
+   wxString mId;
+   int mTrack{-1};
+   double mStart{}, mEnd{};
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override { return XO("Trim or restore video clip edges at project times, including linked media."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
+      visitor.Define(mId, wxT("Id"), wxString{});
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      visitor.Define(mStart, wxT("Start"), 0.0, 0.0, 100000000.0);
+      visitor.Define(mEnd, wxT("End"), 0.0, 0.0, 100000000.0);
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         if (ProjectAudioIO::Get(context.project).IsAudioActive())
+            throw std::runtime_error("Stop playback or recording before changing clip edges.");
+         unsigned long long id{};
+         if (!mId.ToULongLong(&id) || !id) throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
+         auto &track = FindClipTrack(context.project, id, mTrack);
+         auto candidate = track.Timeline();
+         VideoTimeline::TrimVideoClip(candidate, id, mStart, mEnd);
+         ClipGroups::CommitVideoClipTrim(context.project, track, std::move(candidate));
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+const ComponentInterfaceSymbol SetVideoClipBoundsCommand::Symbol{XO("SetVideoClipBounds")};
+BuiltinCommandsModule::Registration<SetVideoClipBoundsCommand> sSetVideoClipBounds;
+
+
+class SetVideoClipCropCommand final : public AudacityCommand {
+   wxString mId;
+   int mTrack{-1};
+   double mLeft{}, mTop{}, mRight{}, mBottom{};
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override {
+      return XO("Crop the picture edges using fractions from zero to less than one.");
+   }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
+      visitor.Define(mId, wxT("Id"), wxString{});
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      visitor.Define(mLeft, wxT("Left"), 0.0, 0.0, 1.0);
+      visitor.Define(mTop, wxT("Top"), 0.0, 0.0, 1.0);
+      visitor.Define(mRight, wxT("Right"), 0.0, 0.0, 1.0);
+      visitor.Define(mBottom, wxT("Bottom"), 0.0, 0.0, 1.0);
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         unsigned long long id{};
+         if (!mId.ToULongLong(&id) || !id)
+            throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
+         auto &track = FindClipTrack(context.project, id, mTrack);
+         VideoEditing::ChangeProjectVideoClipCrop(
+            context.project, track, id, {mLeft, mTop, mRight, mBottom});
+         RefreshPreviewLater(context.project);
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+const ComponentInterfaceSymbol SetVideoClipCropCommand::Symbol{XO("SetVideoClipCrop")};
+BuiltinCommandsModule::Registration<SetVideoClipCropCommand> sSetVideoClipCrop;
+
 class GetVideoClipsCommand final : public AudacityCommand {
 public:
    static const ComponentInterfaceSymbol Symbol;
@@ -288,6 +396,8 @@ public:
             out.Key("name"); out.String(video->GetName().ToUTF8().data());
             out.Key("selected"); out.Bool(video->GetSelected());
             out.Key("visible"); out.Bool(video->VideoVisible());
+            out.Key("muted"); out.Bool(!video->VideoVisible());
+            out.Key("solo"); out.Bool(video->VideoSolo());
             out.Key("end"); out.Double(video->Timeline().End()); out.EndObject();
          }
          ++index;
@@ -300,7 +410,14 @@ public:
                out.StartObject(); out.Key("id"); out.Uint64(clip.id); out.Key("track"); out.Int(index);
                out.Key("start"); out.Double(clip.start); out.Key("end"); out.Double(clip.End());
                out.Key("sourceStart"); out.Double(clip.sourceStart); out.Key("duration"); out.Double(clip.duration);
-               out.Key("source"); out.String(source.path.c_str()); out.Key("fps"); out.Double(source.frameRate);
+                out.Key("playbackRate"); out.Double(clip.playbackRate);
+               out.Key("crop"); out.StartObject();
+               out.Key("left"); out.Double(clip.crop.left); out.Key("top"); out.Double(clip.crop.top);
+               out.Key("right"); out.Double(clip.crop.right); out.Key("bottom"); out.Double(clip.crop.bottom);
+               out.EndObject();
+               out.Key("source"); out.String(source.path.c_str()); out.Key("fps"); out.Double(VideoTimeline::VideoContentFrameRate(clip, source));
+               out.Key("joined"); out.Bool(bool(clip.content));
+               out.Key("pieces"); out.Uint64(clip.content ? clip.content->parts.size() : 1);
                out.EndObject();
             }
          ++index;
@@ -372,6 +489,34 @@ BuiltinCommandsModule::Registration<NewVideoTrackCommand> sNewVideoTrack;
 BuiltinCommandsModule::Registration<AddVideoTrackBeforeCommand> sVideoBefore;
 BuiltinCommandsModule::Registration<AddVideoTrackAfterCommand> sVideoAfter;
 
+class EditVideoStructureCommand : public AudacityCommand {
+protected:
+   virtual VideoEditing::VideoEditKind Kind() const = 0;
+public:
+   TranslatableString GetDescription() const override { return XO("Heal, join or separate selected video clips without rendering their sources."); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         const auto &region = ViewInfo::Get(context.project).selectedRegion;
+         VideoTimeline::EditSelectedVideoStructure(context.project, Kind(), region.t0(), region.t1());
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+#define VIDEO_STRUCTURE_COMMAND(Type, Name, Operation) \
+class Type final : public EditVideoStructureCommand { \
+   VideoEditing::VideoEditKind Kind() const override { return VideoEditing::VideoEditKind::Operation; } \
+public: \
+   static const ComponentInterfaceSymbol Symbol; \
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; } \
+}; \
+const ComponentInterfaceSymbol Type::Symbol{XO(Name)}; \
+BuiltinCommandsModule::Registration<Type> s##Type;
+VIDEO_STRUCTURE_COMMAND(HealVideoSplitCommand, "HealVideoSplit", HealClips)
+VIDEO_STRUCTURE_COMMAND(JoinVideoClipsCommand, "JoinVideoClips", JoinClips)
+VIDEO_STRUCTURE_COMMAND(SeparateVideoClipsCommand, "SeparateVideoClips", SeparateClips)
+#undef VIDEO_STRUCTURE_COMMAND
+
 using namespace MenuRegistry;
 AttachedItem sAddVideoTrack{
    Section("VideoTracks",
@@ -382,10 +527,18 @@ AttachedItem sAddVideoTrack{
          AudioIONotBusyFlag() | TracksExistFlag())),
    wxT("Tracks/Add/Add")
 };
+AttachedItem sVideoStructureMenu{
+   Section("VideoStructure",
+      Command("HealVideoSplit", XXO("Heal Video Split"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+      Command("SeparateVideoClips", XXO("Separate Joined Video"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag())),
+   wxT("Edit/Other/Clip")
+};
 AttachedItem sVideoClipScripting{
    Items("",
+      Command("JoinVideoClips", XXO("Join Video Clips"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("SplitVideo", XXO("Split Video at Cursor"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("GetVideoClips", XXO("Get Video Clips"), CommandDispatch::OnAudacityCommand, AlwaysEnabledFlag),
+      Command("SetVideoClipCrop", XXO("Set Video Clip Crop..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("MoveVideoClip", XXO("Move Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("DeleteVideoClip", XXO("Delete Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag())),
    wxT("Optional/Extra/Part2/Scriptables2")
@@ -395,12 +548,53 @@ AttachedItem sVideoClipScripting{
 VideoTimeline::Timeline VideoTimeline::GetProjectTimeline(const AudacityProject &project)
 {
    const auto tracks = ProjectVideoTracks(const_cast<AudacityProject&>(project));
-   std::vector<const Timeline*> layers;
-   for (const auto *track : tracks) if (track->VideoVisible()) layers.push_back(&track->Timeline());
-   auto result = ComposeVideoTracks(layers);
+   auto result = ComposeVideoTracks(GetProjectVisibleVideoLayers(project));
+   // A fully hidden composition still has a canvas and media identity. Export
+   // renders black for the separately captured project duration, without opening
+   // hidden sources or changing any native audio mute/solo state.
+   if (result.sourcePath.empty()) for (const auto *track : tracks) {
+      if (track->Timeline().clips.empty()) continue;
+      const auto source = SourceFor(track->Timeline(), track->Timeline().clips.front());
+      result.sourcePath = source.path; result.sourceDuration = source.duration;
+      result.frameRate = source.frameRate; result.sourceWidth = source.width; result.sourceHeight = source.height;
+      break;
+   }
    for (const auto *track : tracks) for (const auto &clip : track->Timeline().clips)
-      result.protectedSourcePaths.push_back(SourceFor(track->Timeline(), clip).path);
+      for (const auto &source : VideoContentSources(clip, SourceFor(track->Timeline(), clip)))
+         result.protectedSourcePaths.push_back(source.path);
    return result;
+}
+
+bool VideoTimeline::EditSelectedVideoStructure(AudacityProject &project, VideoEditing::VideoEditKind kind,
+   double from, double to, bool recordHistory)
+{
+   if (ProjectAudioIO::Get(project).IsAudioActive())
+      throw std::runtime_error("Stop playback or recording before editing video clips.");
+   VideoEditing::VideoProjectSnapshot snapshot;
+   std::vector<AuTopsyVideoTrack*> targets;
+   for (auto *track : ProjectVideoTracks(project)) if (track->GetSelected()) {
+      const auto id = std::to_string(targets.size());
+      targets.push_back(track); snapshot.tracks.push_back({id, 0, track->Timeline()});
+   }
+   if (targets.empty()) return false;
+   // Each selected track gets its own semantic request, checked as a whole batch.
+   std::vector<VideoEditing::VideoEditRequest> requests;
+   for (const auto &track : snapshot.tracks) requests.push_back({kind, track.id, 0, from, to});
+   const auto batch = VideoEditing::PlanVideoEdits(snapshot, requests);
+   if (batch.ChangedTrackIds().empty()) return false;
+   try {
+      for (size_t i{}; i < targets.size(); ++i) targets[i]->SetTimeline(batch.After().tracks[i].timeline);
+      if (recordHistory) {
+         const auto description = kind == VideoEditing::VideoEditKind::HealClips ? XO("Healed video split")
+            : kind == VideoEditing::VideoEditKind::JoinClips ? XO("Joined video clips") : XO("Separated video clips");
+         ProjectHistory::Get(project).PushState(description, description);
+      }
+   }
+   catch (...) {
+      for (size_t i{}; i < targets.size(); ++i) targets[i]->SetTimeline(snapshot.tracks[i].timeline);
+      throw;
+   }
+   Viewport::Get(project).HandleResize(); RefreshPreviewLater(project); return true;
 }
 
 bool VideoTimeline::SplitProjectVideo(AudacityProject &project, double at)

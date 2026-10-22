@@ -422,9 +422,27 @@ the owned child. Its temporary fixtures are removed after each check.
 The runner owns its marked case directories and shared preview cache under
 the selected test work root. Fresh runs replace case scratch data. Completed
 result records retain their original run, executable and check identities in
-_accepted, with at most three records per case/input and 36 records overall;
-playback observations are included. Receipts do not resume or skip test work.
+_accepted, including playback observations. At startup/completion the native
+owner keeps three passes per case, their latest matching blocking outcomes,
+and two other attempts (three when there is no pass). Reuse requires exact
+app/DLL, check-module, generated-media-tool, Python/OS and display inputs;
+a newer matching failure or incomplete attempt prevents reuse of an older pass.
+Each reuse names the original result and check version without launching the app.
+Interrupted attempts start afresh; completed publication survives interruption.
+Older records lacking execution scope remain historical acceptance, without
+invented scope or forced retesting of an unchanged installer.
 Portable Settings is removed when the owned app exits.
+
+Picture crop also has a public command:
+`SetVideoClipCrop: Id="1" Track=0 Left=0.1 Top=0 Right=0 Bottom=0`.
+Margins are fractions in `[0, 1)`; opposing margins must leave a picture.
+Repeated equal values add no history entry. `GetVideoClips` reports the saved
+margins in `crop`; setting all four to zero restores the picture.
+
+`fork-video-crop` checks rendered preview/export pixels, saved margins, joined
+content and quarter-turn sources. `fork-video-crop-controls` checks the real
+clip menu, Reset, Cancel and history with idle shared input. Each case saves its
+owned fixture project before the worker closes it, preventing a save prompt.
 
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
@@ -489,7 +507,7 @@ Signing is a separate service approval and is not claimed by this job.
 
 The `deliverables.packages.windows-installer.actions.publish` operation consumes
 the existing accepted installer and `_build-manifest.json` from
-`AUTOPSY_VIDEO_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
+`AUTOPSY_INSTALLER_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
 to select the preview tag and a local UTF-8 notes file. The tag names the original
 build revision, including when later test/documentation commits have advanced
 main. The operation creates a draft only when needed, uploads just those two
@@ -497,6 +515,8 @@ accepted files, checks GitHub's asset digests, then makes the preview public.
 Repeated calls inspect live release state and perform only missing effects;
 conflicting tags/assets stop publication. It preserves the original build
 acceptance and does not compile or install an application.
+The installer directory setting is independent of the native test-session
+settings; selecting a package for publication does not schedule desktop tests.
 
 Every new installer build runs `fork-fixtures` after compilation and before
 packaging, without opening AuTopsy. The build manifest records its passing result

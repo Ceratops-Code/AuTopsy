@@ -507,11 +507,15 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
                 "assets": expected, "signed": False}
 
 
+def get_installer_build_directory() -> Path:
+    """Select package storage without activating the native test-session contract."""
+    return Path(os.environ.get("AUTOPSY_INSTALLER_BUILD_DIR", ".build/_windows-installer"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
-    parser.add_argument("--build-dir", type=Path, default=Path(
-        os.environ.get("AUTOPSY_VIDEO_BUILD_DIR", ".build/_windows-installer")))
+    parser.add_argument("--build-dir", type=Path, default=get_installer_build_directory())
     parser.add_argument("--test-existing-build", action="store_true")
     parser.add_argument("--publish-installer", action="store_true")
     parser.add_argument("--repository", default="Ceratops-Code/AuTopsy")

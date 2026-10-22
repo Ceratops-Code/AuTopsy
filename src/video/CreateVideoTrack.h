@@ -10,6 +10,14 @@ class AuTopsyVideoTrack final : public UniqueChannelTrack<> {
    VideoTimeline::Timeline mTimeline;
    double mClipboardDuration{};
    bool mVisible{true};
+   bool mSolo{};
+   struct ReadingClip {
+      VideoTimeline::Clip clip;
+      std::shared_ptr<VideoTimeline::VideoClipContent> content;
+   };
+   std::vector<ReadingClip> mReadingClips;
+   size_t mReadingCount{};
+   bool mReadError{};
    Track::Holder Clone(bool backup) const override;
    std::shared_ptr<WideChannelGroupInterval> DoGetInterval(size_t index) override;
 public:
@@ -24,6 +32,8 @@ public:
    void SetTimeline(VideoTimeline::Timeline timeline);
    bool VideoVisible() const { return mVisible; }
    void SetVideoVisible(bool visible);
+   bool VideoSolo() const { return mSolo; }
+   void SetVideoSolo(bool solo);
    Track::Holder Cut(double from, double to) override;
    Track::Holder Copy(double from, double to, bool forClipboard = true) const override;
    void Clear(double from, double to) override;
@@ -36,15 +46,23 @@ public:
    size_t NIntervals() const override;
    bool HandleXMLTag(const std::string_view &tag, const AttributesList &attributes) override;
    XMLTagHandler *HandleXMLChild(const std::string_view &tag) override;
+   void HandleXMLEndTag(const std::string_view &tag) override;
    void WriteXML(XMLWriter &writer) const override;
    std::optional<TranslatableString> GetErrorOpening() const override;
 };
 ENUMERATE_TRACK_TYPE(AuTopsyVideoTrack);
 
+namespace VideoEditing { enum class VideoEditKind; }
 namespace VideoTimeline {
 // Native project operations stay at this boundary, outside the owned model.
 Timeline GetProjectTimeline(const AudacityProject &project);
+std::vector<const Timeline*> GetProjectVisibleVideoLayers(const AudacityProject &project);
+double GetProjectVideoDuration(const AudacityProject &project);
+bool SetProjectVideoTrackVisibility(AudacityProject &project, AuTopsyVideoTrack &track,
+   bool visible, bool solo);
 bool SplitProjectVideo(AudacityProject &project, double at);
+bool EditSelectedVideoStructure(AudacityProject &project, VideoEditing::VideoEditKind kind,
+   double from, double to, bool recordHistory = true);
 bool MoveProjectVideoClip(AudacityProject &project, uint64_t id, double start);
 bool RemoveProjectVideoClip(AudacityProject &project, uint64_t id);
 void ShowProjectVideoPreview(AudacityProject &project, bool raise = false);
@@ -60,6 +78,8 @@ struct ProjectPicture {
    MediaSource source;
    double sourceTime{};
    uint64_t clipId{};
+   double playbackRate{1};
+   VideoEditing::VideoFrameCrop crop;
 };
 ProjectPicture FindProjectPicture(AudacityProject &project, double time);
 bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &source,

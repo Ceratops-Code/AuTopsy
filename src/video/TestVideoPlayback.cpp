@@ -23,6 +23,66 @@
 
 using namespace VideoPreview;
 
+TEST_CASE("Preview transport requests converge after interruption at either side of every native effect")
+{
+   struct Transport {
+      ProjectTransportState state{true, true};
+      int effects{}, boundary{}, interruptAt{-1};
+      ProjectTransportState ReadState() const { return state; }
+      void Boundary() {
+         if (boundary++ == interruptAt) { interruptAt = -1; throw std::runtime_error("interrupted transport"); }
+      }
+      void StartPlayback() { Boundary(); state.playing = true; state.paused = false; ++effects; Boundary(); }
+      void SetPaused(bool paused) { Boundary(); state.paused = paused; ++effects; Boundary(); }
+      void StopPlayback() { Boundary(); state.playing = false; state.paused = false; ++effects; Boundary(); }
+   };
+   struct Scenario { PreviewTransportAction action; bool playing{}, paused{}; };
+   for (const auto scenario : {Scenario{PreviewTransportAction::Play},
+         Scenario{PreviewTransportAction::Play, true, true}, Scenario{PreviewTransportAction::Pause, true},
+         Scenario{PreviewTransportAction::Stop, true}, Scenario{PreviewTransportAction::Stop, true, true}}) {
+      for (const int interruption : {-1, 0, 1}) {
+         Transport transport;
+         transport.state.playing = scenario.playing; transport.state.paused = scenario.paused;
+         transport.interruptAt = interruption;
+         if (interruption >= 0) REQUIRE_THROWS(ApplyPreviewTransport(transport, scenario.action));
+         ApplyPreviewTransport(transport, scenario.action);
+         REQUIRE(transport.state.playing == (scenario.action != PreviewTransportAction::Stop));
+         REQUIRE(transport.state.paused == (scenario.action == PreviewTransportAction::Pause));
+         REQUIRE(transport.effects == 1);
+         for (int repeat = 0; repeat < 10; ++repeat) REQUIRE_FALSE(ApplyPreviewTransport(transport, scenario.action));
+         REQUIRE(transport.effects == 1);
+      }
+   }
+}
+
+TEST_CASE("Preview controls protect foreign playback and recording and retain Stop without picture")
+{
+   struct Transport {
+      ProjectTransportState state{true, true, true};
+      int effects{};
+      ProjectTransportState ReadState() const { return state; }
+      void StartPlayback() { ++effects; }
+      void SetPaused(bool) { ++effects; }
+      void StopPlayback() { ++effects; state.playing = false; }
+   };
+   for (const int blocked : {0, 1, 2}) {
+      Transport transport;
+      transport.state.canControl = blocked != 0;
+      transport.state.recording = blocked == 1;
+      transport.state.stopping = blocked == 2;
+      for (const auto action : {PreviewTransportAction::Play, PreviewTransportAction::Pause, PreviewTransportAction::Stop})
+         REQUIRE_FALSE(ApplyPreviewTransport(transport, action));
+      REQUIRE(transport.effects == 0);
+   }
+   Transport withoutPicture;
+   withoutPicture.state.hasVideo = false;
+   REQUIRE_FALSE(GetPreviewTransportControls(withoutPicture.state).play);
+   REQUIRE(ApplyPreviewTransport(withoutPicture, PreviewTransportAction::Stop));
+   REQUIRE(withoutPicture.effects == 1);
+   REQUIRE_FALSE(ApplyPreviewTransport(withoutPicture, PreviewTransportAction::Stop));
+   REQUIRE_THROWS(ApplyPreviewTransport(withoutPicture, static_cast<PreviewTransportAction>(99)));
+}
+
 TEST_CASE("Frame timecode keeps fractional source rates and rejects malformed input")
 {
    for (const double rate : {24.0, 25.0, 30.0, 60.0, 24000.0 / 1001, 30000.0 / 1001}) {
@@ -44,6 +104,9 @@ TEST_CASE("Frame steps use source boundaries after moves and trims")
    REQUIRE(AdjacentSourceFrame(start + 1.0 / 60, start, source, 60, -1) == Approx(start));
    REQUIRE(AdjacentSourceFrame(start + 0.001, start, source, 60, -1) == Approx(start));
    REQUIRE(AdjacentSourceFrame(0, 0, 0, 30, -1) == 0);
+   REQUIRE(AdjacentSourceFrame(start, start, source, 60, 1, 2) == Approx(start + 1.0 / 120));
+   REQUIRE(AdjacentSourceFrame(start + 1.0 / 120, start, source, 60, -1, 2) == Approx(start));
+   REQUIRE_THROWS(AdjacentSourceFrame(start, start, source, 60, 1, 0));
    REQUIRE_THROWS(AdjacentSourceFrame(0, 0, 0, 30, 0));
 }
 
@@ -62,9 +125,9 @@ public:
    bool asynchronousSeek{};
    double seekTarget{};
 
-   PlayerSnapshot ReadState() const { return state; }
+   PlayerSnapshot ReadPlaybackState() const { return state; }
 
-   void SetPaused(bool value)
+   void SetPlaybackPaused(bool value)
    {
       AtBoundary();
       state.paused = value;
@@ -72,7 +135,7 @@ public:
       AtBoundary();
    }
 
-   void Seek(double value)
+   void SeekSourceTime(double value)
    {
       REQUIRE(state.paused);
       REQUIRE_FALSE(state.seeking);
@@ -86,7 +149,7 @@ public:
       AtBoundary();
    }
 
-   void SetSpeed(double value)
+   void SetPlaybackSpeed(double value)
    {
       REQUIRE(state.paused);
       AtBoundary();
@@ -437,6 +500,77 @@ TEST_CASE("Video edge trimming is frame snapped, reversible and atomically rejec
    REQUIRE_THROWS(TrimVideoClip(timeline, 1, 0, 3));
    REQUIRE(timeline.clips[0].duration == 2);
    REQUIRE(timeline.clips[1].start == 2);
+
+   // Pointer gestures cover both directions, overshoot and fresh repeated
+   // releases without destroying the hidden source frames.
+   auto dragged = CreateVideoTimeline("movie.mp4", 4, 30);
+   REQUIRE(DragVideoClipEdge(dragged, 1, true, 1));
+   REQUIRE_FALSE(DragVideoClipEdge(dragged, 1, true, 1));
+   REQUIRE(DragVideoClipEdge(dragged, 1, true, -10));
+   REQUIRE(dragged.clips[0].start == Approx(0));
+   REQUIRE(dragged.clips[0].sourceStart == Approx(0));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, 3));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, 20));
+   REQUIRE(KeepsOriginalPicture(dragged));
+   SplitClipAt(dragged, 2);
+   REQUIRE(DragVideoClipEdge(dragged, 2, true, 3));
+   REQUIRE(DragVideoClipEdge(dragged, 2, true, -10));
+   REQUIRE(dragged.clips[1].start == Approx(2));
+   REQUIRE(dragged.clips[1].sourceStart == Approx(2));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, -10));
+   REQUIRE(dragged.clips[0].duration == Approx(1.0 / 30));
+   REQUIRE(DragVideoClipEdge(dragged, 1, false, 20));
+   REQUIRE(KeepsOriginalPicture(dragged));
+   const auto before = dragged;
+   REQUIRE_THROWS(DragVideoClipEdge(dragged, 1, true, std::numeric_limits<double>::quiet_NaN()));
+   REQUIRE_THROWS(DragVideoClipEdge(dragged, 999, true, 1));
+   REQUIRE(dragged.clips[0].duration == before.clips[0].duration);
+   REQUIRE(dragged.clips[1].sourceStart == before.clips[1].sourceStart);
+}
+
+TEST_CASE("Shared video seams trim the inward side from either pixel owner and can be restored",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   const auto seam = 32.0 / 30;
+   auto original = CreateVideoTimeline("movie.mp4", 4, 30);
+   REQUIRE(SplitClipAt(original, seam));
+   for (const auto hit : {uint64_t{1}, uint64_t{2}})
+      for (const auto motion : {-0.5, 0.5}) {
+         const auto edge = ChooseVideoTrimEdge(original, hit, hit == 2, motion);
+         const auto edited = motion > 0 ? 2 : 1;
+         REQUIRE(edge.id == edited);
+         REQUIRE(edge.left == (motion > 0));
+         // A preview is independent: abandoning it leaves both saved clips intact.
+         auto preview = original;
+         REQUIRE(DragVideoClipEdge(preview, edge.id, edge.left, seam + motion));
+         REQUIRE(KeepsOriginalPicture(original));
+         REQUIRE(original.clips[1].sourceStart == Approx(seam));
+         REQUIRE(preview.clips[0].start == 0);
+         REQUIRE(preview.clips[1].End() == Approx(4));
+         if (motion > 0) {
+            REQUIRE(preview.clips[0].End() == Approx(seam));
+            REQUIRE(preview.clips[1].start == Approx(seam + motion));
+            REQUIRE(preview.clips[1].sourceStart == Approx(seam + motion));
+         }
+         else {
+            REQUIRE(preview.clips[0].End() == Approx(seam + motion));
+            REQUIRE(preview.clips[1].start == Approx(seam));
+            REQUIRE(preview.clips[1].sourceStart == Approx(seam));
+         }
+         REQUIRE_FALSE(DragVideoClipEdge(preview, edge.id, edge.left, seam + motion));
+         const auto returning = ChooseVideoTrimEdge(preview, edge.id, edge.left, -motion);
+         REQUIRE(returning.id == edge.id);
+         REQUIRE(returning.left == edge.left);
+         REQUIRE(DragVideoClipEdge(preview, returning.id, returning.left, seam));
+         REQUIRE(KeepsOriginalPicture(preview));
+         REQUIRE_FALSE(DragVideoClipEdge(preview, returning.id, returning.left, seam));
+         REQUIRE(preview.clips[0].id == 1);
+         REQUIRE(preview.clips[1].id == 2);
+      }
+   REQUIRE_THROWS(ChooseVideoTrimEdge(original, 999, true, 1));
+   REQUIRE_THROWS(ChooseVideoTrimEdge(original, 2, true, std::numeric_limits<double>::quiet_NaN()));
+   REQUIRE(KeepsOriginalPicture(original));
 }
 
 TEST_CASE("Native video track order composes upper pictures while exposing lower gaps",

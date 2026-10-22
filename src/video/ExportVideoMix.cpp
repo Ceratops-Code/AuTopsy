@@ -1,4 +1,5 @@
 #include "ExportVideoMix.h"
+#include "RenderVideoComposition.h"
 #include "Export.h"
 #include "ExportPluginRegistry.h"
 #include "Prefs.h"
@@ -344,15 +345,17 @@ bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *paren
 }
 
 bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline,
-   const wxString &destination, bool overwrite, wxWindow *parent, const ExportSettings &settings)
+   double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent, const ExportSettings &settings)
 {
    RequireUsableExportSettings(settings);
-   VideoTimeline::RequireWellFormedTimeline(timeline);
-   const auto duration = timeline.End();
-   const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline) && AllowsOriginalPictureCopy(settings);
+   VideoTimeline::RequireWellFormedTimeline(timeline, VideoTimeline::MaximumVideoRenderSegments);
+   const auto duration = projectVideoDuration;
+   const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline) && AllowsOriginalPictureCopy(settings)
+      && std::abs(duration - timeline.End()) <= 1e-7;
    const auto outputRate = settings.frameRate > 0 ? settings.frameRate : timeline.frameRate;
    const fs::path target = fs::absolute(fs::path(destination.ToStdWstring()));
-   if (!std::isfinite(duration) || duration <= 0 || timeline.clips.empty() || destination.empty())
+   if (!std::isfinite(duration) || duration <= 0 || duration + 1e-7 < timeline.End() ||
+       timeline.sourcePath.empty() || destination.empty())
       throw std::runtime_error("Choose video clips and an output filename before exporting.");
    const auto extension = wxString(target.extension().wstring()).Lower();
    if (extension != ".mp4" && extension != ".mkv")
@@ -389,9 +392,14 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
 
    std::optional<std::pair<int,int>> pictureSize;
    if (!copyPicture) {
-      pictureSize = ReadExportPictureSize(inputs.front(), parent);
-      if (!pictureSize) return false;
       if (settings.width) pictureSize = std::pair{settings.width, settings.height};
+      else if (inputs.empty()) {
+         if (timeline.sourceWidth <= 0 || timeline.sourceHeight <= 0)
+            throw std::runtime_error("Choose an output resolution for this hidden video; its older project has no saved canvas size.");
+         pictureSize = std::pair{(timeline.sourceWidth + 1) / 2 * 2, (timeline.sourceHeight + 1) / 2 * 2};
+      }
+      else pictureSize = ReadExportPictureSize(inputs.front(), parent);
+      if (!pictureSize) return false;
    }
    ExportWorkspace workspace{ target };
    const auto mix = workspace.path / "_mix.wav";
@@ -424,35 +432,38 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    else {
       // FFmpeg owns decoding, trimming, gap frames and concatenation. This
       // adapter translates only our value model, never Audacity track internals.
-      struct Span { size_t input; double sourceStart, duration; bool gap; };
+       struct Span { size_t input; double sourceStart, duration; bool gap; double playbackRate{1}; VideoEditing::VideoFrameCrop crop; };
       std::vector<Span> spans;
       double end{};
       for (size_t clipIndex = 0; clipIndex < timeline.clips.size(); ++clipIndex) {
          const auto &clip = timeline.clips[clipIndex];
          if (clip.start > end + 1e-7) spans.push_back({0, 0, clip.start - end, true});
-         spans.push_back({clipInputs[clipIndex], clip.sourceStart, clip.duration, false});
+          spans.push_back({clipInputs[clipIndex], clip.sourceStart, clip.duration, false, clip.playbackRate, clip.crop});
          end = clip.End();
       }
+      if (duration > end + 1e-7) spans.push_back({0, 0, duration - end, true});
       std::ostringstream graph;
       graph.imbue(std::locale::classic()); graph << std::setprecision(17);
       for (size_t input = 0; input < inputs.size(); ++input) {
          const auto count = std::count_if(spans.begin(), spans.end(),
-            [&](const auto &span) { return span.input == input; });
+            [&](const auto &span) { return !span.gap && span.input == input; });
          if (!count) continue;
          graph << "[" << input << ":v:0]split=" << count;
          for (size_t i = 0; i < spans.size(); ++i)
-            if (spans[i].input == input) graph << "[s" << i << "]";
+            if (!spans[i].gap && spans[i].input == input) graph << "[s" << i << "]";
          graph << ";\n";
       }
       for (size_t i = 0; i < spans.size(); ++i) {
          const auto &span = spans[i];
-         graph << "[s" << i << "]";
-         if (span.gap)
-            graph << "trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration="
-               << span.duration << ",trim=duration=" << span.duration << ",drawbox=color=black:t=fill";
-         else graph << "trim=start=" << span.sourceStart << ":duration=" << span.duration
-            << ",setpts=PTS-STARTPTS";
          const auto [width, height] = *pictureSize;
+         if (span.gap)
+            graph << "color=c=black:s=" << width << "x" << height << ":r=" << outputRate << ":d=" << span.duration;
+         else {
+            graph << "[s" << i << "]trim=start=" << span.sourceStart << ":duration=" << span.duration * span.playbackRate
+               << ",setpts=(PTS-STARTPTS)/" << span.playbackRate;
+            const auto crop = VideoEditing::VideoCropFilterExpression(span.crop);
+            if (!crop.empty()) graph << "," << crop;
+         }
          graph << ",fps=" << outputRate
             << ",scale=" << width << ":" << height << ":force_original_aspect_ratio=decrease:force_divisible_by=2"
             << ",pad=" << width << ":" << height << ":(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v" << i << "];\n";

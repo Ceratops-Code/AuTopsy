@@ -36,10 +36,10 @@ class CheckGroup:
 
 
 COMMON_INPUTS = (
-    "src/video/CMakeLists.txt", "scripts/run_affected_tests.py", "sdlc/sdlc.yml",
+    "src/video/CMakeLists.txt", "sdlc/sdlc.yml",
     "scripts/pyproject.toml", "scripts/uv.lock", "tests/Catch2Main.cpp",
 )
-TIMELINE_INPUTS = ("src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
+TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
     CheckGroup("video-playback", TIMELINE_INPUTS + (
         "src/video/SyncVideoPlayback.h", "src/video/ChooseVideoExport.h",
@@ -47,7 +47,7 @@ GROUPS = (
     CheckGroup("video-edits", TIMELINE_INPUTS + (
         "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp"), "video-edits-test"),
     CheckGroup("video-composition", TIMELINE_INPUTS + (
-        "src/video/PlanVideoEdits.*", "src/video/EvaluateVideoTimeline.*",
+        "src/video/PlanVideoEdits.*", "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*",
         "src/video/TestVideoComposition.cpp"), "video-composition-test"),
     CheckGroup("product-branding-core", (
         "libraries/lib-strings/ApplyProductBranding.*", "libraries/lib-strings/tests/TestProductBranding.cpp"),
@@ -59,7 +59,11 @@ GROUPS = (
     CheckGroup("fork-worker-lifecycle", (
         "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
         "scripts/piped-work/pipeclient.py")),
-    CheckGroup("affected-test-selection", ("scripts/test_run_affected_tests.py",)),
+    CheckGroup("affected-test-selection", (
+        "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
+        "scripts/piped-work/test_fork_features.py",
+        "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
+        "scripts/piped-work/test_video_clip_edits.py")),
     CheckGroup("fork-audacity-consumer-cache", (
         "scripts/piped-work/prepare_audacity_consumer.py",
         "scripts/piped-work/test_prepare_audacity_consumer.py",
@@ -68,7 +72,11 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "libraries/lib-wave-track/WaveTrack.cpp",
+    "scripts/piped-work/test_video_clip_edits.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
+    "src/video/PlayVideoMedia.cpp", "src/video/PlayVideoMedia.h",
+    "src/video/EditVideoComposition.cpp", "src/video/EditVideoComposition.h",
     "src/video/CreateVideoTrack.h", "src/video/CreateVideoTrack.cpp",
     "src/video/ShowVideoTrack.h", "src/video/ShowVideoTrack.cpp",
     "src/video/PrepareVideoPreview.h", "src/video/PrepareVideoPreview.cpp",
@@ -78,6 +86,7 @@ NATIVE_INPUTS = (
     "src/clip-groups/EditClipMarkers.cpp", "src/clip-groups/GroupAudioClips.h",
     "src/clip-groups/GroupAudioClips.cpp",
     "src/menus/*.cpp", "src/commands/GetInfoCommand.cpp",
+    "src/tracks/ui/CommonTrackControls.cpp",
     "libraries/lib-project-history/*", "libraries/lib-viewport/*", "CMakeLists.txt", "CMakePresets.json",
 )
 OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "scripts/*.py", "scripts/build/windows/*")

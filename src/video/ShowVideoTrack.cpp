@@ -2,6 +2,8 @@
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
 #include "CreateVideoTrack.h"
+#include "EditVideoComposition.h"
+#include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
 #include "Project.h"
@@ -21,10 +23,17 @@
 #include "CommandManager.h"
 #include "CommandContext.h"
 #include "CommonCommandFlags.h"
+#include "Clipboard.h"
 #include "tracks/ui/CommonChannelView.h"
 #include "tracks/ui/CommonTrackControls.h"
+#include "tracks/ui/CommonTrackInfo.h"
+#include "tracks/ui/ButtonHandle.h"
+#include "tracks/playabletrack/ui/PlayableTrackControls.h"
+#include "AColor.h"
 #include "tracks/ui/ChannelVRulerControls.h"
 #include "tracks/ui/TimeShiftHandle.h"
+#include "tracks/ui/AffordanceHandle.h"
+#include "tracks/ui/SelectHandle.h"
 #include "widgets/PopupMenuTable.h"
 #include <wx/dc.h>
 #include <wx/bitmap.h>
@@ -32,6 +41,7 @@
 #include <wx/filename.h>
 #include <wx/image.h>
 #include <wx/menu.h>
+#include <wx/textdlg.h>
 #include <wx/msgdlg.h>
 #include <algorithm>
 #include <cmath>
@@ -46,7 +56,7 @@ struct ShiftInterval final : ChannelGroupInterval, ClipGroups::LinkedClipInterva
    explicit ShiftInterval(Clip value) : clip(std::move(value)) {}
    double Start() const override { return clip.start; }
    double End() const override { return clip.End(); }
-   const std::string &MediaGroupId() const override { return clip.linkGroup; }
+   std::vector<std::string> MediaGroupIds() const override { return VideoTimeline::VideoContentLinkGroups(clip); }
    unsigned long long VideoClipId() const override { return clip.id; }
 };
 
@@ -73,7 +83,7 @@ public:
       const auto &selection = view.selectedRegion;
       if (mTrack->GetSelected() && selection.t1() > selection.t0() &&
           time >= selection.t0() && time < selection.t1()) {
-         CommonSelectInterval({selection.t0(), selection.t1()});
+         SelectInterval({selection.t0(), selection.t1()});
          return HitTestResult::Selection;
       }
        // Like the audio shifter, choose intervals without changing project
@@ -84,10 +94,18 @@ public:
       });
       return HitTestResult::Intervals;
    }
-   void SelectInterval(TimeInterval interval) override { CommonSelectInterval(interval); }
+   void SelectInterval(TimeInterval interval) override {
+      // Touching endpoints are not an overlap: selecting one split clip must
+      // not capture its immediate neighbor in the native move engine.
+      UnfixIntervals([&](const auto &clip) {
+         return clip.End() > interval.Start() + 1e-7 &&
+            clip.Start() < interval.End() - 1e-7;
+      });
+   }
    double QuantizeOffset(double offset) override {
       if (mMoving.empty()) return offset;
-      const auto rate = Data(mMoving.front()).clip.media.frameRate;
+      const auto &clip = Data(mMoving.front()).clip;
+      const auto rate = VideoContentFrameRate(clip, clip.media);
       return std::round(offset * rate) / rate;
    }
    double AdjustOffsetSmaller(double offset) override {
@@ -129,7 +147,8 @@ public:
        // The native engine calls the source policy with the destination as an
        // argument. Its hovered destination has no moving intervals yet, so
        // finish source-frame snapping here before checking destination space.
-       const auto rate = Data(intervals.front()).clip.media.frameRate;
+       const auto &clip = Data(intervals.front()).clip;
+       const auto rate = VideoContentFrameRate(clip, clip.media);
        const auto fittedOffset = std::round(offset * rate) / rate;
        auto candidate = videoDestination->Timeline();
        for (const auto &interval : intervals) {
@@ -173,13 +192,77 @@ public:
    using ChannelVRulerControls::ChannelVRulerControls;
    void UpdateRuler(const wxRect &) override {}
 };
+// Header clicks use the same click-versus-drag contract as audio clips.
+class VideoAffordanceHandle final : public AffordanceHandle {
+public:
+   using AffordanceHandle::AffordanceHandle;
+   Result SelectAt(const TrackPanelMouseEvent &event, AudacityProject *project) override {
+      const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(GetTrack());
+      if (!track || !project) return RefreshCode::RefreshNone;
+      auto &view = ViewInfo::Get(*project);
+      if (const auto *clip = ClipAt(track->Timeline(),
+            view.PositionToTime(event.event.GetX(), event.rect.x))) {
+         view.selectedRegion.setTimes(clip->start, clip->End());
+         TrackFocus::Get(*project).Set(track.get(), true);
+         ProjectHistory::Get(*project).ModifyState(false);
+      }
+      return RefreshCode::RefreshAll;
+   }
+};
+
+// Picture clicks select one clip. Actual drags still use the host's range,
+// snapping, modifier keys, autoscroll and Escape handling.
+class VideoSelectionHandle final : public SelectHandle {
+   std::weak_ptr<AuTopsyVideoTrack> mTrack;
+   wxPoint mClick;
+   uint64_t mId{};
+   bool mDragged{};
+   Result SelectClip(AudacityProject *project) {
+      const auto track = mTrack.lock();
+      if (!track || !mId) return RefreshCode::RefreshNone;
+      for (const auto &clip : track->Timeline().clips) if (clip.id == mId) {
+         ViewInfo::Get(*project).selectedRegion.setTimes(clip.start, clip.End());
+         TrackFocus::Get(*project).Set(track.get(), true);
+         ProjectHistory::Get(*project).ModifyState(false);
+         return RefreshCode::RefreshAll;
+      }
+      return RefreshCode::RefreshNone;
+   }
+public:
+   VideoSelectionHandle(const std::shared_ptr<ChannelView> &view,
+      const std::shared_ptr<AuTopsyVideoTrack> &track,
+      const TrackPanelMouseState &state, const AudacityProject &project)
+      : SelectHandle(view, true, TrackList::Get(project), state, ViewInfo::Get(project)),
+        mTrack(track) {}
+   Result Click(const TrackPanelMouseEvent &event, AudacityProject *project) override {
+      mClick = event.event.GetPosition(); mDragged = false; mId = 0;
+      if (!event.event.ShiftDown() && !event.event.CmdDown())
+         if (const auto track = mTrack.lock())
+            if (const auto *clip = ClipAt(track->Timeline(),
+                  ViewInfo::Get(*project).PositionToTime(mClick.x, event.rect.x)))
+               mId = clip->id;
+      const auto result = SelectHandle::Click(event, project);
+      return event.event.LeftDClick() ? result | SelectClip(project) : result;
+   }
+   Result Drag(const TrackPanelMouseEvent &event, AudacityProject *project) override {
+      mDragged = mDragged || std::abs(event.event.GetX() - mClick.x) >= 3 ||
+         std::abs(event.event.GetY() - mClick.y) >= 3;
+      return mDragged ? SelectHandle::Drag(event, project) : RefreshCode::RefreshNone;
+   }
+   Result Release(const TrackPanelMouseEvent &event, AudacityProject *project, wxWindow *parent) override {
+      const auto result = SelectHandle::Release(event, project, parent);
+      return mDragged ? result : result | SelectClip(project);
+   }
+};
 class VideoTrackView;
 class VideoClipHandle final : public UIHandle {
    std::weak_ptr<AuTopsyVideoTrack> mTrack;
    std::weak_ptr<VideoTrackView> mView;
-   uint64_t mId;
+   uint64_t mId, mEditedId{};
    int mEdge;
    bool mContext{};
+   int mOrigin{};
+   double mClickTime{};
    std::optional<Timeline> mCandidate;
    Timeline mOriginal;
 public:
@@ -208,6 +291,8 @@ class VideoTrackView final : public CommonChannelView {
    std::map<std::string, Thumbnails> mSources;
    uint64_t mUse{};
    std::weak_ptr<VideoClipHandle> mClipHandle;
+   std::weak_ptr<VideoAffordanceHandle> mAffordanceHandle;
+   std::weak_ptr<VideoSelectionHandle> mVideoSelectionHandle;
    std::optional<Timeline> mGhost;
    wxRect mLastRect;
    static constexpr int FrameWidth = 112, FrameHeight = 63;
@@ -259,26 +344,48 @@ public:
       const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(FindTrack());
       if (!track || !project) return {};
       const auto &view = ViewInfo::Get(*project);
-      const auto time = view.PositionToTime(state.state.GetX(),state.rect.x);
-      const auto *clip = ClipAt(track->Timeline(),time);
+      const auto pointer = state.state.GetX();
+      const Clip *clip{};
+      // Painting rounds each boundary to a pixel. Converting that pixel back
+      // to time can fall before a split and select the other clip's edge.
+      // Use the same half-open pixel ranges as Draw, so the shared seam
+      // belongs to the right clip even at fractional zoom and scroll offsets.
+      for (const auto &candidate : track->Timeline().clips)
+         if (view.TimeToPosition(candidate.start, state.rect.x) <= pointer &&
+             pointer < view.TimeToPosition(candidate.End(), state.rect.x)) {
+            clip = &candidate;
+            break;
+         }
+      if (state.state.RightIsDown())
+         return {AssignUIHandlePtr(mClipHandle, std::make_shared<VideoClipHandle>(
+            track, std::static_pointer_cast<VideoTrackView>(shared_from_this()),
+            clip ? clip->id : 0, 0))};
       int edge{};
+      int distance = 6;
+      const auto consider = [&](const Clip &candidate, double at, int side) {
+         const auto pixels = int(std::abs(view.TimeToPosition(at, state.rect.x) - state.state.GetX()));
+         // At a shared boundary prefer the clip containing the pointer.
+         if (pixels < distance || (pixels == distance && clip == &candidate)) {
+            distance = pixels; clip = &candidate; edge = side;
+         }
+      };
+      const auto *underPointer = clip;
       for (const auto &candidate : track->Timeline().clips) {
-         if (std::abs(view.TimeToPosition(candidate.start,state.rect.x)-state.state.GetX()) <= 5) {
-            clip = &candidate; edge = -1; break;
-         }
-         if (std::abs(view.TimeToPosition(candidate.End(),state.rect.x)-state.state.GetX()) <= 5) {
-            clip = &candidate; edge = 1; break;
-         }
+         if (underPointer && &candidate != underPointer) continue;
+         consider(candidate, candidate.start, -1); consider(candidate, candidate.End(), 1);
       }
+      if (edge)
+         return {AssignUIHandlePtr(mClipHandle, std::make_shared<VideoClipHandle>(
+            track, std::static_pointer_cast<VideoTrackView>(shared_from_this()), clip->id, edge))};
+      if (clip && state.state.GetY() < state.rect.y+24)
+         return {AssignUIHandlePtr(mAffordanceHandle,
+            std::make_shared<VideoAffordanceHandle>(track))};
+      // Gaps need only the native range selector. Adding a second selector
+      // there lets the host retain its old lower-priority hit after Escape,
+      // masking a newly hovered video edge on the next gesture.
       if (!clip) return {};
-      if (edge || state.state.RightIsDown()) {
-         auto handle = std::make_shared<VideoClipHandle>(track,
-            std::static_pointer_cast<VideoTrackView>(shared_from_this()),clip->id,edge);
-         return {AssignUIHandlePtr(mClipHandle,handle)};
-      }
-      if (state.state.GetY() < state.rect.y+24)
-         return {TimeShiftHandle::HitAnywhere(mTimeShiftHandle,track,false)};
-      return {}; // host time-selection gesture in the picture body
+      return {AssignUIHandlePtr(mVideoSelectionHandle,
+         std::make_shared<VideoSelectionHandle>(shared_from_this(), track, state, *project))};
    }
    void Draw(TrackPanelDrawingContext &context,const wxRect &rect,unsigned pass) override {
       if (pass != TrackArtist::PassTracks) { CommonChannelView::Draw(context,rect,pass); return; }
@@ -305,17 +412,21 @@ public:
          dc.SetPen(*wxTRANSPARENT_PEN);
          dc.SetBrush(wxBrush(track->VideoVisible() ? wxColour(57,105,143) : wxColour(69,72,77)));
          dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
-         auto &frames = Frames(source,&ProjectWindow::Get(*project)).frames;
          const int pictureHeight = std::max(0,std::min(FrameHeight,rect.height-30));
          if (pictureHeight) {
             dc.SetClippingRegion(left,rect.y+25,right-left,pictureHeight);
             int cell = from+int(std::floor(double(left-from)/FrameWidth))*FrameWidth;
             for (; cell < right; cell += FrameWidth) {
-               if (!frames.empty()) {
-                  const auto time = view.PositionToTime(cell+FrameWidth/2,rect.x);
-                  const auto sourceTime = clip.sourceStart+std::clamp(time-clip.start,0.0,clip.duration);
-                  const auto index = std::clamp(int(sourceTime/source.duration*frames.size()),0,int(frames.size())-1);
-                  dc.DrawBitmap(frames[index],cell,rect.y+25);
+               const auto time = std::clamp(view.PositionToTime(cell+FrameWidth/2,rect.x),
+                  clip.start, std::nextafter(clip.End(), clip.start));
+               const auto sample = SampleVideoContent(clip, source, clip.ContentTimeAtProjectTime(time));
+               if (sample) {
+                  auto &frames = Frames(sample.source,&ProjectWindow::Get(*project)).frames;
+                  if (!frames.empty()) {
+                     const auto index = std::clamp(int(sample.sourceTime/sample.source.duration*frames.size()),
+                        0,int(frames.size())-1);
+                     dc.DrawBitmap(frames[index],cell,rect.y+25);
+                  }
                }
                dc.SetPen(wxPen(wxColour(22,23,26))); dc.DrawLine(cell,rect.y+25,cell,rect.y+25+pictureHeight);
             }
@@ -327,11 +438,14 @@ public:
          dc.SetPen(wxPen(selected ? wxColour(252,211,90) : wxColour(111,155,187),selected ? 2 : 1));
          dc.SetBrush(*wxTRANSPARENT_BRUSH); dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
          dc.SetTextForeground(*wxWHITE);
-         dc.DrawText(wxFileName(wxString::FromUTF8(source.path)).GetFullName(),left+5,rect.y+5);
+         auto title = clip.content ? wxString::Format(_("Joined video (%zu pieces)"), clip.content->parts.size())
+             : wxFileName(wxString::FromUTF8(source.path)).GetFullName();
+         if (clip.playbackRate != 1) title = wxString::Format("%.8g%%  ", clip.playbackRate * 100) + title;
+         dc.DrawText(title,left+5,rect.y+5);
          {
             wxDCClipper clipFlags{dc, wxRect{left, rect.y, right-left, 24}};
             ClipMarkers::DrawClipMarkerFlags(dc, rect, view, clip.markers,
-               clip.start - clip.sourceStart, 1, clip.start, clip.End());
+               clip.ProjectTimeAtContentTime(0), 1 / clip.playbackRate, clip.start, clip.End());
          }
          dc.DestroyClippingRegion();
       }
@@ -344,14 +458,18 @@ UIHandle::Result VideoClipHandle::Click(const TrackPanelMouseEvent &event,Audaci
    const auto track = mTrack.lock();
    if (!track || !project || ProjectAudioIO::Get(*project).IsAudioActive()) return RefreshCode::Cancelled;
    mContext = event.event.RightDown(); mOriginal = track->Timeline();
+   mCandidate.reset(); mEditedId = mId; mOrigin = event.rect.x;
+   mClickTime = ViewInfo::Get(*project).PositionToTime(event.event.GetX(), mOrigin);
    const auto found = std::find_if(mOriginal.clips.begin(),mOriginal.clips.end(),
       [&](const auto &clip) { return clip.id == mId; });
-   if (found == mOriginal.clips.end()) return RefreshCode::Cancelled;
    auto &selection = ViewInfo::Get(*project).selectedRegion;
-   if (!track->GetSelected() || selection.t0() < found->start || selection.t1() > found->End()) {
+   if (!mContext || !track->GetSelected() || selection.isPoint() ||
+       mClickTime < selection.t0() || mClickTime >= selection.t1()) {
       SelectUtilities::SelectNone(*project); track->SetSelected(true);
-      selection.setTimes(found->start,found->End());
+      if (found != mOriginal.clips.end()) selection.setTimes(found->start, found->End());
+      else selection.setTimes(std::max(0.0, mClickTime), std::max(0.0, mClickTime));
    }
+   if (!mContext && found == mOriginal.clips.end()) return RefreshCode::Cancelled;
    TrackFocus::Get(*project).Set(track.get(),true);
    return RefreshCode::RefreshAll;
 }
@@ -360,13 +478,17 @@ UIHandle::Result VideoClipHandle::Drag(const TrackPanelMouseEvent &event,Audacit
    if (mContext || !mEdge || !project) return RefreshCode::RefreshNone;
    const auto track = mTrack.lock(); const auto view = mView.lock();
    if (!track || !view) return RefreshCode::Cancelled;
-   const auto found = std::find_if(mOriginal.clips.begin(),mOriginal.clips.end(),
-      [&](const auto &clip) { return clip.id == mId; });
-   if (found == mOriginal.clips.end()) return RefreshCode::Cancelled;
-   const auto at = std::max(0.0,ViewInfo::Get(*project).PositionToTime(event.event.GetX(),event.rect.x));
+   // Keep the initial origin and pointer offset. A shared seam chooses the
+   // side shortened by this drag, independent of a one-pixel hit ambiguity.
+   const auto motion = ViewInfo::Get(*project).PositionToTime(event.event.GetX(), mOrigin) - mClickTime;
    auto candidate = mOriginal;
    try {
-      TrimVideoClip(candidate,mId,mEdge < 0 ? at : found->start,mEdge > 0 ? at : found->End());
+      const auto edge = ChooseVideoTrimEdge(mOriginal, mId, mEdge < 0, motion);
+      const auto found = std::find_if(mOriginal.clips.begin(),mOriginal.clips.end(),
+         [&](const auto &clip) { return clip.id == edge.id; });
+      const auto at = (edge.left ? found->start : found->End()) + motion;
+      DragVideoClipEdge(candidate, edge.id, edge.left, at);
+      mEditedId = edge.id;
       mCandidate = std::move(candidate); view->SetGhost(mCandidate);
    } catch (const std::exception &) { /* retain the last usable trim preview */ }
    return RefreshCode::RefreshAll;
@@ -376,23 +498,38 @@ UIHandle::Result VideoClipHandle::Cancel(AudacityProject *)
    if (const auto view = mView.lock()) view->SetGhost({});
    mCandidate.reset(); return RefreshCode::RefreshAll;
 }
-UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &,AudacityProject *project,wxWindow *parent)
+UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,AudacityProject *project,wxWindow *parent)
 {
    const auto track = mTrack.lock();
    if (const auto view = mView.lock()) view->SetGhost({});
    if (!project || !track || track->GetOwner().get() != &TrackList::Get(*project)) return RefreshCode::RefreshAll;
    try {
+      if (!mContext && mEdge) {
+         // Windows can coalesce the last motion before mouse-up. Commit the
+         // released pointer position, rather than the last painted ghost.
+         Drag(event, project);
+         if (const auto view = mView.lock()) view->SetGhost({});
+      }
       if (mContext) {
          wxMenu menu;
          menu.Append(1,_("Cut")); menu.Append(2,_("Copy")); menu.Append(3,_("Paste"));
          menu.AppendSeparator(); menu.Append(4,_("Split at Cursor")); menu.Append(5,_("Delete and Leave Gap"));
          menu.Append(6,_("Trim to Selection"));
+         menu.AppendSeparator(); menu.Append(7,_("Heal Split")); menu.Append(8,_("Join"));
+         menu.Append(9,_("Separate Joined Clip"));
+         menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, mId != 0);
+         menu.Append(11, _("Crop Picture...")); menu.Enable(11, mId != 0);
+         for (int id : {7, 8, 9}) menu.Enable(id, mId != 0);
+         for (int id : {1, 2, 4, 5, 6})
+            menu.Enable(id, !ViewInfo::Get(*project).selectedRegion.isPoint());
+         menu.Enable(3, !Clipboard::Get().GetTracks().Any<const AuTopsyVideoTrack>().empty());
+         menu.Enable(4, mId != 0);
          auto *moves = new wxMenu;
          std::vector<AuTopsyVideoTrack*> targets;
          for (auto *candidate : ProjectVideoTracks(*project)) if (candidate != track.get()) {
             targets.push_back(candidate); moves->Append(100+int(targets.size())-1,candidate->GetName());
          }
-         if (!targets.empty()) menu.AppendSubMenu(moves,_("Move Clip to Track")); else delete moves;
+         if (mId && !targets.empty()) menu.AppendSubMenu(moves,_("Move Clip to Track")); else delete moves;
          const auto choice = parent->GetPopupMenuSelectionFromUser(menu);
          if (choice >= 100 && size_t(choice-100) < targets.size()) {
             const auto found = std::find_if(track->Timeline().clips.begin(),track->Timeline().clips.end(),
@@ -400,15 +537,40 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &,AudacityP
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],mId,found->start);
          }
+         else if (choice == 11)
+            VideoEditing::ShowVideoClipCropDialog(*project, *track, mId, parent);
+         else if (choice == 10) {
+            const auto found = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
+               [&](const auto &clip) { return clip.id == mId; });
+            if (found == track->Timeline().clips.end()) throw std::runtime_error("The video clip was removed.");
+            wxTextEntryDialog dialog{parent, _("Speed (%; 100 is normal). Linked media changes together."),
+               _("Video Clip Speed"), wxString::Format("%.8g", found->playbackRate * 100)};
+            if (dialog.ShowModal() == wxID_OK) {
+               double percent{};
+               if (!dialog.GetValue().ToDouble(&percent)) throw std::runtime_error("Enter a numeric speed percentage.");
+               ClipGroups::ChangeLinkedVideoClipSpeed(*project, *track, mId, percent / 100);
+            }
+         }
+         else if (choice >= 7 && choice <= 9) {
+            const VideoEditing::VideoEditKind kinds[]{VideoEditing::VideoEditKind::HealClips,
+               VideoEditing::VideoEditKind::JoinClips, VideoEditing::VideoEditKind::SeparateClips};
+            const auto &selection = ViewInfo::Get(*project).selectedRegion;
+            EditSelectedVideoStructure(*project, kinds[choice - 7], selection.t0(), selection.t1());
+         }
          else {
             const wxString commands[]{"","Cut","Copy","Paste","Split","SplitDelete","Trim"};
-            if (choice > 0 && choice < 7)
+            if (choice > 0 && choice < 7) {
+               if (choice == 4)
+                  ViewInfo::Get(*project).selectedRegion.setTimes(mClickTime, mClickTime);
                CommandManager::Get(*project).HandleTextualCommand(commands[choice],
                   CommandContext{*project},AlwaysEnabledFlag,false);
+            }
          }
       }
       else if (mCandidate) {
          ClipGroups::CommitVideoClipTrim(*project, *track, std::move(*mCandidate));
+         for (const auto &clip : track->Timeline().clips) if (clip.id == mEditedId)
+            ViewInfo::Get(*project).selectedRegion.setTimes(clip.start, clip.End());
       }
    }
    catch (const std::exception &error) {
@@ -421,10 +583,14 @@ class VideoTrackMenu final : public PopupMenuTable {
    VideoTrackMenu() : PopupMenuTable{"VideoTrack"} {}
    DECLARE_POPUP_MENU(VideoTrackMenu);
    CommonTrackControls::InitMenuData *mData{};
-   void ToggleVisible(wxCommandEvent &) {
+   void ToggleMute(wxCommandEvent &) {
       auto &track = static_cast<AuTopsyVideoTrack&>(mData->track);
-      track.SetVideoVisible(!track.VideoVisible());
-      ProjectHistory::Get(mData->project).PushState(XO("Changed video track visibility"),XO("Video Visibility"));
+      SetProjectVideoTrackVisibility(mData->project, track, !track.VideoVisible(), track.VideoSolo());
+      mData->result = RefreshCode::RefreshAll;
+   }
+   void ToggleSolo(wxCommandEvent &) {
+      auto &track = static_cast<AuTopsyVideoTrack&>(mData->track);
+      SetProjectVideoTrackVisibility(mData->project, track, track.VideoVisible(), !track.VideoSolo());
       mData->result = RefreshCode::RefreshAll;
    }
 public:
@@ -432,15 +598,108 @@ public:
    void InitUserData(void *data) override { mData = static_cast<CommonTrackControls::InitMenuData*>(data); }
 };
 BEGIN_POPUP_MENU(VideoTrackMenu)
-   AppendItem("ToggleVideoVisible",32001,XXO("Show / Hide Video"),POPUP_MENU_FN(ToggleVisible));
+   AppendCheckItem("ToggleVideoMute",32001,XXO("Mute Video"),POPUP_MENU_FN(ToggleMute),
+      [](PopupMenuHandler &handler, wxMenu &menu, int id) {
+         const auto &track = static_cast<AuTopsyVideoTrack&>(static_cast<VideoTrackMenu&>(handler).mData->track);
+         menu.Check(id, !track.VideoVisible());
+      });
+   AppendCheckItem("ToggleVideoSolo",32002,XXO("Solo Video"),POPUP_MENU_FN(ToggleSolo),
+      [](PopupMenuHandler &handler, wxMenu &menu, int id) {
+         const auto &track = static_cast<AuTopsyVideoTrack&>(static_cast<VideoTrackMenu&>(handler).mData->track);
+         menu.Check(id, track.VideoSolo());
+      });
 END_POPUP_MENU()
+
+class VideoVisibilityButtonHandle final : public ButtonHandle {
+   bool mSolo;
+public:
+   VideoVisibilityButtonHandle(const std::shared_ptr<Track> &track, const wxRect &rect, bool solo)
+      : ButtonHandle(track, rect), mSolo(solo) {}
+   VideoVisibilityButtonHandle &operator=(const VideoVisibilityButtonHandle&) = default;
+   bool SoloButton() const { return mSolo; }
+protected:
+   Result CommitChanges(const wxMouseEvent &, AudacityProject *project, wxWindow *parent) override {
+      const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(GetTrack());
+      if (!track || !project) return RefreshCode::RefreshNone;
+      try {
+         SetProjectVideoTrackVisibility(*project, *track,
+            mSolo ? track->VideoVisible() : !track->VideoVisible(),
+            mSolo ? !track->VideoSolo() : track->VideoSolo());
+      }
+      catch (const std::exception &error) {
+         wxMessageBox(wxString::FromUTF8(error.what()), _("Video Mute/Solo"), wxOK | wxICON_ERROR, parent);
+      }
+      return RefreshCode::RefreshAll;
+   }
+   TranslatableString Tip(const wxMouseState &, AudacityProject &) const override {
+      return mSolo ? XO("Solo this video track. Audio mixing is independent; video Mute overrides Solo.")
+         : XO("Mute this video track. Its audio remains in the separate audio track.");
+   }
+   bool StopsOnKeystroke() override { return true; }
+};
+
+void DrawVideoVisibilityButtons(TrackPanelDrawingContext &, const wxRect &, const Track *);
 class VideoTrackControls final : public CommonTrackControls {
+   std::weak_ptr<VideoVisibilityButtonHandle> mMuteHandle, mSoloHandle;
+   wxRect mBounds;
 public:
    using CommonTrackControls::CommonTrackControls;
-   std::vector<UIHandlePtr> HitTest(const TrackPanelMouseState &state,const AudacityProject *project) override
-   { return CommonTrackControls::HitTest(state,project); }
+   const TCPLines &GetTCPLines() const override {
+      static const TCPLines lines = [] {
+         auto result = CommonTrackInfo::StaticTCPLines();
+         result.push_back({TrackInfo::TCPLine::kItemMute | TrackInfo::TCPLine::kItemSolo,
+            20, 2, DrawVideoVisibilityButtons});
+         return result;
+      }();
+      return lines;
+   }
+   wxRect ButtonRect(bool solo, const wxRect *bounds = nullptr) const {
+      wxRect result;
+      const auto track = FindTrack();
+      if (!track) return result;
+      const auto &rect = bounds ? *bounds : mBounds;
+      // Reuse the host's semantic Mute/Solo layout, without making picture an
+      // audio PlayableTrack or copying the host's row positions.
+      PlayableTrackControls::GetMuteSoloRect(rect, result, solo, track.get());
+      if (CommonTrackInfo::HideTopItem(rect, result)) return {};
+      return result;
+   }
+   std::vector<UIHandlePtr> HitTest(const TrackPanelMouseState &state,const AudacityProject *project) override {
+      const auto track = FindTrack();
+      for (const bool solo : {false, true}) {
+         const auto rect = ButtonRect(solo, &state.rect);
+         if (track && rect.Contains(state.state.GetPosition())) {
+            auto handle = std::make_shared<VideoVisibilityButtonHandle>(track, rect, solo);
+            return {AssignUIHandlePtr(solo ? mSoloHandle : mMuteHandle, handle)};
+         }
+      }
+      return CommonTrackControls::HitTest(state,project);
+   }
+   void Draw(TrackPanelDrawingContext &context, const wxRect &rect, unsigned pass) override {
+      if (pass == TrackArtist::PassControls) mBounds = rect;
+      CommonTrackControls::Draw(context, rect, pass);
+   }
    PopupMenuTable *GetMenuExtension(Track *) override { return &VideoTrackMenu::Instance(); }
 };
+void DrawVideoVisibilityButtons(TrackPanelDrawingContext &context, const wxRect &, const Track *track)
+{
+   const auto *video = dynamic_cast<const AuTopsyVideoTrack*>(track);
+   if (!video) return;
+   const auto &controls = static_cast<const VideoTrackControls&>(TrackControls::Get(*video));
+   const auto *target = dynamic_cast<VideoVisibilityButtonHandle*>(context.target.get());
+   for (const bool solo : {false, true}) {
+      const auto rect = controls.ButtonRect(solo);
+      if (rect.IsEmpty()) continue;
+      const bool hit = target && target->GetTrack().get() == track && target->SoloButton() == solo;
+      const bool pressed = hit && target->IsDragging() && rect.Contains(context.lastState.GetPosition());
+      const bool active = solo ? video->VideoSolo() : !video->VideoVisible();
+      AColor::Bevel2(context.dc, active == pressed, rect, track->GetSelected(), hit);
+      TrackInfo::SetTrackInfoFont(&context.dc);
+      const auto label = solo ? _("Solo") : _("Mute");
+      const auto size = context.dc.GetTextExtent(label);
+      context.dc.DrawText(label, rect.x + (rect.width - size.x) / 2, rect.y + (rect.height - size.y) / 2);
+   }
+}
 }
 using GetVideoControls = DoGetControls::Override<AuTopsyVideoTrack>;
 DEFINE_ATTACHED_VIRTUAL_OVERRIDE(GetVideoControls) {
@@ -477,7 +736,12 @@ VideoTimeline::VideoTrackStatus VideoTimeline::GetProjectVideoTrackStatus(Audaci
          const auto rect = panel.FindTrackRect(video);
          auto &nativeView = static_cast<VideoTrackView&>(ChannelView::Get(*video));
          const auto data = nativeView.DataRect();
-         result.rows.push_back({index,rect.x,rect.y,rect.width,rect.height,data.x,data.width,video->GetSelected()});
+         result.rows.push_back({index,rect.x,rect.y,rect.width,rect.height,data.x,data.width,data.y,video->GetSelected()});
+         auto &row = result.rows.back();
+         const auto &controls = static_cast<const VideoTrackControls&>(TrackControls::Get(*video));
+         const auto mute = controls.ButtonRect(false), solo = controls.ButtonRect(true);
+         row.mute = {mute.x, mute.y, mute.width, mute.height, !video->VideoVisible()};
+         row.solo = {solo.x, solo.y, solo.width, solo.height, video->VideoSolo()};
          result.thumbnails = result.thumbnails || nativeView.HasThumbnails();
       }
       ++index;

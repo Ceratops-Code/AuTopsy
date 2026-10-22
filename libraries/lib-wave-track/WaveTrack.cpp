@@ -69,6 +69,15 @@ from the project that will own the track.
 
 using std::max;
 
+namespace {
+// A play window can be empty while its source still contains recoverable
+// samples. Use this policy for copy, insertion and load cleanup alike.
+bool DiscardEmptyAudioClip(const WaveClip &clip)
+{
+   return clip.IsEmpty() && clip.GetSequenceSamplesCount() < sampleCount{2};
+}
+}
+
 /*!
  * @post result: `result->GetStretchRatio() == 1`
  */
@@ -599,10 +608,12 @@ bool WaveTrack::LinkConsistencyFix(const bool doFix)
    assert(!doFix || IsLeader());
 
    const auto removeZeroClips = [](WaveClipHolders& clips) {
-      // Check for zero-length clips and remove them
+      // Remove empty sample storage, not retained footage hidden by trims.
+      // Fully trimmed clips must survive history restoration and project load
+      // so untrim can recover their original samples and attachments.
       for (auto it = clips.begin(); it != clips.end();)
       {
-         if ((*it)->IsEmpty())
+         if (DiscardEmptyAudioClip(**it))
             it = clips.erase(it);
          else
             ++it;
@@ -1104,7 +1115,7 @@ Track::Holder WaveTrack::Copy(double t0, double t1, bool forClipboard) const
       // PRL:  Why shouldn't cutlines be copied and pasted too?  I don't know,
       // but that was the old behavior.  But this function is also used by the
       // Duplicate command and I changed its behavior in that case.
-      if (pClip->IsEmpty())
+      if (DiscardEmptyAudioClip(*pClip))
          continue;
       else if (t0 <= pClip->GetPlayStartTime() && t1 >= pClip->GetPlayEndTime())
       {
@@ -1929,7 +1940,7 @@ bool WaveTrack::FormatConsistencyCheck() const
 bool WaveTrack::InsertClip(WaveClipHolders &clips, WaveClipHolder clip,
    bool newClip, bool backup, bool allowEmpty)
 {
-   if (!backup && !clip->GetIsPlaceholder() && !allowEmpty && clip->IsEmpty())
+   if (!backup && !clip->GetIsPlaceholder() && !allowEmpty && DiscardEmptyAudioClip(*clip))
       return false;
 
    const auto& tempo = GetProjectTempo(*this);
@@ -2779,7 +2790,11 @@ double WaveChannel::GetStartTime() const
 
 double WaveTrack::GetStartTime() const
 {
-   return ChannelGroup::GetStartTime();
+   std::optional<double> start;
+   for (const auto &clip : Intervals())
+      if (clip->GetPlayEndTime() > clip->GetPlayStartTime())
+         start = start ? std::min(*start, clip->GetPlayStartTime()) : clip->GetPlayStartTime();
+   return start.value_or(0.0);
 }
 
 double WaveChannel::GetEndTime() const
@@ -2789,7 +2804,13 @@ double WaveChannel::GetEndTime() const
 
 double WaveTrack::GetEndTime() const
 {
-   return ChannelGroup::GetEndTime();
+   // Retained samples outside an empty play window are available for untrim,
+   // but must not add silence to the project's playable time range.
+   std::optional<double> end;
+   for (const auto &clip : Intervals())
+      if (clip->GetPlayEndTime() > clip->GetPlayStartTime())
+         end = end ? std::max(*end, clip->GetPlayEndTime()) : clip->GetPlayEndTime();
+   return end.value_or(0.0);
 }
 
 bool WaveChannel::DoGet(size_t iChannel, size_t nBuffers,

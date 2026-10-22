@@ -17,6 +17,14 @@ import build_video_installer as builder
 
 
 class InstallerBuildTests(unittest.TestCase):
+    def test_package_location_does_not_activate_or_follow_native_test_selection(self):
+        for _ in range(2):
+            with mock.patch.dict(os.environ, {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
+                                              "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
+                self.assertEqual(builder.get_installer_build_directory(), Path("_accepted-build"))
+            with mock.patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
+                self.assertEqual(builder.get_installer_build_directory(), Path(".build/_windows-installer"))
+
     def test_preview_publication_repeats_and_interrupts_each_remote_effect(self):
         revision, body = "a" * 40, "Unsigned AuTopsy preview.\n"
         for boundary in range(5):

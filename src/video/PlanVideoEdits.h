@@ -16,7 +16,7 @@ struct VideoProjectSnapshot {
    std::vector<VideoTrackSnapshot> tracks;
 };
 
-enum class VideoEditKind { MoveClip, TrimClip, SplitClip, RemoveClip, MoveBoundTracks };
+enum class VideoEditKind { MoveClip, TrimClip, SplitClip, RemoveClip, MoveBoundTracks, HealClips, JoinClips, SeparateClips, ChangeClipSpeed };
 struct VideoEditRequest {
    VideoEditKind kind;
    std::string trackId;
@@ -24,6 +24,7 @@ struct VideoEditRequest {
    // Absolute project times. MoveBoundTracks sets this track's first clip start;
    // it shifts the entire parent/descendant group by the same exact delta.
    double start{}, end{};
+   double playbackRate{1};
 };
 
 void RequireUsableVideoProject(const VideoProjectSnapshot &project);
