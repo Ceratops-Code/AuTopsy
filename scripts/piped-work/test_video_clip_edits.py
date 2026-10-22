@@ -523,5 +523,3 @@ def check_split_video_edges(client, root, linked):
         client.send("Redo")
         assert client.data("GetLinkedMediaClips") == original
     client.file("SaveProject2", root / "_split-video-edges.aup3")
-
-
