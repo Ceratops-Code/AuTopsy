@@ -841,7 +841,7 @@ def ready_video_preview(client):
 
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
-    gesture="drag", area="header", menu_path=(), key=None
+    gesture="drag", area="header", menu_path=(), key=None, exact_drag=False
 ):
     """Exercise native clip gestures and popup menus, targeting only the owned PID.
 
@@ -1011,7 +1011,7 @@ def operate_owned_video_track(
         return 1
 
     def position_pointer(x, y):
-        """Reach the exact seam column; vertical DPI rounding stays inside the row."""
+        """Reach the native client point before sending input across DPI contexts."""
         for _ in range(3):
             prior = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
             native = Point()
@@ -1020,7 +1020,7 @@ def operate_owned_video_track(
             user.SetThreadDpiAwarenessContext(prior)
             dx, dy = x-native.x, y-native.y
             user.GetCursorPos(ctypes.byref(point))
-            if dx == 0 and abs(dy) <= 1:
+            if abs(dx) <= 1 and abs(dy) <= 1:
                 return
             point.x += round(dx * rectangle[2] / info["videoTrackPanelWidth"])
             point.y += round(dy * rectangle[3] / info["videoTrackPanelHeight"])
@@ -1189,7 +1189,17 @@ def operate_owned_video_track(
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
         thread = user.GetWindowThreadProcessId(panel, None)
-        if gesture == "context":
+        if gesture == "drag" and exact_drag:
+            # Keep split seams exact through the native pane's mouse-event route.
+            send(0x200, 0, x0, y0)
+            send(0x201, 1, x0, y0)
+            pressed = True
+            send(0x200, 1, x1, y1)
+            if cancel:
+                send(0x100, 0x1B, 0, 0)
+            send(0x202, 0, x1, y1)
+            pressed = False
+        elif gesture == "context":
             button(8)
             pressed = True
             time.sleep(0.08)
