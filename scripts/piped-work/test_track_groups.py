@@ -107,17 +107,27 @@ def click_group_toggle(client, group_id, cancel=False):
     """Send press/release through the guarded owned pane, including cancellation."""
     from ctypes import wintypes as w
 
-    info, group = read_group(client, group_id)
+    deadline = time.monotonic() + 8
+    while True:
+        info, group = read_group(client, group_id)
+        if group["toggle"]["width"] > 0 and group["toggle"]["height"] > 0:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"The group header has not been painted: {group}")
+        time.sleep(0.025)
     panel = int(info["panelHandle"])
     user = ctypes.WinDLL("user32", use_last_error=True)
     user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+    user.GetAncestor.argtypes = [w.HWND, w.UINT]
+    user.GetAncestor.restype = w.HWND
     user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT,
                                        w.UINT, ctypes.POINTER(ctypes.c_size_t)]
     user.SendMessageTimeoutW.restype = ctypes.c_size_t
     owner = w.DWORD()
     assert user.GetWindowThreadProcessId(panel, ctypes.byref(owner))
     assert owner.value == int(os.environ["AUTOPSY_OWNED_APP_PID"])
-    assert_owned_test_display(owner.value, include_window=panel)
+    # The display guard enumerates top-level windows; the pane is a child.
+    assert_owned_test_display(owner.value, include_window=user.GetAncestor(panel, 2))
     rect = group["toggle"]
     assert rect["width"] > 0 and rect["height"] > 0, group
     position = ((rect["x"] + rect["width"] // 2) & 0xFFFF) | (((rect["y"] + rect["height"] // 2) & 0xFFFF) << 16)
