@@ -151,6 +151,21 @@ inline bool RemoveClip(Timeline &timeline, uint64_t id)
    return true;
 }
 
+inline bool ChangeVideoClipCrop(Timeline &timeline, uint64_t id, VideoEditing::VideoFrameCrop crop)
+{
+   RequireWellFormedTimeline(timeline);
+   VideoEditing::RequireUsableVideoFrameCrop(crop);
+   auto changed = timeline;
+   const auto found = std::find_if(changed.clips.begin(), changed.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == changed.clips.end()) throw std::runtime_error("Unknown video clip ID.");
+   if (found->crop == crop) return false;
+   found->crop = crop;
+   RequireWellFormedTimeline(changed);
+   timeline = std::move(changed);
+   return true;
+}
+
 inline bool ChangeVideoClipSpeed(Timeline &timeline, uint64_t id, double playbackRate)
 {
    RequireWellFormedTimeline(timeline);
@@ -172,7 +187,8 @@ inline bool KeepsOriginalPicture(const Timeline &timeline)
    double end{};
    for (const auto &clip : timeline.clips) {
       const auto source = SourceFor(timeline, clip);
-      if (clip.content || clip.playbackRate != 1 || source.path != timeline.sourcePath ||
+      if (clip.content || !(clip.crop == VideoEditing::VideoFrameCrop{}) ||
+          clip.playbackRate != 1 || source.path != timeline.sourcePath ||
           std::abs(source.duration - timeline.sourceDuration) > 1e-7 ||
           std::abs(clip.start - end) > 1e-7 ||
           std::abs(clip.sourceStart - clip.start) > 1e-7) return false;
@@ -370,6 +386,7 @@ struct EvaluatedVideoPicture {
    double sourceTime{};
    MediaSource source;
    double playbackRate{1};
+   VideoEditing::VideoFrameCrop crop;
 };
 
 inline EvaluatedVideoPicture EvaluateVideoLayers(
@@ -381,7 +398,7 @@ inline EvaluatedVideoPicture EvaluateVideoLayers(
       if (const auto *clip = ClipAt(*layer, projectTime)) {
          const auto sample = SampleVideoContent(*clip, SourceFor(*layer, *clip),
             clip->ContentTimeAtProjectTime(projectTime));
-         if (sample) return {layer, clip, sample.sourceTime, sample.source, sample.playbackRate};
+         if (sample) return {layer, clip, sample.sourceTime, sample.source, sample.playbackRate, sample.crop};
       }
    return {};
 }
@@ -415,6 +432,7 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
           std::max(0.0, picture.sourceTime - (edges[i] - edges[i-1]) * picture.playbackRate / 2), edges[i] - edges[i-1]};
       part.media = picture.source;
       part.playbackRate = picture.playbackRate;
+      part.crop = picture.crop;
       if (result.sourcePath.empty()) {
          result.sourcePath = part.media.path; result.sourceDuration = part.media.duration;
          result.frameRate = part.media.frameRate; result.sourceWidth = part.media.width; result.sourceHeight = part.media.height;

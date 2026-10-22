@@ -42,7 +42,7 @@
 #include "../commands/LoadCommands.h"
 #include "SettingsVisitor.h"
 
-#include <mpv/client.h>
+#include "PlayVideoMedia.h"
 #include <wx/filedlg.h>
 #include <wx/button.h>
 #include <wx/dcbuffer.h>
@@ -123,237 +123,6 @@ public:
 
 
 
-struct UnloadLibrary {
-   void operator()(void *handle) const
-   {
-      if (handle)
-         FreeLibrary(static_cast<HMODULE>(handle));
-   }
-};
-
-//! Load only the build's own player DLL, with safe dependency search rules.
-class MpvApi final {
-   std::unique_ptr<void, UnloadLibrary> mLibrary;
-
-   template<typename Function>
-   Function Symbol(const char *name)
-   {
-      auto address = GetProcAddress(static_cast<HMODULE>(mLibrary.get()), name);
-      if (!address)
-         throw std::runtime_error{ std::string{ "libmpv is missing " } + name };
-      return reinterpret_cast<Function>(address);
-   }
-
-public:
-   decltype(&mpv_client_api_version) version{};
-   decltype(&mpv_create) create{};
-   decltype(&mpv_initialize) initialize{};
-   decltype(&mpv_terminate_destroy) destroy{};
-   decltype(&mpv_set_option_string) option{};
-   decltype(&mpv_set_option) typedOption{};
-   decltype(&mpv_get_property) get{};
-   decltype(&mpv_set_property) set{};
-   decltype(&mpv_command) command{};
-   decltype(&mpv_wait_event) wait{};
-   decltype(&mpv_error_string) error{};
-   decltype(&mpv_free) free{};
-
-   MpvApi()
-   {
-      wxFileName library{ wxStandardPaths::Get().GetExecutablePath() };
-      library.SetFullName("libmpv-2.dll");
-      mLibrary.reset(LoadLibraryExW(library.GetFullPath().wc_str(), nullptr,
-         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS));
-      if (!mLibrary)
-         throw std::runtime_error{ "Cannot load " + Utf8(library.GetFullPath()) +
-            " (Windows error " + std::to_string(GetLastError()) + ")." };
-
-      version = Symbol<decltype(version)>("mpv_client_api_version");
-      create = Symbol<decltype(create)>("mpv_create");
-      initialize = Symbol<decltype(initialize)>("mpv_initialize");
-      destroy = Symbol<decltype(destroy)>("mpv_terminate_destroy");
-      option = Symbol<decltype(option)>("mpv_set_option_string");
-      typedOption = Symbol<decltype(typedOption)>("mpv_set_option");
-      get = Symbol<decltype(get)>("mpv_get_property");
-      set = Symbol<decltype(set)>("mpv_set_property");
-      command = Symbol<decltype(command)>("mpv_command");
-      wait = Symbol<decltype(wait)>("mpv_wait_event");
-      error = Symbol<decltype(error)>("mpv_error_string");
-      free = Symbol<decltype(free)>("mpv_free");
-      if ((version() >> 16) != (MPV_CLIENT_API_VERSION >> 16))
-         throw std::runtime_error{ "The libmpv DLL and development headers "
-            "have incompatible client API versions." };
-   }
-
-   void Check(int result, const char *operation) const
-   {
-      if (result < 0)
-         throw std::runtime_error{ std::string{ operation } + ": " + error(result) };
-   }
-};
-
-class MpvPlayer final {
-   // Member order ensures the player is destroyed before its DLL is unloaded.
-   MpvApi mApi;
-   std::unique_ptr<mpv_handle, decltype(&mpv_terminate_destroy)>
-      mHandle{ nullptr, nullptr };
-   bool mLoaded{};
-   wxString mRequestedPath;
-
-   std::optional<double> Number(const char *name)
-   {
-      double value{};
-      const int result = mApi.get(mHandle.get(), name, MPV_FORMAT_DOUBLE, &value);
-      if (result == MPV_ERROR_PROPERTY_UNAVAILABLE)
-         return {};
-      mApi.Check(result, name);
-      return value;
-   }
-
-   bool Flag(const char *name)
-   {
-      int value{};
-      mApi.Check(mApi.get(mHandle.get(), name, MPV_FORMAT_FLAG, &value), name);
-      return value != 0;
-   }
-
-   void ReadEvents()
-   {
-      // A bounded drain prevents a busy decoder from starving the GUI loop.
-      for (int i = 0; i != 256; ++i) {
-         const auto *event = mApi.wait(mHandle.get(), 0.0);
-         if (event->event_id == MPV_EVENT_NONE)
-            return;
-         if (event->event_id == MPV_EVENT_FILE_LOADED) {
-            char *loaded{};
-            mApi.Check(mApi.get(mHandle.get(), "path", MPV_FORMAT_STRING, &loaded), "Reading loaded video path");
-            const std::unique_ptr<char, decltype(&mpv_free)> path{loaded, mApi.free};
-            if (!path || !wxFileName(wxString::FromUTF8(path.get())).SameAs(wxFileName(mRequestedPath))) continue;
-            int64_t videoId{};
-            const int result = mApi.get(mHandle.get(), "vid",
-               MPV_FORMAT_INT64, &videoId);
-            if (result < 0 || videoId <= 0)
-               throw std::runtime_error{ "The selected file has no playable video stream." };
-            mLoaded = true;
-         }
-         else if (event->event_id == MPV_EVENT_END_FILE) {
-            const auto *end = static_cast<const mpv_event_end_file *>(event->data);
-            if (end && end->reason == MPV_END_FILE_REASON_ERROR)
-               mApi.Check(end->error, "Loading video");
-         }
-         else if (event->event_id == MPV_EVENT_SHUTDOWN)
-            throw std::runtime_error{ "The video player shut down unexpectedly." };
-      }
-   }
-
-public:
-   MpvPlayer(wxWindow &surface, const wxString &path)
-   {
-      mHandle.get_deleter() = mApi.destroy;
-      mHandle.reset(mApi.create());
-      if (!mHandle)
-         throw std::runtime_error{ "Cannot create the video player." };
-
-      const std::pair<const char *, const char *> options[] = {
-         { "config", "no" }, { "load-scripts", "no" }, { "ytdl", "no" },
-         { "audio", "no" }, { "sub", "no" }, { "terminal", "no" },
-         { "input-default-bindings", "no" }, { "input-vo-keyboard", "no" },
-         { "input-cursor", "no" }, { "idle", "yes" },
-         { "osc", "no" }, { "osd-level", "0" },
-         { "gpu-shader-cache", "no" }, { "cache-on-disk", "no" },
-         { "save-position-on-quit", "no" },
-         { "keep-open", "yes" }, { "pause", "yes" }, { "hr-seek", "yes" }
-         , { "hwdec", "auto" }, { "profile", "fast" }, { "gpu-context", "d3d11" }
-      };
-      for (const auto &entry : options)
-         mApi.Check(mApi.option(mHandle.get(), entry.first, entry.second), entry.first);
-
-      // mpv's Win32 embedding contract requires an unsigned 32-bit HWND value.
-      const auto window = static_cast<uint32_t>(
-         reinterpret_cast<uintptr_t>(surface.GetHandle()));
-      int64_t windowId = window;
-      mApi.Check(mApi.typedOption(mHandle.get(), "wid", MPV_FORMAT_INT64, &windowId),
-         "Setting video window");
-      mApi.Check(mApi.initialize(mHandle.get()), "Initializing video player");
-
-      OpenFile(path);
-   }
-
-   void OpenFile(const wxString &path)
-   {
-      ReadEvents();
-      SetPaused(true);
-      mLoaded = false; mRequestedPath = path;
-      const auto filename = Utf8(path);
-      const char *arguments[]{"loadfile", filename.c_str(), "replace", nullptr};
-      mApi.Check(mApi.command(mHandle.get(), arguments), "Opening video");
-   }
-
-   VideoPreview::PlayerSnapshot ReadState()
-   {
-      ReadEvents();
-      VideoPreview::PlayerSnapshot result;
-      if (!mLoaded)
-         return result;
-      const auto position = Number("time-pos");
-      const auto duration = Number("duration");
-      if (!position || !duration)
-         return result;
-      result.ready = true;
-      result.paused = Flag("pause");
-      result.seeking = Flag("seeking");
-      result.position = *position;
-      result.duration = *duration;
-      result.frameRate = Number("container-fps").value_or(30.0);
-      result.speed = Number("speed").value_or(1.0);
-      return result;
-   }
-
-   bool HasAudio()
-   {
-      // Audio output is disabled in mpv, so query the stream list rather than
-      // the selected audio ID. Silent videos are still valid references.
-      int64_t count{};
-      mApi.Check(mApi.get(mHandle.get(), "track-list/count", MPV_FORMAT_INT64,
-         &count), "Reading video streams");
-      for (int64_t i = 0; i < count; ++i) {
-         const auto property = "track-list/" + std::to_string(i) + "/type";
-         char *type{};
-         mApi.Check(mApi.get(mHandle.get(), property.c_str(), MPV_FORMAT_STRING,
-            &type), "Reading stream type");
-         const std::unique_ptr<char, decltype(&mpv_free)> value{ type, mApi.free };
-         if (value && std::string{ value.get() } == "audio")
-            return true;
-      }
-      return false;
-   }
-
-   double Property(const char *name) { return Number(name).value_or(0.0); }
-
-   void SetPaused(bool value)
-   {
-      int paused = value;
-      mApi.Check(mApi.set(mHandle.get(), "pause", MPV_FORMAT_FLAG, &paused),
-         "Pausing/resuming video");
-   }
-
-   void SetSpeed(double value)
-   {
-      mApi.Check(mApi.set(mHandle.get(), "speed", MPV_FORMAT_DOUBLE, &value),
-         "Setting video speed");
-   }
-
-   void Seek(double position)
-   {
-      std::ostringstream number;
-      number.imbue(std::locale::classic());
-      number << std::setprecision(17) << position;
-      const auto text = number.str();
-      const char *arguments[]{ "seek", text.c_str(), "absolute+exact", nullptr };
-      mApi.Check(mApi.command(mHandle.get(), arguments), "Seeking video");
-   }
-};
-
 class VideoPreviewFrame final : public wxFrame {
    std::weak_ptr<AudacityProject> mProject;
    wxTimer mTimer{ this };
@@ -363,7 +132,7 @@ class VideoPreviewFrame final : public wxFrame {
    wxPanel *mSurface{};
    wxStaticText *mStatus{};
    wxButton *mPlayButton{}, *mPauseButton{}, *mStopButton{};
-   std::unique_ptr<MpvPlayer> mPlayer;
+   std::unique_ptr<VideoPreview::VideoMediaPlayer> mPlayer;
    Observer::Subscription mProjectClosing;
    std::shared_ptr<const VideoPreview::PreparedMedia> mMedia;
    std::deque<std::shared_ptr<const VideoPreview::PreparedMedia>> mPreviousMedia;
@@ -444,7 +213,7 @@ class VideoPreviewFrame final : public wxFrame {
           if (transport.playing) mPreciseFrames = false;
           const bool original = mPreciseFrames && mMedia && mMedia->lightweight;
           if (original != mUsingOriginalFrames) {
-             mPlayer->OpenFile(original ? mPath : mMedia->playbackPath);
+             mPlayer->OpenVideoFile(original ? mPath : mMedia->playbackPath);
              mUsingOriginalFrames = original;
              mLoadTime.Start();
           }
@@ -452,15 +221,16 @@ class VideoPreviewFrame final : public wxFrame {
             mSurface->Show(picturePosition.visible); mVideoArea->Layout();
          }
          if (picturePosition.visible) {
+            mPlayer->SetPictureCrop(picturePosition.crop);
             auto picture = transport; picture.position = picturePosition.sourceTime;
             picture.speed *= picturePosition.playbackRate;
              VideoPreview::SynchronizeVideoPlayback(*mPlayer,picture,mPreciseFrames);
          }
-         else if (!mPlayer->ReadState().paused) mPlayer->SetPaused(true);
-         const auto video = mPlayer->ReadState();
+         else if (!mPlayer->ReadPlaybackState().paused) mPlayer->SetPlaybackPaused(true);
+         const auto video = mPlayer->ReadPlaybackState();
           if (transport.playing && video.ready && mPlaybackSampleClock.Time() - mLastSampleTime >= 100) {
             mPlaybackSamples.push_back({transport.position, video.position,
-               mPlayer->Property("frame-drop-count"), mPlayer->Property("decoder-frame-drop-count"),
+               mPlayer->ReadNumericVideoProperty("frame-drop-count"), mPlayer->ReadNumericVideoProperty("decoder-frame-drop-count"),
                video.paused, picturePosition.sourceTime, picturePosition.source.path, video.speed});
             if (mPlaybackSamples.size() > 256) mPlaybackSamples.pop_front();
              mLastSampleTime = mPlaybackSampleClock.Time();
@@ -593,8 +363,8 @@ public:
          if (!mMedia) mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, false, this, false);
       }
       const auto playbackPath = mMedia ? mMedia->playbackPath : path;
-      if (mPlayer) mPlayer->OpenFile(playbackPath);
-      else mPlayer = std::make_unique<MpvPlayer>(*mSurface,playbackPath);
+      if (mPlayer) mPlayer->OpenVideoFile(playbackPath);
+      else mPlayer = std::make_unique<VideoPreview::VideoMediaPlayer>(*mSurface,playbackPath);
       mLoadTime.Start();
       if (saved) return true;
 
@@ -603,33 +373,33 @@ public:
       // the timer starts only after soundtrack import has finished.
       wxProgressDialog progress{ _("Open Video"), _("Loading video..."),
          100, GetParent(), wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE };
-      while (!mPlayer->ReadState().ready) {
+      while (!mPlayer->ReadPlaybackState().ready) {
          if (!progress.Pulse())
             return false;
          if (mLoadTime.Time() > 15000)
             throw std::runtime_error{ "The video did not become ready within 15 seconds." };
          wxMilliSleep(10);
       }
-      const auto state = mPlayer->ReadState();
-      mSourceHasAudio = mPlayer->HasAudio();
+      const auto state = mPlayer->ReadPlaybackState();
+      mSourceHasAudio = mPlayer->HasAudioStream();
       mSourceDuration = state.duration; mSourceFrameRate = state.frameRate;
       // Capture ORIGINAL display geometry before replacing this decoder's file
       // with a low-resolution proxy. Rotation is applied by the output, not dw/dh.
-      double width = mPlayer->Property("video-params/dw"), height = mPlayer->Property("video-params/dh");
-      if (width <= 0 || height <= 0) { width = mPlayer->Property("width"); height = mPlayer->Property("height"); }
+      double width = mPlayer->ReadNumericVideoProperty("video-params/dw"), height = mPlayer->ReadNumericVideoProperty("video-params/dh");
+      if (width <= 0 || height <= 0) { width = mPlayer->ReadNumericVideoProperty("width"); height = mPlayer->ReadNumericVideoProperty("height"); }
       if (!std::isfinite(width) || !std::isfinite(height) || width < 1 || height < 1 || width > 65536 || height > 65536)
          throw std::runtime_error("The video has no usable source canvas size.");
       mSourceWidth = int(std::llround(width)); mSourceHeight = int(std::llround(height));
-      const auto sourceRotation = mPlayer->Property("video-params/rotate");
+      const auto sourceRotation = mPlayer->ReadNumericVideoProperty("video-params/rotate");
       if (!std::isfinite(sourceRotation) || std::abs(sourceRotation) > 360000)
          throw std::runtime_error("The video has no usable source rotation.");
       const auto rotation = int(std::llround(sourceRotation)) % 360;
       if (rotation == 90 || rotation == 270 || rotation == -90 || rotation == -270) std::swap(mSourceWidth, mSourceHeight);
-      const bool lightweight = mPlayer->Property("width") * mPlayer->Property("height") > 1280.0 * 720.0 ||
+      const bool lightweight = mPlayer->ReadNumericVideoProperty("width") * mPlayer->ReadNumericVideoProperty("height") > 1280.0 * 720.0 ||
          state.frameRate > 60;
       mMedia = VideoPreview::PrepareVideoMedia(path, state.duration, lightweight, this);
       if (lightweight) {
-         mPlayer->OpenFile(mMedia->playbackPath);
+         mPlayer->OpenVideoFile(mMedia->playbackPath);
          mDurationChecked = false; mLoadTime.Start();
       }
       return true;
@@ -646,7 +416,7 @@ public:
    int GetVideoSourceWidth() const { return mSourceWidth; }
    int GetVideoSourceHeight() const { return mSourceHeight; }
    auto Media() const { return mMedia; }
-   auto PlayerState() { return mPlayer ? mPlayer->ReadState() : VideoPreview::PlayerSnapshot{}; }
+   auto PlayerState() { return mPlayer ? mPlayer->ReadPlaybackState() : VideoPreview::PlayerSnapshot{}; }
    wxButton *TransportButton(VideoPreview::PreviewTransportAction action) const {
       switch (action) {
       case VideoPreview::PreviewTransportAction::Play: return mPlayButton;
@@ -658,7 +428,7 @@ public:
    uintptr_t StatusHandle() const { return reinterpret_cast<uintptr_t>(mStatus->GetHandle()); }
    uintptr_t SurfaceHandle() const { return reinterpret_cast<uintptr_t>(mSurface->GetHandle()); }
    bool PictureVisible() const { return mSurface->IsShown(); }
-   double PlayerProperty(const char *name) { return mPlayer ? mPlayer->Property(name) : 0.0; }
+   double PlayerProperty(const char *name) { return mPlayer ? mPlayer->ReadNumericVideoProperty(name) : 0.0; }
    const auto &PlaybackSamples() const { return mPlaybackSamples; }
 
    void StartPreview()

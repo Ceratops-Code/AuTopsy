@@ -36,7 +36,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    target_compile_features(video-edits-test PRIVATE cxx_std_17)
    target_link_libraries(video-edits-test PRIVATE Catch2::Catch2)
    catch_discover_tests(video-edits-test TEST_PREFIX "video-edits::" PROPERTIES TIMEOUT 30)
-   add_executable(video-composition-test EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp EvaluateVideoTimeline.cpp
+   add_executable(video-composition-test EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp EvaluateVideoTimeline.cpp RenderVideoComposition.cpp
       TestVideoComposition.cpp ../../tests/Catch2Main.cpp)
    target_compile_features(video-composition-test PRIVATE cxx_std_17)
    target_link_libraries(video-composition-test PRIVATE Catch2::Catch2)
@@ -116,9 +116,10 @@ if(NOT EXISTS "${audacity_video_ffmpeg_runtime}/LICENSE.txt")
 endif()
 
 target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVideoClips.cpp JoinVideoClips.h
-   ShowVideoPreview.cpp SyncVideoPlayback.h
+   ShowVideoPreview.cpp SyncVideoPlayback.h PlayVideoMedia.cpp PlayVideoMedia.h
    ExportVideoMix.cpp ExportVideoMix.h EditVideoTimeline.cpp EditVideoTimeline.h
    PlanVideoEdits.cpp PlanVideoEdits.h EvaluateVideoTimeline.cpp EvaluateVideoTimeline.h
+   RenderVideoComposition.cpp RenderVideoComposition.h EditVideoComposition.cpp EditVideoComposition.h
    PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h
    CreateVideoTrack.cpp CreateVideoTrack.h ChooseVideoExport.cpp ChooseVideoExport.h RelinkVideoMedia.cpp RelinkVideoMedia.h
    ../clip-groups/LinkMediaClips.cpp ../clip-groups/LinkMediaClips.h

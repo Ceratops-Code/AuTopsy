@@ -2,8 +2,9 @@
 
 Status: current implementation plus target architecture. Native clips,
 Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
-per-clip speed are implemented in this branch. Crop and embedded-layer geometry remain independent
-foundations awaiting native controls, saved properties and pixel rendering.
+per-clip speed and picture crop are implemented in this branch. Embedded-layer
+geometry remains an independent foundation awaiting native controls, saved
+parent identities and pixel rendering.
 Other later operations remain targets until their delivery status says otherwise.
 Owner: AuTopsy maintainers.
 
@@ -139,7 +140,7 @@ interface cannot promise immunity to every future product requirement.
 | Owned editing kernel, native adapters | Target. Upstream pointers, track classes, XML hooks and commands stay at boundaries. | Reusing native audio clips as fake picture containers couples video to sample storage and audio-only transformations. |
 | Content separate from placement | Implemented for joins and affine retiming: immutable retained content and an independent visible window. | A single media tuple cannot represent an editable multi-source join or preserve deleted interior gaps. |
 | One edit plan and one native history transaction | Target. All linked members are checked before any visible change. | Separate per-track commands expose half-edited picture/sound on failure. |
-| One evaluation policy for preview/export | Simple and joined clips share source sampling, internal picture boundaries and flat-track Mute/Solo selection. Spatial composition still awaits native adoption. | Two visibility implementations drift when mute, solo and compounds are added. |
+| One evaluation policy for preview/export | Simple and joined clips share source sampling, internal picture boundaries and flat-track Mute/Solo selection. Retained picture crops reach native preview/export; embedded layers still await native adoption. | Two visibility implementations drift when mute, solo and compounds are added. |
 | In-process kernel, isolated media workers | Selected. Transactions and the native audio clock stay synchronous; expensive media work can be replaced separately. | Network microservices increase deployment and partial-failure work without improving local editing. |
 | Existing mpv and FFmpeg | Retained. They already decode/render the supported media. | Writing a decoder or compositor duplicates mature libraries and increases maintenance. |
 | OpenTimelineIO | Assessed, not selected as the internal engine. Useful later for interchange. | Its editorial schemas do not supply native edit transactions, source-bound enforcement, preview or rendering; adopting the whole model now adds another adapter and format lifecycle. |
@@ -189,7 +190,10 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/clip-groups/LinkMediaClips.h/.cpp` | Mixed picture/sound links and edits | Native audio adapter and one linked edit coordinator |
 | `src/clip-groups/EditClipMarkers.h/.cpp` | Content-relative flags | Marker operations and native marker UI boundary |
 | `src/video/ShowVideoTrack.h/.cpp` | Pane painting and mouse edits | View and semantic gesture requests only |
-| `src/video/ShowVideoPreview.cpp` | Window, mpv, audio-clock following | View/player adapter, using shared evaluation and transport facade |
+| `src/video/ShowVideoPreview.cpp` | Window and audio-clock following | View adapter using shared sampling and transport facade |
+| `src/video/PlayVideoMedia.h/.cpp` | Owned decoder/window boundary | mpv loading, playback and picture crop; no native project objects |
+| `src/video/EditVideoComposition.h/.cpp` | Native picture crop controls and history | Numeric margins, reset and one native history transaction |
+| `src/video/RenderVideoComposition.h/.cpp` | Host-free source geometry and encoder expressions | Oriented crop projection and FFmpeg crop translation |
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
 | `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan |
 | `src/video/ChooseVideoExport.h/.cpp` | Export preset values and chooser | Explicit codec/size/FPS/quality policy |
@@ -300,8 +304,10 @@ Target objects:
   transforms and output settings shared by preview and export.
 - **FrameCrop:** retained left/top/right/bottom margins as fractions of the oriented
   original source. Removing borders is spatial crop; changing clip start/end is
-  temporal trim. Crop changes neither source bytes nor clip duration. Cropping
-  precedes placement, while project canvas dimensions remain independent.
+  temporal trim. Crop changes neither source bytes nor clip duration. Each
+  retained clip owns its margins; joined parents apply their crop outside child
+  crops. Separation composes those margins into the resulting pieces.
+  Cropping precedes placement; canvas dimensions remain independent.
 - **Embedded relationship / FrameRectangle:** stable parent track identity and
   parent-relative rectangle. The child stays an ordinary native video track with
   a parent badge and explicit detach. Bound groups move together; hierarchy never
@@ -526,7 +532,10 @@ Crop margins remain fractions of original oriented source dimensions. Proxy
 resolution and relinking to a different resolution cannot change the intended
 framing. Placement maps the retained crop into its rectangle; letterboxing/aspect
 controls belong to the render settings rather than altering those margins. The
-first UI should offer frame handles, numeric margins and reset for the whole clip.
+current UI offers numeric margins and reset for the whole clip. Interactive
+frame handles remain a later view operation. The decoder crop adapter currently
+accepts display rotation in quarter turns; arbitrary angles need an oriented
+preview source before this rectangle adapter.
 It must retain crop/embedding through copy, split, compatible joins, save/reopen
 and Undo/Redo before release. Hidden clips still contribute to project duration
 and source protection. Audio mute/solo/gain remain separate native operations.

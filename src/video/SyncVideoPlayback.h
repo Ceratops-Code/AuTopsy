@@ -137,7 +137,8 @@ struct PlayerSnapshot {
 
 //! Follow one current audio snapshot without ever allowing video to drive audio.
 /*!
-   Player supplies ReadState(), SetPaused(bool), Seek(double), SetSpeed(double).
+   Player supplies ReadPlaybackState(), SetPlaybackPaused(bool),
+   SeekSourceTime(double) and SetPlaybackSpeed(double).
    Effects throw on failure. A later call reads actual player state again,
    including after an interruption on either side of an effect.
 
@@ -149,7 +150,7 @@ template<typename Player>
 void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio,
    bool preciseFrames = false)
 {
-   auto video = player.ReadState();
+   auto video = player.ReadPlaybackState();
    if (!video.ready)
       return;
 
@@ -157,7 +158,7 @@ void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio,
        audio.speed <= 0.0 || !std::isfinite(video.position) ||
        !std::isfinite(video.duration) || video.duration <= 0.0) {
       if (!video.paused)
-         player.SetPaused(true);
+         player.SetPlaybackPaused(true);
       return;
    }
 
@@ -179,26 +180,26 @@ void SynchronizeVideoPlayback(Player &player, const TransportSnapshot &audio,
 
    if (!video.paused &&
        (!shouldPlay || needsSeek(video) || needsSpeed(video)))
-      player.SetPaused(true);
+      player.SetPlaybackPaused(true);
 
-   video = player.ReadState();
+   video = player.ReadPlaybackState();
    if (!video.ready || video.seeking)
       return;
 
    if (needsSeek(video)) {
-      player.Seek(target);
+      player.SeekSourceTime(target);
       return; // Observe completion on a fresh call before resuming.
    }
 
-   video = player.ReadState();
+   video = player.ReadPlaybackState();
    if (!video.ready || video.seeking)
       return;
    if (needsSpeed(video))
-      player.SetSpeed(audio.speed);
+      player.SetPlaybackSpeed(audio.speed);
 
-   video = player.ReadState();
+   video = player.ReadPlaybackState();
    if (video.ready && !video.seeking && video.paused == shouldPlay)
-      player.SetPaused(!shouldPlay);
+      player.SetPlaybackPaused(!shouldPlay);
 }
 
 } // namespace VideoPreview

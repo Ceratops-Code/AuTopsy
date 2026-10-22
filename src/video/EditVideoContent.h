@@ -9,6 +9,21 @@
 #include <utility>
 #include <vector>
 
+namespace VideoEditing {
+// Fractions of the oriented picture removed from each edge. Content owns these
+// values so retained pieces keep their picture edits through joins and copies.
+struct VideoFrameCrop {
+   double left{}, top{}, right{}, bottom{};
+   bool operator==(const VideoFrameCrop &other) const {
+      return left == other.left && top == other.top &&
+         right == other.right && bottom == other.bottom;
+   }
+};
+void RequireUsableVideoFrameCrop(const VideoFrameCrop &crop);
+// Apply outer crop to an already cropped inner picture.
+VideoFrameCrop ComposeVideoFrameCrops(const VideoFrameCrop &inner, const VideoFrameCrop &outer);
+}
+
 namespace VideoTimeline {
 // Limits apply to one retained content tree, including its owning clip. The
 // native reader uses the same bounds; a track may contain many such trees.
@@ -31,6 +46,7 @@ struct Clip {
    // Snapshots share immutable content; editing a window never edits a sibling.
    std::shared_ptr<const VideoClipContent> content;
    double playbackRate{1}; // Content seconds per second in the containing timeline.
+   VideoEditing::VideoFrameCrop crop;
    double End() const { return start + duration; }
    double ContentTimeAtProjectTime(double at) const { return sourceStart + (at - start) * playbackRate; }
    double ProjectTimeAtContentTime(double at) const { return start + (at - sourceStart) / playbackRate; }
@@ -46,6 +62,7 @@ struct VideoContentSample {
    MediaSource source;
    double sourceTime{};
    double playbackRate{1}; // Product of the rates along the retained-content path.
+   VideoEditing::VideoFrameCrop crop;
    explicit operator bool() const { return leaf != nullptr; }
 };
 double VideoContentDuration(const Clip &clip, const MediaSource &fallback);

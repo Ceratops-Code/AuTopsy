@@ -2,6 +2,7 @@
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
 #include "CreateVideoTrack.h"
+#include "EditVideoComposition.h"
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
@@ -517,6 +518,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.AppendSeparator(); menu.Append(7,_("Heal Split")); menu.Append(8,_("Join"));
          menu.Append(9,_("Separate Joined Clip"));
          menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, mId != 0);
+         menu.Append(11, _("Crop Picture...")); menu.Enable(11, mId != 0);
          for (int id : {7, 8, 9}) menu.Enable(id, mId != 0);
          for (int id : {1, 2, 4, 5, 6})
             menu.Enable(id, !ViewInfo::Get(*project).selectedRegion.isPoint());
@@ -535,6 +537,8 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],mId,found->start);
          }
+         else if (choice == 11)
+            VideoEditing::ShowVideoClipCropDialog(*project, *track, mId, parent);
          else if (choice == 10) {
             const auto found = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
                [&](const auto &clip) { return clip.id == mId; });

@@ -4,14 +4,6 @@
 
 namespace VideoEditing {
 namespace {
-void RequireCrop(const VideoFrameCrop &crop)
-{
-   for (const auto value : {crop.left, crop.top, crop.right, crop.bottom})
-      if (!std::isfinite(value) || value < 0 || value >= 1)
-         throw std::runtime_error("Video crop margins must be finite fractions from zero to less than one.");
-   if (crop.left + crop.right >= 1 || crop.top + crop.bottom >= 1)
-      throw std::runtime_error("Video crop must retain a nonempty source rectangle.");
-}
 void RequireRectangle(const VideoFrameRectangle &rect)
 {
    for (const auto value : {rect.x, rect.y, rect.width, rect.height})
@@ -52,7 +44,6 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
              std::none_of(timeline.clips.begin(), timeline.clips.end(),
                 [&](const auto &clip) { return clip.id == appearance.clipId; }))
             throw std::runtime_error("Clip picture properties require unique, existing clip identities.");
-         RequireCrop(appearance.crop);
       }
       styles[index->second] = style;
    }
@@ -92,7 +83,7 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
       const auto rectangle = PlaceWithin(item.parent, style.rectangle);
       result.layers.push_back({track.id, clip->id, sample.source,
          sample.sourceTime,
-         appearance == style.clips.end() ? VideoFrameCrop{} : appearance->crop, rectangle, sample.playbackRate});
+         sample.crop, rectangle, sample.playbackRate});
       // Lower roots are processed first. Children go above their own parent,
       // irrespective of where an upstream pane happens to display their rows.
       for (const auto child : children[item.index]) pending.push_back({child, rectangle});

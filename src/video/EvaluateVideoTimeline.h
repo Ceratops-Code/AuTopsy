@@ -1,14 +1,12 @@
 // Pure composition planning, with no decoder, GUI, filesystem or native types.
-// This foundation does not yet enable crop/PiP in the native renderer or format.
+// Retained clip crop is shared with native rendering; embedded layers await native adoption.
 #pragma once
 #include "PlanVideoEdits.h"
 
 namespace VideoEditing {
-struct VideoFrameCrop { double left{}, top{}, right{}, bottom{}; };
 struct VideoFrameRectangle { double x{}, y{}, width{1}, height{1}; };
 struct VideoClipPresentation {
    uint64_t clipId{};
-   VideoFrameCrop crop;
    bool muted{};
 };
 struct VideoLayerPresentation {

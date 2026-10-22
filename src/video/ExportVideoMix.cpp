@@ -1,4 +1,5 @@
 #include "ExportVideoMix.h"
+#include "RenderVideoComposition.h"
 #include "Export.h"
 #include "ExportPluginRegistry.h"
 #include "Prefs.h"
@@ -431,13 +432,13 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    else {
       // FFmpeg owns decoding, trimming, gap frames and concatenation. This
       // adapter translates only our value model, never Audacity track internals.
-       struct Span { size_t input; double sourceStart, duration; bool gap; double playbackRate{1}; };
+       struct Span { size_t input; double sourceStart, duration; bool gap; double playbackRate{1}; VideoEditing::VideoFrameCrop crop; };
       std::vector<Span> spans;
       double end{};
       for (size_t clipIndex = 0; clipIndex < timeline.clips.size(); ++clipIndex) {
          const auto &clip = timeline.clips[clipIndex];
          if (clip.start > end + 1e-7) spans.push_back({0, 0, clip.start - end, true});
-          spans.push_back({clipInputs[clipIndex], clip.sourceStart, clip.duration, false, clip.playbackRate});
+          spans.push_back({clipInputs[clipIndex], clip.sourceStart, clip.duration, false, clip.playbackRate, clip.crop});
          end = clip.End();
       }
       if (duration > end + 1e-7) spans.push_back({0, 0, duration - end, true});
@@ -457,8 +458,12 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
          const auto [width, height] = *pictureSize;
          if (span.gap)
             graph << "color=c=black:s=" << width << "x" << height << ":r=" << outputRate << ":d=" << span.duration;
-         else graph << "[s" << i << "]trim=start=" << span.sourceStart << ":duration=" << span.duration * span.playbackRate
-            << ",setpts=(PTS-STARTPTS)/" << span.playbackRate;
+         else {
+            graph << "[s" << i << "]trim=start=" << span.sourceStart << ":duration=" << span.duration * span.playbackRate
+               << ",setpts=(PTS-STARTPTS)/" << span.playbackRate;
+            const auto crop = VideoEditing::VideoCropFilterExpression(span.crop);
+            if (!crop.empty()) graph << "," << crop;
+         }
          graph << ",fps=" << outputRate
             << ",scale=" << width << ":" << height << ":force_original_aspect_ratio=decrease:force_divisible_by=2"
             << ",pad=" << width << ":" << height << ":(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v" << i << "];\n";

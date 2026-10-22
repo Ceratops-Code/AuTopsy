@@ -2,6 +2,27 @@
 #include "EditVideoTimeline.h"
 #include <set>
 
+namespace VideoEditing {
+void RequireUsableVideoFrameCrop(const VideoFrameCrop &crop)
+{
+   for (const auto value : {crop.left, crop.top, crop.right, crop.bottom})
+      if (!std::isfinite(value) || value < 0 || value >= 1)
+         throw std::runtime_error("Picture crop margins must be finite fractions from zero to less than one.");
+   if (crop.left + crop.right >= 1 || crop.top + crop.bottom >= 1)
+      throw std::runtime_error("Picture crop must retain a nonempty rectangle.");
+}
+VideoFrameCrop ComposeVideoFrameCrops(const VideoFrameCrop &inner, const VideoFrameCrop &outer)
+{
+   RequireUsableVideoFrameCrop(inner); RequireUsableVideoFrameCrop(outer);
+   const auto width = 1 - inner.left - inner.right;
+   const auto height = 1 - inner.top - inner.bottom;
+   VideoFrameCrop result{inner.left + outer.left * width, inner.top + outer.top * height,
+      inner.right + outer.right * width, inner.bottom + outer.bottom * height};
+   RequireUsableVideoFrameCrop(result);
+   return result;
+}
+}
+
 namespace VideoTimeline {
 namespace {
 MediaSource Source(const Clip &clip, const MediaSource &fallback)
@@ -9,10 +30,11 @@ MediaSource Source(const Clip &clip, const MediaSource &fallback)
 bool SameSource(const MediaSource &a, const MediaSource &b)
 { return a.path == b.path && a.duration == b.duration && a.frameRate == b.frameRate &&
    a.width == b.width && a.height == b.height; }
-void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &count, double parentRate = 1)
+void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &count, double parentRate = 1, VideoEditing::VideoFrameCrop parentCrop = {})
 {
    if (depth > MaximumVideoContentDepth || ++count > MaximumVideoContentClips)
       throw std::runtime_error("Joined video exceeds the supported nesting or piece limit.");
+   const auto crop = VideoEditing::ComposeVideoFrameCrops(clip.crop, parentCrop);
    const auto duration = VideoContentDuration(clip, fallback);
    if (!std::isfinite(clip.start) || !std::isfinite(clip.sourceStart) ||
        !std::isfinite(clip.duration) || clip.start < 0 || clip.sourceStart < 0 || clip.duration <= 0 ||
@@ -36,7 +58,7 @@ void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &
       if (!part.id || !ids.insert(part.id).second || part.start < end - 1e-7 ||
           part.End() > duration + 1e-7 || (!part.content && part.media.path.empty()))
          throw std::runtime_error("Joined video pieces need unique IDs, owned media and ordered ranges.");
-      Check(part, {}, depth + 1, count, parentRate * clip.playbackRate); end = part.End();
+      Check(part, {}, depth + 1, count, parentRate * clip.playbackRate, crop); end = part.End();
    }
 }
 void Edges(const Clip &clip, double origin, double scale, double from, double to, std::vector<double> &out)
@@ -96,8 +118,9 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
    if (!std::isfinite(time) || time < 0 || time >= VideoContentDuration(clip, fallback)) return {};
    const Clip *current = &clip;
    double playbackRate = clip.playbackRate;
+   auto crop = clip.crop;
    for (size_t depth{}; depth <= MaximumVideoContentDepth; ++depth) {
-      if (!current->content) return {current, Source(*current, current == &clip ? fallback : MediaSource{}), time, playbackRate};
+      if (!current->content) return {current, Source(*current, current == &clip ? fallback : MediaSource{}), time, playbackRate, crop};
       const auto &parts = current->content->parts;
       const auto found = std::upper_bound(parts.begin(), parts.end(), time,
          [](double t, const Clip &part) { return t < part.start; });
@@ -106,6 +129,7 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
       if (time >= current->End()) return {};
       time = current->ContentTimeAtProjectTime(time);
       playbackRate *= current->playbackRate;
+      crop = VideoEditing::ComposeVideoFrameCrops(current->crop, crop);
    }
    throw std::runtime_error("Joined video exceeds the supported nesting limit.");
 }
@@ -152,7 +176,7 @@ void RemapVideoContentLinks(Clip &clip, const std::vector<std::pair<std::string,
 }
 bool SameVideoContent(const Clip &a, const Clip &b)
 {
-   if (a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
+   if (!(a.crop == b.crop) || a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
        a.markers.size() != b.markers.size()) return false;
    for (size_t i{}; i < a.markers.size(); ++i)
       if (a.markers[i].id != b.markers[i].id || a.markers[i].position != b.markers[i].position ||

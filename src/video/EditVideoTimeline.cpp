@@ -1,6 +1,7 @@
 // Native adapters for project attachment/XML, undo, commands and the clip editor.
 // Picture files remain external references; project XML owns only clip metadata.
 #include "EditVideoTimeline.h"
+#include "EditVideoComposition.h"
 #include "CreateVideoTrack.h"
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
@@ -333,6 +334,45 @@ public:
 const ComponentInterfaceSymbol SetVideoClipBoundsCommand::Symbol{XO("SetVideoClipBounds")};
 BuiltinCommandsModule::Registration<SetVideoClipBoundsCommand> sSetVideoClipBounds;
 
+
+class SetVideoClipCropCommand final : public AudacityCommand {
+   wxString mId;
+   int mTrack{-1};
+   double mLeft{}, mTop{}, mRight{}, mBottom{};
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override {
+      return XO("Crop the picture edges using fractions from zero to less than one.");
+   }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
+      visitor.Define(mId, wxT("Id"), wxString{});
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      visitor.Define(mLeft, wxT("Left"), 0.0, 0.0, 1.0);
+      visitor.Define(mTop, wxT("Top"), 0.0, 0.0, 1.0);
+      visitor.Define(mRight, wxT("Right"), 0.0, 0.0, 1.0);
+      visitor.Define(mBottom, wxT("Bottom"), 0.0, 0.0, 1.0);
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         unsigned long long id{};
+         if (!mId.ToULongLong(&id) || !id)
+            throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
+         auto &track = FindClipTrack(context.project, id, mTrack);
+         VideoEditing::ChangeProjectVideoClipCrop(
+            context.project, track, id, {mLeft, mTop, mRight, mBottom});
+         RefreshPreviewLater(context.project);
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+const ComponentInterfaceSymbol SetVideoClipCropCommand::Symbol{XO("SetVideoClipCrop")};
+BuiltinCommandsModule::Registration<SetVideoClipCropCommand> sSetVideoClipCrop;
+
 class GetVideoClipsCommand final : public AudacityCommand {
 public:
    static const ComponentInterfaceSymbol Symbol;
@@ -371,6 +411,10 @@ public:
                out.Key("start"); out.Double(clip.start); out.Key("end"); out.Double(clip.End());
                out.Key("sourceStart"); out.Double(clip.sourceStart); out.Key("duration"); out.Double(clip.duration);
                 out.Key("playbackRate"); out.Double(clip.playbackRate);
+               out.Key("crop"); out.StartObject();
+               out.Key("left"); out.Double(clip.crop.left); out.Key("top"); out.Double(clip.crop.top);
+               out.Key("right"); out.Double(clip.crop.right); out.Key("bottom"); out.Double(clip.crop.bottom);
+               out.EndObject();
                out.Key("source"); out.String(source.path.c_str()); out.Key("fps"); out.Double(VideoTimeline::VideoContentFrameRate(clip, source));
                out.Key("joined"); out.Bool(bool(clip.content));
                out.Key("pieces"); out.Uint64(clip.content ? clip.content->parts.size() : 1);
@@ -494,6 +538,7 @@ AttachedItem sVideoClipScripting{
       Command("JoinVideoClips", XXO("Join Video Clips"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("SplitVideo", XXO("Split Video at Cursor"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("GetVideoClips", XXO("Get Video Clips"), CommandDispatch::OnAudacityCommand, AlwaysEnabledFlag),
+      Command("SetVideoClipCrop", XXO("Set Video Clip Crop..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("MoveVideoClip", XXO("Move Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("DeleteVideoClip", XXO("Delete Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag())),
    wxT("Optional/Extra/Part2/Scriptables2")

@@ -198,7 +198,11 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       if (!ReadAttribute(attributes, "id", clip.id) || !ReadAttribute(attributes, "start", clip.start) ||
           !ReadAttribute(attributes, "sourceStart", clip.sourceStart) ||
           !ReadAttribute(attributes, "videoDuration", clip.duration) ||
-          !ReadOptionalAttribute(attributes, "videoRate", clip.playbackRate)) return false;
+          !ReadOptionalAttribute(attributes, "videoRate", clip.playbackRate) ||
+          !ReadOptionalAttribute(attributes, "videoCropLeft", clip.crop.left) ||
+          !ReadOptionalAttribute(attributes, "videoCropTop", clip.crop.top) ||
+          !ReadOptionalAttribute(attributes, "videoCropRight", clip.crop.right) ||
+          !ReadOptionalAttribute(attributes, "videoCropBottom", clip.crop.bottom)) return false;
       std::string_view markers;
       if (ReadAttribute(attributes, "clipMarkers", markers))
          clip.markers = ClipMarkers::DecodeMarkers(std::string(markers));
@@ -275,6 +279,12 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);
       writer.WriteAttr("videoDuration", clip.duration, 17);
       if (clip.playbackRate != 1) writer.WriteAttr("videoRate", clip.playbackRate, 17);
+      if (!(clip.crop == VideoEditing::VideoFrameCrop{})) {
+         writer.WriteAttr("videoCropLeft", clip.crop.left, 17);
+         writer.WriteAttr("videoCropTop", clip.crop.top, 17);
+         writer.WriteAttr("videoCropRight", clip.crop.right, 17);
+         writer.WriteAttr("videoCropBottom", clip.crop.bottom, 17);
+      }
       writer.WriteAttr("mediaSource", wxString::FromUTF8(source.path));
       writer.WriteAttr("mediaDuration", source.duration, 17); writer.WriteAttr("mediaFps", source.frameRate, 17);
       writer.WriteAttr("mediaWidth", source.width); writer.WriteAttr("mediaHeight", source.height);
@@ -338,7 +348,7 @@ ProjectPicture FindProjectPicture(AudacityProject &project, double time)
    const auto picture = EvaluateVideoLayers(GetProjectVisibleVideoLayers(project), time);
    if (!picture.clip) return {};
    return {true, picture.source,
-       picture.sourceTime, picture.clip->id, picture.playbackRate};
+       picture.sourceTime, picture.clip->id, picture.playbackRate, picture.crop};
 }
 std::vector<const Timeline*> GetProjectVisibleVideoLayers(const AudacityProject &project)
 {

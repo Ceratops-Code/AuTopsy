@@ -45,6 +45,11 @@ The audio engine and its established editing tools come from Audacity:
 ## Users
 
 Download the Windows installer from [AuTopsy Releases](https://github.com/Ceratops-Code/AuTopsy/releases).
+
+To remove picture edges, right-click a video clip and choose **Crop Picture...**.
+Set the left/top/right/bottom percentages, or use **Reset Crop**. The source
+footage stays available, and crop follows the clip through saved projects and
+ordinary editing.
 Local deployments use the installer, including locally built releases; source
 and build directories are not installation inputs. A local installation runs from
 `%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing

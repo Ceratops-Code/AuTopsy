@@ -433,6 +433,12 @@ Older records lacking execution scope remain historical acceptance, without
 invented scope or forced retesting of an unchanged installer.
 Portable Settings is removed when the owned app exits.
 
+Picture crop also has a public command:
+`SetVideoClipCrop: Id="1" Track=0 Left=0.1 Top=0 Right=0 Bottom=0`.
+Margins are fractions in `[0, 1)`; opposing margins must leave a picture.
+Repeated equal values add no history entry. `GetVideoClips` reports the saved
+margins in `crop`; setting all four to zero restores the picture.
+
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
 ffmpeg.exe, ffprobe.exe and

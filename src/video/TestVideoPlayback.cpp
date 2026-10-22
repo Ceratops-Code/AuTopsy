@@ -125,9 +125,9 @@ public:
    bool asynchronousSeek{};
    double seekTarget{};
 
-   PlayerSnapshot ReadState() const { return state; }
+   PlayerSnapshot ReadPlaybackState() const { return state; }
 
-   void SetPaused(bool value)
+   void SetPlaybackPaused(bool value)
    {
       AtBoundary();
       state.paused = value;
@@ -135,7 +135,7 @@ public:
       AtBoundary();
    }
 
-   void Seek(double value)
+   void SeekSourceTime(double value)
    {
       REQUIRE(state.paused);
       REQUIRE_FALSE(state.seeking);
@@ -149,7 +149,7 @@ public:
       AtBoundary();
    }
 
-   void SetSpeed(double value)
+   void SetPlaybackSpeed(double value)
    {
       REQUIRE(state.paused);
       AtBoundary();

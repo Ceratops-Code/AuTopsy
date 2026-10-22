@@ -79,6 +79,7 @@ struct ProjectPicture {
    double sourceTime{};
    uint64_t clipId{};
    double playbackRate{1};
+   VideoEditing::VideoFrameCrop crop;
 };
 ProjectPicture FindProjectPicture(AudacityProject &project, double time);
 bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &source,
