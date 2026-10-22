@@ -311,6 +311,25 @@ inline bool DragVideoClipEdge(Timeline &timeline, uint64_t id, bool left, double
    return TrimVideoClip(timeline, id, left ? at : found->start, left ? found->End() : at);
 }
 
+struct VideoTrimEdge { uint64_t id{}; bool left{}; };
+
+// Adjacent clips share one visible seam. Dragging it into either clip trims
+// that side rather than trying to extend its neighbor into occupied space.
+// Once a gap exists, the chosen edge keeps its ordinary trim/untrim behavior.
+inline VideoTrimEdge ChooseVideoTrimEdge(const Timeline &timeline, uint64_t id, bool left, double motion)
+{
+   RequireWellFormedTimeline(timeline);
+   if (!std::isfinite(motion)) throw std::runtime_error("Choose a finite video edge motion.");
+   const auto found = std::find_if(timeline.clips.begin(), timeline.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == timeline.clips.end()) throw std::runtime_error("The video clip was removed.");
+   if ((left && motion < 0) || (!left && motion > 0))
+      for (const auto &other : timeline.clips) if (other.id != id &&
+            std::abs(left ? other.End() - found->start : other.start - found->End()) < 1e-7)
+         return {other.id, !left};
+   return {id, left};
+}
+
 // A borrowed evaluation result is valid only while its input timelines are
 // unchanged. It is used immediately by preview/export adapters, never persisted
 // or retained across native edits. Ordering and gap selection live here so the

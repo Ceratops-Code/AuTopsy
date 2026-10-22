@@ -465,6 +465,51 @@ TEST_CASE("Video edge trimming is frame snapped, reversible and atomically rejec
    REQUIRE(dragged.clips[1].sourceStart == before.clips[1].sourceStart);
 }
 
+TEST_CASE("Shared video seams trim the inward side from either pixel owner and can be restored",
+   "[video-timeline]")
+{
+   using namespace VideoTimeline;
+   const auto seam = 32.0 / 30;
+   auto original = CreateVideoTimeline("movie.mp4", 4, 30);
+   REQUIRE(SplitClipAt(original, seam));
+   for (const auto hit : {uint64_t{1}, uint64_t{2}})
+      for (const auto motion : {-0.5, 0.5}) {
+         const auto edge = ChooseVideoTrimEdge(original, hit, hit == 2, motion);
+         const auto edited = motion > 0 ? 2 : 1;
+         REQUIRE(edge.id == edited);
+         REQUIRE(edge.left == (motion > 0));
+         // A preview is independent: abandoning it leaves both saved clips intact.
+         auto preview = original;
+         REQUIRE(DragVideoClipEdge(preview, edge.id, edge.left, seam + motion));
+         REQUIRE(KeepsOriginalPicture(original));
+         REQUIRE(original.clips[1].sourceStart == Approx(seam));
+         REQUIRE(preview.clips[0].start == 0);
+         REQUIRE(preview.clips[1].End() == Approx(4));
+         if (motion > 0) {
+            REQUIRE(preview.clips[0].End() == Approx(seam));
+            REQUIRE(preview.clips[1].start == Approx(seam + motion));
+            REQUIRE(preview.clips[1].sourceStart == Approx(seam + motion));
+         }
+         else {
+            REQUIRE(preview.clips[0].End() == Approx(seam + motion));
+            REQUIRE(preview.clips[1].start == Approx(seam));
+            REQUIRE(preview.clips[1].sourceStart == Approx(seam));
+         }
+         REQUIRE_FALSE(DragVideoClipEdge(preview, edge.id, edge.left, seam + motion));
+         const auto returning = ChooseVideoTrimEdge(preview, edge.id, edge.left, -motion);
+         REQUIRE(returning.id == edge.id);
+         REQUIRE(returning.left == edge.left);
+         REQUIRE(DragVideoClipEdge(preview, returning.id, returning.left, seam));
+         REQUIRE(KeepsOriginalPicture(preview));
+         REQUIRE_FALSE(DragVideoClipEdge(preview, returning.id, returning.left, seam));
+         REQUIRE(preview.clips[0].id == 1);
+         REQUIRE(preview.clips[1].id == 2);
+      }
+   REQUIRE_THROWS(ChooseVideoTrimEdge(original, 999, true, 1));
+   REQUIRE_THROWS(ChooseVideoTrimEdge(original, 2, true, std::numeric_limits<double>::quiet_NaN()));
+   REQUIRE(KeepsOriginalPicture(original));
+}
+
 TEST_CASE("Native video track order composes upper pictures while exposing lower gaps",
    "[video-timeline]")
 {

@@ -70,17 +70,17 @@ def check_split_video_edges(client, root, linked):
     original = client.data("GetLinkedMediaClips")
     video = client.data("GetVideoClips")
     for _ in range(2):
-        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True, exact_drag=True)
+        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True)
         assert client.data("GetLinkedMediaClips") == original
-        operate_owned_video_track(client, at, at + 0.5, track=0, exact_drag=True)
+        operate_owned_video_track(client, at, at + 0.5, track=0)
         trimmed = client.data("GetLinkedMediaClips")
         assert len(trimmed) == len(original), trimmed
         for before, after in zip(original, trimmed, strict=True):
             start = before["start"] + (0.5 if before["clip"] == 1 and (linked or before["kind"] == "video") else 0)
             assert abs(after["start"] - start) < 0.04 and after["end"] == before["end"], trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True, exact_drag=True)
+        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True)
         assert client.data("GetLinkedMediaClips") == trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0, exact_drag=True)
+        operate_owned_video_track(client, at + 0.5, at, track=0)
         assert client.data("GetLinkedMediaClips") == original
         assert client.data("GetVideoClips") == video
         client.send("Undo")
