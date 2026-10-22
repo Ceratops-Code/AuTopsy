@@ -229,6 +229,9 @@ They apply separately to each top-level clip; the track independently permits
 private project-load transaction and checks the complete timeline at its closing
 tag, avoiding a full-track copy for every clip. A native round-trip case saves
 and reopens two joined clips containing 16,384 retained pieces twice.
+Flattened preview/export segments use a separate 100,000-segment budget and a
+bounded boundary list; they are not native editable clips. A large joined track
+must remain readable by media queries and rendering after its XML is loaded.
 
 Soundtrack windows belong to the node that owns a link. A link assigned after
 joining previously unlinked pieces spans the whole retained parent timeline;

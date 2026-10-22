@@ -60,6 +60,10 @@ TEST_CASE("Track and retained-tree bounds are independent", "[video-edits][video
    timeline.clips = {joined, joined}; timeline.nextId = 3;
    timeline.clips[1].id = 2; timeline.clips[1].start = joined.End();
    REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
+   const auto composed = ComposeVideoTracks({&timeline});
+   REQUIRE(composed.clips.size() == 2 * (MaximumVideoContentClips - 1));
+   REQUIRE_NOTHROW(RequireWellFormedTimeline(composed, MaximumVideoRenderSegments));
+   REQUIRE_THROWS(RequireWellFormedTimeline(composed));
 }
 
 TEST_CASE("Video speed retains source handles flags and split editability", "[video-edits][video-speed]")

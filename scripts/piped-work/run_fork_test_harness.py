@@ -853,6 +853,10 @@ def operate_owned_video_track(
         end_time = start_time
     if gesture not in ("drag", "click", "double-click", "context"):
         raise ValueError("Unknown native video gesture: " + gesture)
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    # Wait before reading window/paint facts: project-open callbacks may replace
+    # those controls while the native double-click interval expires.
+    time.sleep((user.GetDoubleClickTime() + 20) / 1000)
     info = painted if painted is not None else painted_video_tracks(client)
     if not all(
         info["viewStart"] <= time <= info["viewEnd"] for time in (start_time, end_time)
@@ -869,7 +873,6 @@ def operate_owned_video_track(
     )
     if source is None or target is None:
         raise RuntimeError("The requested native video row is missing.")
-    user = ctypes.WinDLL("user32", use_last_error=True)
     user.GetWindowThreadProcessId.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_uint32),
@@ -1148,9 +1151,6 @@ def operate_owned_video_track(
             raise RuntimeError(
                 "Human input is held; the test will not take over its drag meaning."
             )
-        # Consecutive drags at the same header must start as single clicks.
-        # A real OS down inside its double-click interval is a different action.
-        time.sleep((user.GetDoubleClickTime() + 20) / 1000)
         user.EnumWindows(hide_preview, 0)
         if not user.SetWindowPos(root, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x53):
             raise RuntimeError(f"Cannot expose owned project {root}: Windows error {ctypes.get_last_error()}.")

@@ -418,7 +418,7 @@ def clip_rows(client):
     return client.data("GetVideoClips")["clips"]
 
 
-def check_video_clip_structure(client, root, linked, storage_only=False):
+def check_video_clip_structure(client, root, linked, storage_only=False, parent_links_only=False):
     """Exercise real commands, repeat boundaries, gestures, Undo and native XML.
 
     Candidates have one visible history effect. Cancelled gestures exercise the
@@ -426,6 +426,48 @@ def check_video_clip_structure(client, root, linked, storage_only=False):
     boundary without restoring caller progress. Linked audio stays as samples
     in its original clips, with both source handles and flags intact.
     """
+    if parent_links_only:
+        client.file("ImportVideo", root / "source.mp4")
+        client.send('UnlinkMediaClips: Clips="0:0"')
+        select_clip_range(client, 2, 2)
+        client.send("Split")
+        select_clip_range(client, 0, 4)
+        client.send("JoinVideoClips")
+        client.send("MoveVideoClip: Track=0 Id=1 Start=2")
+        client.send('LinkMediaClips: Clips="0:0,1:0"')
+        for speed in (1, 2):
+            client.send(f'SetVideoClipSpeed: Track=0 Id="1" Speed={speed}')
+            before = client.data("GetLinkedMediaClips")
+            client.send('LinkMediaClips: Clips="0:0,1:0"')
+            assert client.data("GetLinkedMediaClips") == before
+            baseline = root / f"_parent-link-{speed}.aup3"
+            client.file("SaveProject2", baseline)
+            video = next(row for row in before if row["kind"] == "video")
+            for edge in ("start", "end"):
+                for repeat in range(2):
+                    start, end = video["start"], video["end"]
+                    delta = 1 / speed * (1 if edge == "start" else -1)
+                    if edge == "start":
+                        start += delta
+                    else:
+                        end += delta
+                    select_clip_range(client, start, end)
+                    client.send("Trim")
+                    trimmed = client.data("GetLinkedMediaClips")
+                    assert all(abs(after[edge] - original[edge] - delta) < 1e-7
+                               for after, original in zip(trimmed, before, strict=True)), trimmed
+                    client.send("Trim")
+                    assert client.data("GetLinkedMediaClips") == trimmed
+                    client.send("Undo")
+                    assert client.data("GetLinkedMediaClips") == before
+                    client.send("Redo")
+                    assert client.data("GetLinkedMediaClips") == trimmed
+                    save_reopen(client, root / f"_parent-{speed}-{edge}-{repeat}.aup3")
+                    assert client.data("GetLinkedMediaClips") == trimmed
+                    client.send("Close")
+                    client.file("OpenProject2", baseline)
+                    assert client.data("GetLinkedMediaClips") == before
+        return
     if storage_only:
         client.file("ImportVideo", root / "source.mp4")
         client.send('UnlinkMediaClips: Clips="0:0"')
@@ -564,33 +606,6 @@ def check_video_clip_structure(client, root, linked, storage_only=False):
         assert [round(row["start"], 6) for row in audio] == [1, 4], audio
         client.send("Undo")
     client.send("Save")
-    if not linked:
-        # A manual link after Join belongs to the parent timeline, rather than
-        # to the original unlinked leaves. Its audio must follow both edges.
-        select_clip_range(client, 2, 6)
-        client.send("JoinVideoClips")
-        client.send('LinkMediaClips: Clips="0:0,1:0"')
-        before = client.data("GetLinkedMediaClips")
-        client.send('LinkMediaClips: Clips="0:0,1:0"')
-        assert client.data("GetLinkedMediaClips") == before
-        client.send("FitInWindow")
-        previous = {row["kind"]: row for row in before}
-        for start, end, edge in ((2, 3, "start"), (6, 5, "end")):
-            for repeat in range(2):
-                operate_owned_video_track(client, start, end, track=0, cancel=True)
-                assert client.data("GetLinkedMediaClips") == before
-                operate_owned_video_track(client, start, end, track=0)
-                trimmed = client.data("GetLinkedMediaClips")
-                assert all(abs(row[edge] - previous[row["kind"]][edge] - (end - start)) < 0.04 for row in trimmed), trimmed
-                save_reopen(client, root / f"_relinked-joined-{edge}-{repeat}.aup3")
-                assert client.data("GetLinkedMediaClips") == trimmed
-                operate_owned_video_track(client, end, start, track=0)
-                assert client.data("GetLinkedMediaClips") == before
-                client.send("Undo")
-                assert client.data("GetLinkedMediaClips") == trimmed
-                client.send("Redo")
-                assert client.data("GetLinkedMediaClips") == before
-        client.send("Save")
 
 
 def check_video_compound_render(client, root, ffmpeg):

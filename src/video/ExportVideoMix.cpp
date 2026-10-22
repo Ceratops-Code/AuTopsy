@@ -347,7 +347,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent, const ExportSettings &settings)
 {
    RequireUsableExportSettings(settings);
-   VideoTimeline::RequireWellFormedTimeline(timeline);
+   VideoTimeline::RequireWellFormedTimeline(timeline, VideoTimeline::MaximumVideoRenderSegments);
    const auto duration = projectVideoDuration;
    const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline) && AllowsOriginalPictureCopy(settings)
       && std::abs(duration - timeline.End()) <= 1e-7;

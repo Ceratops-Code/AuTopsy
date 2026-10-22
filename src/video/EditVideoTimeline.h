@@ -42,13 +42,14 @@ inline void RequireUsableVideoSource(const MediaSource &source)
 }
 
 // A malformed saved timeline must never reach a decoder or an export graph.
-inline void RequireWellFormedTimeline(const Timeline &timeline)
+inline void RequireWellFormedTimeline(const Timeline &timeline,
+   size_t maximumClips = MaximumVideoTrackClips)
 {
    constexpr double tolerance = 1e-7;
    if (!timeline.sourcePath.empty())
       RequireUsableVideoSource({timeline.sourcePath, timeline.sourceDuration, timeline.frameRate,
          timeline.sourceWidth, timeline.sourceHeight});
-   if (timeline.clips.size() > MaximumVideoTrackClips || !timeline.nextId)
+   if (timeline.clips.size() > maximumClips || !timeline.nextId)
       throw std::runtime_error("The video timeline has invalid clip information.");
    std::unordered_set<uint64_t> ids;
    double previousEnd{};
@@ -387,6 +388,7 @@ inline EvaluatedVideoPicture EvaluateVideoLayers(
 
 // Upper tracks take visual precedence. Flatten only at preview/export boundaries;
 // native tracks and their clips remain independent, editable project objects.
+inline constexpr size_t MaximumVideoRenderSegments = 100000;
 inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
 {
    std::vector<double> edges;
@@ -395,6 +397,8 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
       RequireWellFormedTimeline(*layer);
       for (const auto &clip : layer->clips) {
          const auto boundaries = VideoContentEdges(clip);
+         if (boundaries.size() > 2 * MaximumVideoRenderSegments - edges.size())
+            throw std::runtime_error("The video composition exceeds its frame-boundary budget.");
          edges.insert(edges.end(), boundaries.begin(), boundaries.end());
       }
    }
@@ -405,8 +409,10 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
       if (edges[i] - edges[i-1] <= 1e-7) continue;
       const auto picture = EvaluateVideoLayers(layers, (edges[i]+edges[i-1])/2);
       if (!picture.clip) continue;
+       if (result.clips.size() >= MaximumVideoRenderSegments)
+          throw std::runtime_error("The video composition exceeds its segment budget.");
       Clip part{result.nextId++, edges[i-1],
-         picture.sourceTime - (edges[i] - edges[i-1]) * picture.playbackRate / 2, edges[i] - edges[i-1]};
+          std::max(0.0, picture.sourceTime - (edges[i] - edges[i-1]) * picture.playbackRate / 2), edges[i] - edges[i-1]};
       part.media = picture.source;
       part.playbackRate = picture.playbackRate;
       if (result.sourcePath.empty()) {
@@ -415,7 +421,9 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
       }
       result.clips.push_back(std::move(part));
    }
-   RequireWellFormedTimeline(result);
+   // Flattened render segments are not editable native clips. Several valid
+   // joined roots may produce more segments than one track permits as roots.
+   RequireWellFormedTimeline(result, MaximumVideoRenderSegments);
    return result;
 }
 
