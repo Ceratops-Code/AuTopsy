@@ -38,6 +38,8 @@
 #include <wx/msgdlg.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <unordered_set>
@@ -365,6 +367,10 @@ public:
          if (underPointer && &candidate != underPointer) continue;
          consider(candidate, candidate.start, -1); consider(candidate, candidate.End(), 1);
       }
+      if (std::getenv("AUTOPSY_TEST_VIDEO_INPUT") && state.state.LeftIsDown())
+         std::fprintf(stderr, "AUTOPSY_VIDEO_HIT pointer=%d origin=%d paintedOrigin=%d clip=%llu edge=%d distance=%d\n",
+            pointer, state.rect.x, mLastRect.x, clip ? static_cast<unsigned long long>(clip->id) : 0,
+            edge, distance);
       if (edge)
          return {AssignUIHandlePtr(mClipHandle, std::make_shared<VideoClipHandle>(
             track, std::static_pointer_cast<VideoTrackView>(shared_from_this()), clip->id, edge))};
@@ -455,6 +461,9 @@ UIHandle::Result VideoClipHandle::Click(const TrackPanelMouseEvent &event,Audaci
 }
 UIHandle::Result VideoClipHandle::Drag(const TrackPanelMouseEvent &event,AudacityProject *project)
 {
+   if (std::getenv("AUTOPSY_TEST_VIDEO_INPUT"))
+      std::fprintf(stderr, "AUTOPSY_VIDEO_DRAG id=%llu edge=%d context=%d pointer=%d origin=%d click=%g\n",
+         static_cast<unsigned long long>(mId), mEdge, int(mContext), event.event.GetX(), mOrigin, mClickTime);
    if (mContext || !mEdge || !project) return RefreshCode::RefreshNone;
    const auto track = mTrack.lock(); const auto view = mView.lock();
    if (!track || !view) return RefreshCode::Cancelled;
@@ -481,6 +490,9 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &,AudacityP
 {
    const auto track = mTrack.lock();
    if (const auto view = mView.lock()) view->SetGhost({});
+   if (std::getenv("AUTOPSY_TEST_VIDEO_INPUT"))
+      std::fprintf(stderr, "AUTOPSY_VIDEO_RELEASE id=%llu edge=%d candidate=%d\n",
+         static_cast<unsigned long long>(mId), mEdge, int(mCandidate.has_value()));
    if (!project || !track || track->GetOwner().get() != &TrackList::Get(*project)) return RefreshCode::RefreshAll;
    try {
       if (mContext) {
