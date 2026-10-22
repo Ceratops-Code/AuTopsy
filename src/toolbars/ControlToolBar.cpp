@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 
 // For compilers that support precompilation, includes "wx/wx.h".
 #include <wx/wxprec.h>
@@ -63,6 +64,7 @@
 #include "../ProjectWindow.h"
 #include "../SelectUtilities.h"
 #include "ViewInfo.h"
+#include "Viewport.h"
 #include "../widgets/AButton.h"
 #include "FileNames.h"
 
@@ -84,6 +86,7 @@ BEGIN_EVENT_TABLE(ControlToolBar, ToolBar)
    EVT_BUTTON(ID_FF_BUTTON,     ControlToolBar::OnFF)
    EVT_BUTTON(ID_PAUSE_BUTTON,  ControlToolBar::OnPause)
    EVT_BUTTON(ID_LOOP_BUTTON,   ControlToolBar::OnLoop)
+   EVT_BUTTON(ID_GOTO_CURSOR_BUTTON, ControlToolBar::OnGoToCursor)
    EVT_IDLE(ControlToolBar::OnIdle)
 END_EVENT_TABLE()
 
@@ -112,19 +115,54 @@ AButton* MakeControlToolBarButton(wxWindow* parent,
                                   const wxImage& iconDown,
                                   const wxImage& iconDisabled)
 {
+   // AuTopsy uses two thirds of the native 52-pixel square, rounded to 35.
+   // Scale local frame copies so other toolbars and theme resources keep their
+   // own dimensions. Native 16-pixel transport glyphs remain legible inside.
+   constexpr int buttonSide = 35;
+   const auto frame = [](teBmps resource) {
+      return theTheme.Image(resource).Scale(32, 32, wxIMAGE_QUALITY_HIGH);
+   };
    auto button = safenew AButton(parent, id);
    button->SetButtonType(AButton::FrameButton);
    button->SetImages(
-      theTheme.Image(bmpRecoloredUpLarge),
-      theTheme.Image(bmpRecoloredUpHiliteLarge),
-      theTheme.Image(bmpRecoloredDownLarge),
-      theTheme.Image(bmpRecoloredHiliteLarge),
-      theTheme.Image(bmpRecoloredUpLarge));
+      frame(bmpRecoloredUpLarge),
+      frame(bmpRecoloredUpHiliteLarge),
+      frame(bmpRecoloredDownLarge),
+      frame(bmpRecoloredHiliteLarge),
+      frame(bmpRecoloredUpLarge));
    button->SetIcons(iconUp, iconDown, iconDisabled);
    button->SetLabel(label);
-   button->SetMinSize(wxSize { 52, 52 });
+   button->SetMinSize(wxSize { buttonSide, buttonSide });
+   button->SetMaxSize(wxSize { buttonSide, buttonSide });
    button->SetFrameMid(2);
    return button;
+}
+
+wxImage MakeCursorLocatorIcon(bool disabled)
+{
+   // Keep this small theme-derived target glyph in memory rather than adding
+   // indices to the upstream theme resource table. Button recreation owns it.
+   wxImage image(16, 16);
+   image.InitAlpha();
+   std::fill(image.GetAlpha(), image.GetAlpha() + 16 * 16, 0);
+   auto colour = theTheme.Colour(clrTrackPanelText);
+   if (disabled) colour = AColor::Blend(colour, theTheme.Colour(clrMedium));
+   const auto dot = [&](int x, int y) {
+      const auto pixel = y * 16 + x;
+      image.GetData()[pixel * 3] = colour.Red();
+      image.GetData()[pixel * 3 + 1] = colour.Green();
+      image.GetData()[pixel * 3 + 2] = colour.Blue();
+      image.GetAlpha()[pixel] = 255;
+   };
+   for (int y = 2; y < 14; ++y) { dot(7, y); dot(8, y); }
+   for (int x = 1; x <= 5; ++x) {
+      dot(x, 7); dot(x, 8); dot(15 - x, 7); dot(15 - x, 8);
+   }
+   for (int step = 0; step < 3; ++step) {
+      dot(3 + step, 5 + step); dot(3 + step, 10 - step);
+      dot(12 - step, 5 + step); dot(12 - step, 10 - step);
+   }
+   return image;
 }
 
 }
@@ -269,6 +307,10 @@ void ControlToolBar::Populate()
       theTheme.Image(bmpLoopDisabled));
    mLoop->SetButtonToggles(true);// this makes it a toggle, like the pause button
 
+   mGoToCursor = MakeControlToolBarButton(this,
+      ID_GOTO_CURSOR_BUTTON, XO("Go to Cursor"),
+      MakeCursorLocatorIcon(false), wxNullImage, MakeCursorLocatorIcon(true));
+
 #if wxUSE_TOOLTIPS
    RegenerateTooltips();
    wxToolTip::Enable(true);
@@ -312,6 +354,9 @@ void ControlToolBar::RegenerateTooltips()
          case ID_LOOP_BUTTON:
             name = wxT("TogglePlayRegion");
             break;
+         case ID_GOTO_CURSOR_BUTTON:
+            pCtrl->SetToolTip(XO("Show the current cursor without changing zoom"));
+            continue;
       }
       std::vector<ComponentInterfaceSymbol> commands(
          1u, { name, Verbatim( pCtrl->GetLabel() ) } );
@@ -405,13 +450,15 @@ void ControlToolBar::ArrangeButtons()
    mStop->MoveBeforeInTabOrder( mLoop );
    mRewind->MoveBeforeInTabOrder( mLoop );
    mFF->MoveBeforeInTabOrder( mLoop );
+   mGoToCursor->MoveBeforeInTabOrder( mLoop );
    mRecord->MoveBeforeInTabOrder( mLoop );
 
    mSizer->Add( mPause,  0, wxRIGHT, 4 );
    mSizer->Add( mPlay,   0, wxRIGHT, 4 );
    mSizer->Add( mStop,   0, wxRIGHT, 4 );
    mSizer->Add( mRewind, 0, wxRIGHT, 4 );
-   mSizer->Add( mFF,     0, wxRIGHT, 8 );
+   mSizer->Add( mFF,     0, wxRIGHT, 4 );
+   mSizer->Add( mGoToCursor, 0, wxRIGHT, 8 );
    mSizer->Add( mRecord, 0, wxRIGHT, 8 );
    mSizer->Add( mLoop );
 
@@ -516,6 +563,7 @@ void ControlToolBar::EnableDisableButtons()
    mPause->SetEnabled(canStop);
 
    mLoop->SetEnabled( !recording );
+   mGoToCursor->SetEnabled(!TrackList::Get(mProject).empty());
 }
 
 void ControlToolBar::SetPlay(bool down, PlayAppearance appearance)
@@ -721,6 +769,25 @@ void ControlToolBar::OnFF(wxCommandEvent & WXUNUSED(evt))
       ProjectAudioManager::Get( *p ).StopIfPaused();
       Viewport::Get(*p).ScrollToEnd(mFF->WasShiftDown());
    }
+}
+
+void ControlToolBar::OnGoToCursor(wxCommandEvent & WXUNUSED(evt))
+{
+   mGoToCursor->PushDown();
+   mGoToCursor->PopUp();
+   auto position = ViewInfo::Get(mProject).selectedRegion.t0();
+   const auto &transport = ProjectAudioManager::Get(mProject);
+   if (ProjectAudioIO::Get(mProject).IsAudioActive() &&
+       (transport.Playing() || transport.Recording())) {
+      if (auto *audio = AudioIO::Get()) {
+         const auto playbackPosition = audio->GetStreamTime();
+         if (std::isfinite(playbackPosition)) position = playbackPosition;
+      }
+   }
+   // Reuse native view navigation; selecting, editing and transport state are
+   // independent of this repeatable request to reveal the current position.
+   Viewport::Get(mProject).ScrollIntoView(position);
+   Viewport::Get(mProject).Redraw();
 }
 
 // works out the width of the field in the status bar needed for the state (eg play, record pause)

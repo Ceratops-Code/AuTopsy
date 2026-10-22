@@ -50,6 +50,10 @@ To remove picture edges, right-click a video clip and choose **Crop Picture...**
 Set the left/top/right/bottom percentages, or use **Reset Crop**. The source
 footage stays available, and crop follows the clip through saved projects and
 ordinary editing.
+
+The main transport uses compact 35-pixel buttons. **Go to Cursor** brings the
+current playhead into view during playback or pause, or the edit cursor when
+stopped, without changing zoom, selection or project content.
 Local deployments use the installer, including locally built releases; source
 and build directories are not installation inputs. A local installation runs from
 `%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing
@@ -141,6 +145,9 @@ joined content, both trim edges, differing audio/video placements, speed,
 repeated requests, Undo/Redo and native save/reopen.
 `fork-video-transport` covers the actual preview buttons, pause/resume, live
 picture mute, video-only playback and ownership between projects.
+`fork-transport-toolbar` covers compact button dimensions, canceled clicks,
+repeated cursor navigation in both directions, playback/pause and unchanged
+selection, zoom and history.
 `fork-video-visibility` covers track buttons and cancellation, Undo/Redo,
 clipboard/save/reopen, visible source selection and decoded picture/audio exports.
 The focused `fork-video-selection`, `fork-video-edges`, `fork-video-clipboard`

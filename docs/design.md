@@ -208,6 +208,11 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 The small native transport facade currently lives in `ShowVideoPreview.cpp`;
 its desired-state policy lives in `SyncVideoPlayback.h`. It uses the existing
 `ProjectAudioManager` API and introduces no separate transport engine.
+The main transport adapter in `src/toolbars/ControlToolBar.cpp` uses local scaled
+theme images for its 35-pixel buttons; shared theme resources and other toolbars
+keep their own sizing. Go to Cursor reads this project's active stream time,
+including pause, or its edit cursor while stopped. It calls the native viewport
+scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into
 `RenderVideoFrames.h/.cpp` after separate path approval.
 Extend existing adapters and extract coherent responsibilities when needed;

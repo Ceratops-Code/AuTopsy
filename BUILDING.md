@@ -444,6 +444,12 @@ content and quarter-turn sources. `fork-video-crop-controls` checks the real
 clip menu, Reset, Cancel and history with idle shared input. Each case saves its
 owned fixture project before the worker closes it, preventing a save prompt.
 
+`fork-transport-toolbar` checks 35-pixel native controls and Go to Cursor through
+owned-window press/release messages. It exercises canceled and repeated clicks,
+left/right offscreen edit cursors, playback and pause, preserving zoom, selection,
+audio content and history. It does not move the shared pointer or press shared
+keyboard keys.
+
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
 ffmpeg.exe, ffprobe.exe and

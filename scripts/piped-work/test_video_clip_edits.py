@@ -379,6 +379,151 @@ class PreviewNativeWindows:
             raise RuntimeError(f"Native BM_CLICK failed for HWND={handle}: {ctypes.WinError()}")
 
 
+def check_transport_toolbar(client, root):
+    """Exercise compact native controls and cursor visibility without shared input.
+
+    Window identity comes from the owned button's caption and parent, never
+    toolbar positions or upstream numeric IDs. Native mouse messages traverse
+    AButton's normal press/release path, including cancellation before release.
+    The worker owns its generated audio and saves before its normal shutdown.
+    """
+    import wave
+    from ctypes import wintypes as w
+
+    native = PreviewNativeWindows()
+    user = native.api
+    pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    callback_type = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, w.LPARAM]
+    user.EnumChildWindows.argtypes = [w.HWND, callback_type, w.LPARAM]
+    user.GetParent.argtypes, user.GetParent.restype = [w.HWND], w.HWND
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetWindowDpiAwarenessContext.argtypes = [w.HWND]
+    user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    matches = []
+
+    @callback_type
+    def visit_child(handle, parent):
+        if native.caption(handle) == "Go to Cursor":
+            matches.append((parent, handle))
+        return True
+
+    @callback_type
+    def visit_window(handle, _):
+        if native.owner(handle) == pid and native.visible(handle):
+            user.EnumChildWindows(handle, visit_child, handle)
+        return True
+
+    user.EnumWindows(visit_window, 0)
+    assert len(matches) == 1, matches
+    main, cursor_button = matches[0]
+    assert_owned_test_display(pid, main)
+    toolbar = user.GetParent(cursor_button)
+    buttons = {}
+
+    @callback_type
+    def visit_button(handle, _):
+        if user.GetParent(handle) == toolbar:
+            caption = native.caption(handle)
+            if caption:
+                assert caption not in buttons, caption
+                buttons[caption] = handle
+        return True
+
+    user.EnumChildWindows(toolbar, visit_button, 0)
+    expected = {"Pause", "Play", "Stop", "Skip to Start", "Skip to End", "Record", "Go to Cursor"}
+    assert expected <= set(buttons), buttons
+    assert any(label.startswith("Loop") for label in buttons), buttons
+    previous_dpi = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(toolbar))
+    try:
+        for label, handle in buttons.items():
+            assert native.owner(handle) == pid
+            rectangle = w.RECT()
+            assert user.GetWindowRect(handle, ctypes.byref(rectangle))
+            assert (rectangle.right - rectangle.left, rectangle.bottom - rectangle.top) == (35, 35), (label, rectangle)
+    finally:
+        if previous_dpi:
+            user.SetThreadDpiAwarenessContext(previous_dpi)
+    assert not native.enabled(cursor_button), "An empty project has no cursor destination."
+
+    def press(handle, cancel=False):
+        assert native.owner(handle) == pid and native.enabled(handle)
+        reply = ctypes.c_size_t()
+
+        def send(message, flags, position):
+            if not user.SendMessageTimeoutW(handle, message, flags, position, 2, 2000, ctypes.byref(reply)):
+                raise RuntimeError(f"Owned transport button message {message:#x} failed: {ctypes.WinError()}")
+
+        # Every button has the same logical client size. The outside release
+        # cancels a press through the same native path as a user's cancelled click.
+        centre = 17 | (17 << 16)
+        send(0x201, 1, centre)
+        try:
+            send(0x202, 0, 0xFFFFFFFF if cancel else centre)
+        finally:
+            send(0x202, 0, 0xFFFFFFFF)
+
+    source = root / "_toolbar-tone.wav"
+    with wave.open(str(root / "tone-a.wav"), "rb") as original:
+        parameters, audio = original.getparams(), original.readframes(original.getnframes())
+    with wave.open(str(source), "wb") as output:
+        output.setparams(parameters)
+        output.writeframes(audio * 4)
+    client.file("Import2", source)
+    wait_for_native_state(lambda: native.enabled(cursor_button), "cursor button enabled")
+    content = client.data("GetInfo: Type=Clips Format=JSON")
+
+    def viewport():
+        view = client.data("GetInfo: Type=View Format=JSON")
+        view["horizontalEnd"] = client.data("GetVideoPreviewInfo")["viewEnd"]
+        return view
+
+    for target, view_start in ((18, 1), (1, 18)):
+        client.send(f"SelectTime: Start={view_start} End={view_start + 0.5}")
+        client.send("ZoomSel")
+        client.send(f"SelectTime: Start={target} End={target + 0.25}")
+        before = viewport()
+        selection = client.data("GetInfo: Type=Selection Format=JSON")
+        assert not before["horizontalStart"] <= target <= before["horizontalEnd"], before
+        press(cursor_button, cancel=True)
+        assert viewport() == before
+        for _ in range(2):
+            press(cursor_button)
+            view = viewport()
+            assert view["horizontalStart"] <= target <= view["horizontalEnd"], view
+            assert view["pixelsPerSecond"] == before["pixelsPerSecond"]
+            assert client.data("GetInfo: Type=Selection Format=JSON") == selection
+            assert client.data("GetInfo: Type=Clips Format=JSON") == content
+
+    # Playback and pause use the actual compact toolbar controls. A different
+    # edit cursor makes the playhead destination distinguishable from selection.
+    client.send("SelectTime: Start=1 End=19")
+    press(buttons["Play"])
+    wait_for_native_state(lambda: native.enabled(buttons["Stop"]), "native toolbar playback")
+    for paused in (False, True):
+        if paused:
+            press(buttons["Pause"])
+        client.send("SelectTime: Start=18 End=18.5")
+        client.send("ZoomSel")
+        before = viewport()
+        position = client.data("GetVideoPreviewInfo")["audioPosition"]
+        press(cursor_button)
+        view = viewport()
+        assert view["horizontalStart"] - 0.2 <= position <= view["horizontalEnd"] + 0.2, (position, view)
+        assert view["pixelsPerSecond"] == before["pixelsPerSecond"]
+        assert native.enabled(buttons["Stop"]), "Cursor navigation stopped playback."
+        assert client.data("GetInfo: Type=Selection Format=JSON")["Start"] == 18
+    press(buttons["Stop"])
+    wait_for_native_state(lambda: not native.enabled(buttons["Stop"]), "native toolbar stopped")
+    client.send("Undo")
+    assert not client.data("GetInfo: Type=Tracks Format=JSON"), "Cursor navigation added an audio history entry."
+    client.send("Redo")
+    assert client.data("GetInfo: Type=Clips Format=JSON") == content
+    client.file("SaveProject2", root / "_transport-toolbar.aup3")
+
+
 def owned_preview_controls(client):
     """Use real native button HWNDs, bound to this test PID and second display."""
     windows = PreviewNativeWindows()

@@ -52,6 +52,7 @@ from run_fork_test_harness import (
 )
 from test_video_clip_edits import (
     check_split_video_edges,
+    check_transport_toolbar,
     check_video_clip_structure,
     check_video_compound_render,
     check_video_crop,
@@ -955,6 +956,8 @@ def worker(args, root):
         check_tracks(client, root)
     elif args.case == "history-view":
         check_history_view(client, root)
+    elif args.case == "transport-toolbar":
+        check_transport_toolbar(client, root)
     elif args.case == "project-compatibility":
         check_project_compatibility(client, root)
     elif args.case == "video":
@@ -1098,7 +1101,7 @@ def native_test_inputs(args, executable, module, display):
     if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-speed", "video-speed-storage",
-                     "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls"):
+                     "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "project-compatibility":
         inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
@@ -1233,6 +1236,7 @@ def main():
             "groups",
             "tracks",
             "history-view",
+            "transport-toolbar",
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
