@@ -446,8 +446,6 @@ def check_transport_toolbar(client, root):
     finally:
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
-    assert not native.enabled(cursor_button), "An empty project has no cursor destination."
-
     def press(handle, cancel=False):
         assert native.owner(handle) == pid and native.enabled(handle)
         reply = ctypes.c_size_t()
@@ -465,6 +463,14 @@ def check_transport_toolbar(client, root):
         finally:
             send(0x202, 0, 0xFFFFFFFF)
 
+    # AButton deliberately leaves its Windows HWND enabled for tooltips even
+    # when its application state is disabled. Check the resulting behavior,
+    # rather than mistaking IsWindowEnabled for the custom button's state.
+    empty_view = client.data("GetInfo: Type=View Format=JSON")
+    press(cursor_button)
+    assert client.data("GetInfo: Type=View Format=JSON") == empty_view
+    assert not client.data("GetInfo: Type=Tracks Format=JSON")
+
     source = root / "_toolbar-tone.wav"
     with wave.open(str(root / "tone-a.wav"), "rb") as original:
         parameters, audio = original.getparams(), original.readframes(original.getnframes())
@@ -472,7 +478,6 @@ def check_transport_toolbar(client, root):
         output.setparams(parameters)
         output.writeframes(audio * 4)
     client.file("Import2", source)
-    wait_for_native_state(lambda: native.enabled(cursor_button), "cursor button enabled")
     content = client.data("GetInfo: Type=Clips Format=JSON")
 
     def viewport():
@@ -501,7 +506,8 @@ def check_transport_toolbar(client, root):
     # edit cursor makes the playhead destination distinguishable from selection.
     client.send("SelectTime: Start=1 End=19")
     press(buttons["Play"])
-    wait_for_native_state(lambda: native.enabled(buttons["Stop"]), "native toolbar playback")
+    wait_for_native_state(lambda: client.data("GetVideoPreviewInfo")["audioPosition"] > 1.05,
+                          "native toolbar playback clock")
     for paused in (False, True):
         if paused:
             press(buttons["Pause"])
@@ -513,10 +519,15 @@ def check_transport_toolbar(client, root):
         view = viewport()
         assert view["horizontalStart"] - 0.2 <= position <= view["horizontalEnd"] + 0.2, (position, view)
         assert view["pixelsPerSecond"] == before["pixelsPerSecond"]
-        assert native.enabled(buttons["Stop"]), "Cursor navigation stopped playback."
+        clock = client.data("GetVideoPreviewInfo")["audioPosition"]
+        assert clock < 18, "Cursor navigation stopped playback or used the edit cursor."
+        if paused:
+            time.sleep(0.15)
+            assert abs(client.data("GetVideoPreviewInfo")["audioPosition"] - clock) < 0.05
         assert client.data("GetInfo: Type=Selection Format=JSON")["Start"] == 18
     press(buttons["Stop"])
-    wait_for_native_state(lambda: not native.enabled(buttons["Stop"]), "native toolbar stopped")
+    wait_for_native_state(lambda: client.data("GetVideoPreviewInfo")["audioPosition"] == 18,
+                          "native toolbar stopped at the edit cursor")
     client.send("Undo")
     assert not client.data("GetInfo: Type=Tracks Format=JSON"), "Cursor navigation added an audio history entry."
     client.send("Redo")
