@@ -296,7 +296,8 @@ class VideoPreviewFrame final : public wxFrame {
           }
           // Playback keeps its low-cost proxy. Frame inspection reads the source
           // so a 30 fps proxy cannot hide frames from a 60 fps original.
-           if (transport.playing && !transport.paused) mPreciseFrames = false;
+           // This snapshot's playing flag already excludes paused audio.
+           if (transport.playing) mPreciseFrames = false;
           const bool original = mPreciseFrames && mMedia && mMedia->lightweight;
           if (original != mUsingOriginalFrames) {
              mPlayer->OpenVideoFile(original ? mPath : mMedia->playbackPath);
