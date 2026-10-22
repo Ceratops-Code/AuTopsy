@@ -1,3 +1,9 @@
+# One source owner for standalone checks and the host's native test targets.
+set(autopsy_video_playback_test_sources EditVideoContent.cpp JoinVideoClips.cpp TestVideoPlayback.cpp)
+set(autopsy_video_edits_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp)
+set(autopsy_video_composition_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp
+   EvaluateVideoTimeline.cpp RenderVideoComposition.cpp TestVideoComposition.cpp)
+
 #[[
 AuTopsy video tracks and synchronized preview. The SDK is an external libmpv development
 package; its DLL stays beside this build's executable, never in system folders.
@@ -27,17 +33,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       GIT_TAG 6bf41f4f71bf25641befe33365b9d3da4d940920)
    FetchContent_MakeAvailable(Catch2)
    include("${catch2_SOURCE_DIR}/contrib/Catch.cmake")
-   add_executable(video-playback-test EditVideoContent.cpp JoinVideoClips.cpp TestVideoPlayback.cpp ../../tests/Catch2Main.cpp)
+   add_executable(video-playback-test ${autopsy_video_playback_test_sources} ../../tests/Catch2Main.cpp)
    target_compile_features(video-playback-test PRIVATE cxx_std_17)
    target_link_libraries(video-playback-test PRIVATE Catch2::Catch2)
    catch_discover_tests(video-playback-test TEST_PREFIX "video-playback::"
       PROPERTIES TIMEOUT 30)
-   add_executable(video-edits-test EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp ../../tests/Catch2Main.cpp)
+   add_executable(video-edits-test ${autopsy_video_edits_test_sources} ../../tests/Catch2Main.cpp)
    target_compile_features(video-edits-test PRIVATE cxx_std_17)
    target_link_libraries(video-edits-test PRIVATE Catch2::Catch2)
    catch_discover_tests(video-edits-test TEST_PREFIX "video-edits::" PROPERTIES TIMEOUT 30)
-   add_executable(video-composition-test EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp EvaluateVideoTimeline.cpp RenderVideoComposition.cpp
-      TestVideoComposition.cpp ../../tests/Catch2Main.cpp)
+   add_executable(video-composition-test ${autopsy_video_composition_test_sources} ../../tests/Catch2Main.cpp)
    target_compile_features(video-composition-test PRIVATE cxx_std_17)
    target_link_libraries(video-composition-test PRIVATE Catch2::Catch2)
    catch_discover_tests(video-composition-test TEST_PREFIX "video-composition::" PROPERTIES TIMEOUT 30)
@@ -163,10 +168,10 @@ add_dependencies(Audacity copy-video-player)
 
 add_unit_test(
    NAME video-playback
-   SOURCES EditVideoContent.cpp JoinVideoClips.cpp TestVideoPlayback.cpp
+   SOURCES ${autopsy_video_playback_test_sources}
 )
-add_unit_test(NAME video-edits SOURCES EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp)
-add_unit_test(NAME video-composition SOURCES EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp EvaluateVideoTimeline.cpp TestVideoComposition.cpp)
+add_unit_test(NAME video-edits SOURCES ${autopsy_video_edits_test_sources})
+add_unit_test(NAME video-composition SOURCES ${autopsy_video_composition_test_sources})
 if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")
    find_package(Python3 QUIET COMPONENTS Interpreter)
@@ -192,7 +197,7 @@ if(TARGET video-playback-test)
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-      foreach(_case groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view project-compatibility)
+       foreach(_case groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view project-compatibility)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"

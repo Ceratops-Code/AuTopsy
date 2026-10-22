@@ -54,6 +54,7 @@ from test_video_clip_edits import (
     check_split_video_edges,
     check_video_clip_structure,
     check_video_compound_render,
+    check_video_crop,
     check_video_speed,
     check_video_transport,
     check_video_visibility,
@@ -148,6 +149,7 @@ def check_project_compatibility(client, root):
     expected.append({"project": joined.name, "state": read_audio_project_state(client.data), "audio": audio.name})
     clip_id = client.data("GetVideoClips")["clips"][0]["id"]
     client.send(f'SetVideoClipSpeed: Track=0 Id="{clip_id}" Speed=0.5')
+    client.send(f'SetVideoClipCrop: Track=0 Id="{clip_id}" Left=0.125 Top=0.25 Right=0.125')
     retimed, rendered = root / "_retimed-video.aup3", root / "_retimed-mix.wav"
     client.file("SaveProject2", retimed)
     select_audio_project_tracks(client.send, client.data)
@@ -965,6 +967,8 @@ def worker(args, root):
         check_video_compound_render(client, root, args.ffmpeg)
     elif args.case == "video-transport":
         check_video_transport(client, root)
+    elif args.case == "video-crop":
+        check_video_crop(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-visibility":
         check_video_visibility(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in ("video-speed", "video-speed-storage"):
@@ -1094,7 +1098,7 @@ def native_test_inputs(args, executable, module, display):
     if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-speed", "video-speed-storage",
-                     "video-clip-storage", "video-parent-links"):
+                     "video-clip-storage", "video-parent-links", "video-crop"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "project-compatibility":
         inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
@@ -1233,7 +1237,7 @@ def main():
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
             "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
-            "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links",
+            "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop",
             "media",
             "preview",
             "branding",

@@ -17,6 +17,257 @@ from run_fork_test_harness import (
 )
 
 
+def crop_pixel_counts(rgb):
+    """Classify decoded/captured fixture pixels; no source-text assumptions."""
+    counts = {"red": 0, "green": 0, "blue": 0, "white": 0}
+    for offset in range(0, len(rgb) - 2, 3):
+        red, green, blue = rgb[offset:offset + 3]
+        if min(red, green, blue) > 180:
+            counts["white"] += 1
+        elif red > 160 and green < 60 and blue < 60:
+            counts["red"] += 1
+        elif green > 80 and red < 60 and blue < 60:
+            counts["green"] += 1
+        elif blue > 160 and red < 60 and green < 60:
+            counts["blue"] += 1
+    return counts
+
+
+def expect_preview_crop_pixels(client, root, ffmpeg, expected):
+    """Read only the owned preview surface on its required display.
+
+    The bundled FFmpeg GDI input reads the decoder's GPU output without adding
+    packages to the persistent plain-Python test runtime. The owned window is
+    temporarily raised without activation and its prior topmost state is
+    restored. Successful observations create no screenshot artifact.
+    """
+    from ctypes import wintypes as w
+
+    info = ready_video_preview(client)
+    surface = int(info["previewSurfaceHandle"])
+    native = PreviewNativeWindows()
+    pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    assert native.owner(surface) == pid
+    user = native.api
+    for name, arguments, result in (
+        ("GetAncestor", [w.HWND, w.UINT], w.HWND),
+        ("GetWindowRect", [w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
+        ("GetWindowLongW", [w.HWND, ctypes.c_int], w.LONG),
+        ("SetWindowPos", [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.UINT], w.BOOL),
+        ("SetThreadDpiAwarenessContext", [ctypes.c_void_p], ctypes.c_void_p),
+        ("WindowFromPoint", [w.POINT], w.HWND),
+    ):
+        operation = getattr(user, name)
+        operation.argtypes, operation.restype = arguments, result
+    window = user.GetAncestor(surface, 2)
+    assert native.owner(window) == pid
+    assert_owned_test_display(pid, surface)
+    previous_dpi = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    was_topmost = bool(user.GetWindowLongW(window, -20) & 8)
+    try:
+        assert user.SetWindowPos(window, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x13)
+        deadline = time.monotonic() + 8
+        while True:
+            rectangle = w.RECT()
+            assert user.GetWindowRect(surface, ctypes.byref(rectangle))
+            bounds = (rectangle.left, rectangle.top, rectangle.right, rectangle.bottom)
+            assert 0 < rectangle.right - rectangle.left < 6000
+            assert 0 < rectangle.bottom - rectangle.top < 4000
+            for x, y in ((rectangle.left + 4, rectangle.top + 4),
+                         (rectangle.right - 4, rectangle.bottom - 4),
+                         ((rectangle.left + rectangle.right) // 2,
+                          (rectangle.top + rectangle.bottom) // 2)):
+                assert native.owner(user.WindowFromPoint(w.POINT(x, y))) == pid, "Owned preview capture is obstructed."
+            rgb = run_process([
+                ffmpeg, "-v", "error", "-nostdin", "-f", "gdigrab", "-draw_mouse", "0",
+                "-framerate", "30", "-offset_x", str(bounds[0]), "-offset_y", str(bounds[1]),
+                "-video_size", f"{bounds[2] - bounds[0]}x{bounds[3] - bounds[1]}", "-i", "desktop",
+                "-frames:v", "1", "-vf", "scale=64:64:flags=neighbor",
+                "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
+            ], timeout=15)
+            assert len(rgb) == 64 * 64 * 3, len(rgb)
+            counts = crop_pixel_counts(rgb)
+            bad = sum(count for colour, count in counts.items() if colour not in expected)
+            if all(counts[colour] > 20 for colour in expected) and bad < 5:
+                return counts
+            if time.monotonic() >= deadline:
+                evidence = root / "_crop-preview.ppm"
+                evidence.write_bytes(b"P6\n64 64\n255\n" + rgb)
+                raise AssertionError(f"Preview crop pixels {counts}; expected {expected}; {evidence}")
+            time.sleep(0.05)
+    finally:
+        if not was_topmost:
+            user.SetWindowPos(window, ctypes.c_void_p(-2), 0, 0, 0, 0, 0x13)
+        if previous_dpi:
+            user.SetThreadDpiAwarenessContext(previous_dpi)
+
+
+def crop_dialog_roundtrip(client, commit, reset=False):
+    """Open the real clip menu and complete/cancel only the owned crop dialog."""
+    import threading
+
+    native = PreviewNativeWindows()
+    user = native.api
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_ssize_t)
+    user.EnumWindows.argtypes = [callback_type, ctypes.c_ssize_t]
+    user.EnumChildWindows.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_ssize_t]
+    user.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    errors = []
+
+    def open_menu():
+        try:
+            operate_owned_video_track(client, 1, track=0, gesture="context",
+                                      menu_path=("Crop Picture...",))
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=open_menu, daemon=True)
+    thread.start()
+    dialog = None
+
+    def find_dialog():
+        matches = []
+
+        @callback_type
+        def visit(handle, _):
+            if (native.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+                    and native.visible(handle) and native.caption(handle) == "Crop Video Picture"):
+                matches.append(handle)
+            return 1
+
+        user.EnumWindows(visit, 0)
+        assert len(matches) <= 1, matches
+        return matches[0] if matches else None
+
+    def button(caption):
+        matches = []
+
+        @callback_type
+        def visit(handle, _):
+            if native.caption(handle).replace("&", "") == caption:
+                matches.append(handle)
+            return 1
+
+        user.EnumChildWindows(dialog, visit, 0)
+        assert len(matches) == 1, (caption, matches)
+        return matches[0]
+
+    try:
+        deadline = time.monotonic() + 10
+        while not (dialog := find_dialog()):
+            if errors:
+                raise errors[0]
+            assert time.monotonic() < deadline, "The owned crop dialog did not appear."
+            time.sleep(0.025)
+        assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
+        if reset:
+            native.click(button("Reset Crop"))
+        native.click(button("OK" if commit else "Cancel"))
+        wait_for_native_state(lambda: not native.visible(dialog), "crop dialog closed")
+    finally:
+        if dialog and native.visible(dialog):
+            user.PostMessageW(dialog, 0x10, 0, 0)
+        thread.join(timeout=10)
+    assert not thread.is_alive(), "The owned menu operation did not finish."
+    if errors:
+        raise errors[0]
+
+
+def check_video_crop(client, root, ffmpeg, ffprobe):
+    """Real crop pixels, native history/dialogs, retained pieces and ordinary AUP3."""
+    source = root / "source.mp4"
+    recipe = ("color=c=black:s=160x90:r=30:d=4,"
+              "drawbox=x=0:y=0:w=80:h=45:color=red:t=fill,"
+              "drawbox=x=80:y=0:w=80:h=45:color=green:t=fill,"
+              "drawbox=x=0:y=45:w=80:h=45:color=blue:t=fill,"
+              "drawbox=x=80:y=45:w=80:h=45:color=white:t=fill")
+    run_process([ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i", recipe,
+                 "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=4",
+                 "-c:v", "mpeg4", "-q:v", "2", "-c:a", "aac", "-shortest", str(source)], timeout=30)
+    client.file("ImportVideo", source)
+    clip_id = client.data("GetVideoClips")["clips"][0]["id"]
+    original_audio = client.data("GetInfo: Type=Clips Format=JSON")
+
+    def margins():
+        return client.data("GetVideoClips")["clips"][0]["crop"]
+
+    def set_crop(left=0, top=0, right=0, bottom=0):
+        client.send(f'SetVideoClipCrop: Id="{clip_id}" Track=0 Left={left} Top={top} Right={right} Bottom={bottom}')
+
+    set_crop(left=0.123456789)
+    for commit, reset in ((False, True), (True, False)):
+        before = margins()
+        crop_dialog_roundtrip(client, commit, reset)
+        assert margins() == before  # Cancel/reset staging and untouched precision are no-ops.
+        client.send("Undo")
+        assert margins()["left"] == 0
+        client.send("Redo")
+        assert abs(margins()["left"] - 0.123456789) < 1e-12
+    crop_dialog_roundtrip(client, True, True)
+    assert margins()["left"] == 0
+    client.send("Undo")
+    assert abs(margins()["left"] - 0.123456789) < 1e-12
+    set_crop(left=0.5)
+    set_crop(left=0.5)
+    client.send("Undo")
+    assert abs(margins()["left"] - 0.123456789) < 1e-12
+    client.send("Redo")
+    assert margins()["left"] == 0.5
+    before = margins()
+    client.send(f'SetVideoClipCrop: Id="{clip_id}" Track=0 Left=0.5 Right=0.5', success=False)
+    assert margins() == before
+    client.send("ShowVideoPreview")
+    expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
+
+    def export_pixels(name, expected):
+        output = root / name
+        client.file("ExportVideoMix", output, "Overwrite=1")
+        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format",
+                                          "-of", "json", str(output)]))
+        assert abs(float(metadata["format"]["duration"]) - 4) < 0.1, metadata
+        rgb = run_process([ffmpeg, "-v", "error", "-ss", "1", "-i", str(output), "-frames:v", "1",
+                           "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
+        counts = crop_pixel_counts(rgb)
+        assert all(counts[colour] > 50 for colour in expected), counts
+        assert sum(value for colour, value in counts.items() if colour not in expected) < 30, counts
+
+    for _ in range(2):
+        export_pixels("cropped.mp4", {"green", "white"})
+    assert client.data("GetInfo: Type=Clips Format=JSON") == original_audio
+    set_crop(top=0.5)
+    saved = root / "cropped.aup3"
+    save_reopen(client, saved)
+    assert margins()["top"] == 0.5
+    client.send("ShowVideoPreview")
+    expect_preview_crop_pixels(client, root, ffmpeg, {"blue", "white"})
+    select_clip_range(client, 2, 2)
+    client.send("Split")
+    select_clip_range(client, 0, 4)
+    client.send("JoinVideoClips")
+    clip_id = client.data("GetVideoClips")["clips"][0]["id"]
+    set_crop(left=0.5)
+    export_pixels("joined-crop.mp4", {"white"})
+    save_reopen(client, root / "joined-crop.aup3")
+    client.send("ShowVideoPreview")
+    expect_preview_crop_pixels(client, root, ffmpeg, {"white"})
+    select_clip_range(client, 0, 4)
+    client.send("SeparateVideoClips")
+    rows = client.data("GetVideoClips")["clips"]
+    assert len(rows) == 2 and all(row["crop"]["left"] == 0.5 and row["crop"]["top"] == 0.5 for row in rows), rows
+
+    rotated = root / "rotated.mp4"
+    run_process([ffmpeg, "-v", "error", "-display_rotation:v:0", "90", "-i", str(source),
+                 "-map", "0", "-c", "copy", str(rotated)], timeout=30)
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    client.file("ImportVideo", rotated)
+    clip_id = client.data("GetVideoClips")["clips"][0]["id"]
+    set_crop(bottom=0.5)
+    client.send("ShowVideoPreview")
+    expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
+    export_pixels("rotated-crop.mp4", {"green", "white"})
+
+
 def wait_for_native_state(condition, description, timeout=8):
     """Wait for an asynchronous GUI/audio state; never replay its effect."""
     deadline = time.monotonic() + timeout
