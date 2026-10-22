@@ -117,7 +117,9 @@ def check_track_groups(client, root):
     assert abs(group["minimum"]) < 0.00001 and abs(group["maximum"]) < 0.00001, group
     # Repeated collapse requests must not add extra history transitions.
     client.send("Undo")
-    assert not read_group(client, group_id)[1]["collapsed"]
+    undone, group = read_group(client, group_id)
+    assert not group["collapsed"]
+    assert {row["id"] for row in undone["tracks"] if row["group"] == group_id} == members
     client.send("Redo")
     assert read_group(client, group_id)[1]["collapsed"]
     collapse(False)

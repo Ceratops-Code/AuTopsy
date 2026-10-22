@@ -24,18 +24,18 @@ std::string NewIdentity() { return audacity::Uuid::Generate().ToHexString(); }
 struct GroupMemberAttachment;
 GroupMemberAttachment &Member(Track &track);
 struct GroupMemberAttachment final : TrackAttachment {
-   Track *track;
-   TrackId copiedFrom;
+   std::weak_ptr<Track> track;
    std::string id{NewIdentity()}, group;
    bool hidden{};
-   explicit GroupMemberAttachment(Track &owner) : track(&owner), copiedFrom(owner.GetId()) {}
-   void Reparent(const std::shared_ptr<Track> &owner) override { track = owner.get(); }
+   explicit GroupMemberAttachment(Track &owner) : track(owner.SharedPointer()) {}
+   void Reparent(const std::shared_ptr<Track> &owner) override { track = owner; }
    void CopyTo(Track &destination) const override {
       auto &copy = Member(destination);
-      copy.id = id; copy.group = group; copy.hidden = false; copy.copiedFrom = track->GetId();
+      copy.id = id; copy.group = group; copy.hidden = false;
    }
    void WriteXMLAttributes(XMLWriter &writer) const override {
-      const auto owner = track->GetOwner();
+      const auto parent = track.lock();
+      const auto owner = parent ? parent->GetOwner() : nullptr;
       auto *project = owner ? owner->GetOwner() : nullptr;
       if (group.empty() || !project || !TrackGroups::FindTrackGroup(*project, group)) return;
       writer.WriteAttr("autopsyTrackIdentity", wxString::FromUTF8(id));
@@ -48,8 +48,8 @@ struct GroupMemberAttachment final : TrackAttachment {
       const std::string text{bytes.data(), bytes.length()};
       if (!TrackGroups::IsGroupIdentity(text)) return false;
       (name == "autopsyTrackIdentity" ? id : group) = text;
-      if (auto owner = track->GetOwner()) if (auto *project = owner->GetOwner())
-         TrackGroups::RefreshTrackGroupProjection(*project);
+      if (auto parent = track.lock()) if (auto owner = parent->GetOwner())
+         if (auto *project = owner->GetOwner()) TrackGroups::RefreshTrackGroupProjection(*project);
       return true;
    }
 };
@@ -103,11 +103,13 @@ public:
          ++revision;
          if (event.mType == TrackListEvent::ADDITION) if (auto track = event.mpTrack.lock()) {
             auto &member = Member(*track);
-            // Undo keeps native TrackId. A new duplicated/pasted track gets a
-            // different one, so its persistent identity cannot alias its source.
-            if (member.copiedFrom != track->GetId()) {
-               member.id = NewIdentity(); member.copiedFrom = track->GetId();
-            }
+            // Fresh duplicates can copy a member identity, while Undo restores
+            // the original identity. Distinguish them from the current owned
+            // identities themselves, never a host-specific session-ID lifecycle.
+            for (auto *other : TrackList::Get(project).Any<Track>())
+               if (other != track.get() && Member(*other).id == member.id) {
+                  member.id = NewIdentity(); break;
+               }
          }
          Refresh();
       });
