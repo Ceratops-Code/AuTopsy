@@ -53,8 +53,9 @@ from run_fork_test_harness import (
 
 def check_split_video_edges(client, root, linked):
     """A split seam must trim the right clip, including its linked soundtrack."""
-    client.send("SelectAll")
-    client.send("RemoveTracks")
+    if client.data("GetInfo: Type=Tracks Format=JSON"):
+        client.send("SelectAll")
+        client.send("RemoveTracks")
     client.file("ImportVideo", root / "source.mp4")
     if not linked:
         client.send('UnlinkMediaClips: Clips="0:0"')
