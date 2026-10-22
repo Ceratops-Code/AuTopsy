@@ -635,6 +635,9 @@ public:
       const auto state = frame ? frame->PlayerState() : VideoPreview::PlayerSnapshot{};
       const auto media = frame ? frame->Media() : nullptr;
       const auto strip = VideoTimeline::GetProjectVideoTrackStatus(context.project);
+       int inputDevice{};
+       float inputVolume{}, playbackVolume{};
+       AudioIO::Get()->GetMixer(&inputDevice, &inputVolume, &playbackVolume);
       rapidjson::StringBuffer buffer; rapidjson::Writer<rapidjson::StringBuffer> out(buffer);
       out.StartObject();
        out.Key("ready"); out.Bool(state.ready);
@@ -645,7 +648,7 @@ public:
        out.Key("previewStatusHandle"); out.Uint64(frame ? frame->StatusHandle() : 0);
        out.Key("previewSurfaceHandle"); out.Uint64(frame ? frame->SurfaceHandle() : 0);
         out.Key("previewTimelineHandle"); out.Uint64(frame ? frame->TimelineHandle() : 0);
-        out.Key("playbackVolume"); out.Double(AudioIO::Get()->GetMixerOutputVol());
+        out.Key("playbackVolume"); out.Double(playbackVolume);
        out.Key("pictureVisible"); out.Bool(frame && frame->PictureVisible());
        const auto picture = VideoTimeline::FindProjectPicture(context.project, ViewInfo::Get(context.project).selectedRegion.t0());
        out.Key("pictureSource"); out.String(picture.visible ? picture.source.path.c_str() : "");
