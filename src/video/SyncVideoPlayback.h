@@ -85,7 +85,10 @@ bool ApplyPreviewSeek(Transport &transport, const PreviewSeekTarget &target)
       action(); changed = true; state = transport.ReadNavigation();
       if (!allowed(state)) throw std::runtime_error("Project playback changed during preview navigation.");
    };
-   if (state.transport.playing && (!playing || std::abs(state.position - target.position) > 0.04))
+   // A paused frame step must not disappear inside the running-clock drift
+   // tolerance, even for high-FPS sources with very short frame durations.
+   const auto tolerance = state.transport.paused || target.paused ? 1e-7 : 0.04;
+   if (state.transport.playing && (!playing || std::abs(state.position - target.position) > tolerance))
       effect([&] { transport.StopPlayback(); });
    if (state.cursor != target.position)
       effect([&] { transport.SetProjectCursor(target.position); });

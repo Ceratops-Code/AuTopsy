@@ -154,6 +154,17 @@ TEST_CASE("Preview seeking preserves desired playback and pause after every inte
       REQUIRE_FALSE(ApplyPreviewSeek(transport, {10, true, false}));
       REQUIRE(transport.effects == 0);
    }
+   for (const auto rate : {30.0, 60.0, 120.0}) {
+      Transport frames;
+      frames.state.transport.paused = true;
+      frames.state.position = frames.state.cursor = 12;
+      const PreviewSeekTarget next{12 + 1 / rate, true, true};
+      REQUIRE(ApplyPreviewSeek(frames, next));
+      REQUIRE(frames.state.position == next.position);
+      REQUIRE(frames.state.transport.paused);
+      REQUIRE(frames.startsPaused == std::vector<bool>{true});
+      REQUIRE_FALSE(ApplyPreviewSeek(frames, next));
+   }
    Transport transport;
    REQUIRE_THROWS(ApplyPreviewSeek(transport, {-1}));
    REQUIRE_THROWS(ApplyPreviewSeek(transport, {21}));
