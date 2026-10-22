@@ -73,7 +73,9 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
    struct Pending { size_t index; VideoFrameRectangle parent; };
    std::vector<Pending> pending;
    for (const auto root : roots)
-      if (soloGroups.empty() || soloGroups.count(root)) pending.push_back({root, {}});
+      if (VideoTimeline::IsVideoLayerVisible(
+            {styles[root].muted, soloGroups.count(root) != 0}, !soloGroups.empty()))
+         pending.push_back({root, {}});
    if (time >= settings.duration) return result;
    while (!pending.empty()) {
       const auto item = pending.back(); pending.pop_back();

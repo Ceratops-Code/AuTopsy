@@ -329,6 +329,27 @@ inline VideoTrimEdge ChooseVideoTrimEdge(const Timeline &timeline, uint64_t id, 
 // two rendering paths cannot acquire different picture precedence rules.
 // The owning track checks ranges when publishing its state; this query borrows
 // those values without a per-frame rebuild of the timeline.
+struct VideoLayerVisibility { bool muted{}, solo{}; };
+inline bool IsVideoLayerVisible(const VideoLayerVisibility &visibility, bool anySolo)
+{ return !visibility.muted && (!anySolo || visibility.solo); }
+struct VideoTimelineLayer {
+   const Timeline *timeline{};
+   VideoLayerVisibility visibility;
+};
+// Select once at the native boundary. Empty/gapped solo tracks still suppress
+// other picture layers; mute overrides solo. Audio mixing is outside this model.
+inline std::vector<const Timeline*> VisibleVideoLayers(const std::vector<VideoTimelineLayer> &layers)
+{
+   const bool anySolo = std::any_of(layers.begin(), layers.end(),
+      [](const auto &layer) { return layer.visibility.solo; });
+   std::vector<const Timeline*> result;
+   for (const auto &layer : layers) {
+      if (!layer.timeline) throw std::runtime_error("A video layer requires a timeline.");
+      if (IsVideoLayerVisible(layer.visibility, anySolo)) result.push_back(layer.timeline);
+   }
+   return result;
+}
+
 struct EvaluatedVideoPicture {
    const Timeline *timeline{};
    const Clip *clip{};

@@ -53,6 +53,8 @@ from test_video_clip_edits import (
     check_split_video_edges,
     check_video_clip_structure,
     check_video_compound_render,
+    check_video_transport,
+    check_video_visibility,
 )
 
 
@@ -950,6 +952,10 @@ def worker(args, root):
         check_split_video_edges(client, root, args.case == "video-linked-split-edges")
     elif args.case == "video-compound-render":
         check_video_compound_render(client, root, args.ffmpeg)
+    elif args.case == "video-transport":
+        check_video_transport(client, root)
+    elif args.case == "video-visibility":
+        check_video_visibility(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in ("video-clip-edits", "video-linked-clip-edits"):
         check_video_clip_structure(client, root, args.case == "video-linked-clip-edits")
     elif args.case == "media":
@@ -1062,6 +1068,7 @@ def main():
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
             "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
+            "video-transport", "video-visibility",
             "media",
             "preview",
             "branding",
@@ -1165,7 +1172,7 @@ def main():
         ("tone-stereo.wav", 2),
     ):
         write_tone(root / name, channels)
-    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "media", "project-compatibility"):
+    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,
@@ -1279,7 +1286,7 @@ def main():
         ).hexdigest(),
         "clip_edits_sha256": hashlib.sha256(
             Path(__file__).with_name("test_video_clip_edits.py").read_bytes()
-        ).hexdigest() if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render") else None,
+        ).hexdigest() if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-transport", "video-visibility") else None,
         "pipe_client_sha256": hashlib.sha256(
             Path(__file__).with_name("pipeclient.py").read_bytes()
         ).hexdigest(),

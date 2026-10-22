@@ -289,6 +289,8 @@ public:
             out.Key("name"); out.String(video->GetName().ToUTF8().data());
             out.Key("selected"); out.Bool(video->GetSelected());
             out.Key("visible"); out.Bool(video->VideoVisible());
+            out.Key("muted"); out.Bool(!video->VideoVisible());
+            out.Key("solo"); out.Bool(video->VideoSolo());
             out.Key("end"); out.Double(video->Timeline().End()); out.EndObject();
          }
          ++index;
@@ -433,9 +435,17 @@ AttachedItem sVideoClipScripting{
 VideoTimeline::Timeline VideoTimeline::GetProjectTimeline(const AudacityProject &project)
 {
    const auto tracks = ProjectVideoTracks(const_cast<AudacityProject&>(project));
-   std::vector<const Timeline*> layers;
-   for (const auto *track : tracks) if (track->VideoVisible()) layers.push_back(&track->Timeline());
-   auto result = ComposeVideoTracks(layers);
+   auto result = ComposeVideoTracks(GetProjectVisibleVideoLayers(project));
+   // A fully hidden composition still has a canvas and media identity. Export
+   // renders black for the separately captured project duration, without opening
+   // hidden sources or changing any native audio mute/solo state.
+   if (result.sourcePath.empty()) for (const auto *track : tracks) {
+      if (track->Timeline().clips.empty()) continue;
+      const auto source = SourceFor(track->Timeline(), track->Timeline().clips.front());
+      result.sourcePath = source.path; result.sourceDuration = source.duration;
+      result.frameRate = source.frameRate; result.sourceWidth = source.width; result.sourceHeight = source.height;
+      break;
+   }
    for (const auto *track : tracks) for (const auto &clip : track->Timeline().clips)
       for (const auto &source : VideoContentSources(clip, SourceFor(track->Timeline(), clip)))
          result.protectedSourcePaths.push_back(source.path);

@@ -20,6 +20,50 @@
 
 namespace VideoPreview {
 
+enum class PreviewTransportAction { Play, Pause, Stop };
+
+// Project transport is authoritative. A foreign stream and recording are never
+// effects of preview controls; the adapter supplies current ownership on every
+// request, including after a stopped or interrupted UI event.
+struct ProjectTransportState {
+   bool hasVideo{}, canControl{true}, playing{}, paused{}, recording{}, stopping{};
+};
+struct PreviewTransportControls {
+   bool play{}, pause{}, stop{};
+};
+inline PreviewTransportControls GetPreviewTransportControls(const ProjectTransportState &state)
+{
+   if (!state.canControl || state.recording || state.stopping) return {};
+   return {state.hasVideo && (!state.playing || state.paused),
+      state.playing && !state.paused, state.playing};
+}
+
+// Each request has at most one native effect. Repeating it reads live state and
+// performs only the unmet effect; Pause is a desired state, not a toggle.
+template<typename Transport>
+bool ApplyPreviewTransport(Transport &transport, PreviewTransportAction action)
+{
+   const auto state = transport.ReadState();
+   const auto controls = GetPreviewTransportControls(state);
+   switch (action) {
+   case PreviewTransportAction::Play:
+      if (!controls.play) return false;
+      if (state.playing) transport.SetPaused(false);
+      else transport.StartPlayback();
+      break;
+   case PreviewTransportAction::Pause:
+      if (!controls.pause) return false;
+      transport.SetPaused(true);
+      break;
+   case PreviewTransportAction::Stop:
+      if (!controls.stop) return false;
+      transport.StopPlayback();
+      break;
+   default: throw std::runtime_error("Choose Play, Pause or Stop for video preview.");
+   }
+   return true;
+}
+
 // Timecode is non-drop-frame: the frame counter uses the nearest nominal
 // integer rate, while conversion to seconds retains the source's exact rate.
 inline std::string FormatFrameTimecode(double seconds, double rate)

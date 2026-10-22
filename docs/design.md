@@ -1,10 +1,11 @@
 # AuTopsy software design
 
-Status: current implementation plus target architecture. The preview release is
-implemented. The batch planner and crop/embedded-layer evaluator are independent
-core foundations, not yet connected to native commands, saved properties or pixel
-rendering. The content/instance model and later operations remain targets until
-their delivery status says otherwise. Owner: AuTopsy maintainers.
+Status: current implementation plus target architecture. Native clips,
+Heal/Join/Separate, preview transport controls and flat-track video Mute/Solo are
+implemented in this branch. Crop and embedded-layer geometry remain independent
+foundations awaiting native controls, saved properties and pixel rendering.
+Other later operations remain targets until their delivery status says otherwise.
+Owner: AuTopsy maintainers.
 
 ```design-document
 {
@@ -138,7 +139,7 @@ interface cannot promise immunity to every future product requirement.
 | Owned editing kernel, native adapters | Target. Upstream pointers, track classes, XML hooks and commands stay at boundaries. | Reusing native audio clips as fake picture containers couples video to sample storage and audio-only transformations. |
 | Content separate from placement | Implemented for joins: immutable retained content and an independent visible window. Retiming remains planned. | A single media tuple cannot represent an editable multi-source join or preserve deleted interior gaps. |
 | One edit plan and one native history transaction | Target. All linked members are checked before any visible change. | Separate per-track commands expose half-edited picture/sound on failure. |
-| One evaluation policy for preview/export | Simple and joined clips share source sampling and internal picture boundaries. Spatial composition still awaits native adoption. | Two visibility implementations drift when mute, solo and compounds are added. |
+| One evaluation policy for preview/export | Simple and joined clips share source sampling, internal picture boundaries and flat-track Mute/Solo selection. Spatial composition still awaits native adoption. | Two visibility implementations drift when mute, solo and compounds are added. |
 | In-process kernel, isolated media workers | Selected. Transactions and the native audio clock stay synchronous; expensive media work can be replaced separately. | Network microservices increase deployment and partial-failure work without improving local editing. |
 | Existing mpv and FFmpeg | Retained. They already decode/render the supported media. | Writing a decoder or compositor duplicates mature libraries and increases maintenance. |
 | OpenTimelineIO | Assessed, not selected as the internal engine. Useful later for interchange. | Its editorial schemas do not supply native edit transactions, source-bound enforcement, preview or rendering; adopting the whole model now adds another adapter and format lifecycle. |
@@ -200,9 +201,11 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `scripts/piped-work/test_fork_features.py` | Native feature dispatch and accepted result records | Adapter contracts through public commands |
 | `scripts/piped-work/test_video_clip_edits.py` | Dedicated split edges, structural edits and compound rendering cases | Reused public-command/gesture cases with generated media |
 
-Later responsibility-based files, whose creation needs separate path approval:
-`ControlVideoTransport.h/.cpp` for the native transport facade and
-`RenderVideoFrames.h/.cpp` for FFmpeg plan translation/complex preview.
+The small native transport facade currently lives in `ShowVideoPreview.cpp`;
+its desired-state policy lives in `SyncVideoPlayback.h`. It uses the existing
+`ProjectAudioManager` API and introduces no separate transport engine.
+Later responsibility-based extraction can move rendering into
+`RenderVideoFrames.h/.cpp` after separate path approval.
 Extend existing adapters and extract coherent responsibilities when needed;
 do not create empty scaffolding or an all-purpose feature manager.
 
@@ -420,8 +423,28 @@ Playback: the native audio engine remains the only project clock. The evaluator
 maps project time to source content. Ordinary single-source playback retains mpv
 and the existing low-resolution proxy. Gap/visibility changes select lower layers
 or black. Frame inspection reads the original source. Preview Play/Pause/Stop
-will delegate to a transport facade used by the main window, not start another
-independent clock or reimport a soundtrack.
+delegate to the main project's native transport. Play starts or resumes, Pause
+holds position, and Stop ends project playback. The pure request policy reads
+current ownership/recording/stopping state, permits at most one unmet native
+effect, and converges after an interrupted request. Controls are disabled during
+recording, stopping or a foreign project's stream. A decoder failure leaves the
+timer observing transport controls so the editor can still stop playback.
+
+Video track Mute/Solo uses the host's semantic button-row layout and ordinary
+button capture/cancellation. The owned `VisibleVideoLayers` policy feeds both
+`FindProjectPicture` and export's flattened timeline; the spatial evaluator uses
+the same eligibility predicate. Multiple solos preserve upper-track precedence;
+mute wins, and an empty/gapped solo still suppresses other roots. These picture
+flags never enter the native audio mixer. One history transaction publishes both
+flags, restores them if history publication fails, and does nothing when the
+requested state already matches. Clipboard clones and optional `videoSolo`
+project XML retain state alongside the existing `videoVisible` field.
+
+Export captures the duration of all video tracks before applying visibility.
+Black gaps/tails use FFmpeg's existing color source. A fully hidden composition
+retains a source-derived canvas and full duration without opening hidden media;
+the existing mixer still supplies the unchanged audio-track mix. No cache,
+sidecar or persistent operational record is added by these controls.
 
 Complex preview uses bounded derived chunks/lookahead only after a performance
 spike demonstrates adequate cancellation, latency and smoothness. Every worker
@@ -648,6 +671,16 @@ movement, invalid parent graphs, retained trims and flags. Dedicated
 parent geometry, mute/solo, all-black duration and owned results. These suites
 compile with standard C++ and Catch2 without native editor or media SDKs.
 
+`fork-video-transport` uses actual preview-button HWNDs in the owned test process,
+checks native clock pause/resume and video-only playback, and checks foreign-project
+ownership. `fork-video-visibility` exercises the native track buttons, canceled
+capture, Undo/Redo, clipboard creation and saved flags. It probes export duration,
+decodes expected picture colors/black tails, and checks audible audio with every
+picture muted, including an offline hidden source. Live mute uses a previously
+painted fixed control row while the native stream runs; it issues no scripting
+command that would itself stop playback. The shared harness keeps its process and
+display boundary checks before each effect.
+
 `run_affected_tests.py` is the single portable impact-map/runner owner. The SDLC
 test action and CI call it; individual checks never call the aggregate. CTest
 discovers actual compiled Catch2 names, so selection does not parse source text.
@@ -674,11 +707,15 @@ does not revoke an unchanged installer or schedule its media acceptance again.
 This uses the Ceratops refactor plan's existing-owner/affected-input/result-reuse
 idea; Nx, a new database and a second cache/dependency service are unnecessary.
 
-The hosted v2 build and its fixture check passed. Two latest native link/trim
-regressions passed locally; the larger native case then stopped on held-mouse
-capture. Do not report that as a complete native pass, debug the retained display
-guard here, or transfer those results to a different binary. No NVIDIA hardware
-result is available. Document mechanics do not establish implementation quality.
+The last installed baseline is source `eae1e5fec14576a87544f13b13cb84444e157940`,
+installer SHA-256 `d920ed6a3eb80e3d4a72286781c17662ff872a0b0e0171252ee359906d72d9f6`.
+Its ten native groups/selection/clipboard, split-edge, structural-edit,
+compound-render, media and supported-consumer cases passed on display 2 before
+packaging; the packaged executable retained the tested identity. Installation
+then completed through the declared SDLC action. These facts belong to that
+baseline; new transport/visibility acceptance belongs to each current executable's
+named receipts. No NVIDIA hardware result is available. Document mechanics do
+not establish implementation quality.
 
 The urgent general Undo/Redo fix is built separately from the new core foundation:
 source `d43451e1fddfd039eb576b1dd88d30c11fae3927`, installer SHA-256
@@ -730,7 +767,7 @@ require the applicable approval before creation.
   installed features or flatten them into an incompatible simple saved clip.
 - **Upstream coupling:** native Track, registry and history contracts can change.
   Owner: adapters; model/evaluator tests must remain independently buildable.
-- **Desktop automation:** held-mouse capture limits existing evidence. Keep the
+- **Desktop automation:** held input can interrupt native gestures. Keep the
   screen guard; no display debugging in this task. Diagnostic payloads follow the
   owner/expiry lifecycle above rather than indefinite retention.
 - **Diagnostic lifecycle adoption:** existing bounded check receipts can contain

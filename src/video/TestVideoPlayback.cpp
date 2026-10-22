@@ -23,6 +23,66 @@
 
 using namespace VideoPreview;
 
+TEST_CASE("Preview transport requests converge after interruption at either side of every native effect")
+{
+   struct Transport {
+      ProjectTransportState state{true, true};
+      int effects{}, boundary{}, interruptAt{-1};
+      ProjectTransportState ReadState() const { return state; }
+      void Boundary() {
+         if (boundary++ == interruptAt) { interruptAt = -1; throw std::runtime_error("interrupted transport"); }
+      }
+      void StartPlayback() { Boundary(); state.playing = true; state.paused = false; ++effects; Boundary(); }
+      void SetPaused(bool paused) { Boundary(); state.paused = paused; ++effects; Boundary(); }
+      void StopPlayback() { Boundary(); state.playing = false; state.paused = false; ++effects; Boundary(); }
+   };
+   struct Scenario { PreviewTransportAction action; bool playing{}, paused{}; };
+   for (const auto scenario : {Scenario{PreviewTransportAction::Play},
+         Scenario{PreviewTransportAction::Play, true, true}, Scenario{PreviewTransportAction::Pause, true},
+         Scenario{PreviewTransportAction::Stop, true}, Scenario{PreviewTransportAction::Stop, true, true}}) {
+      for (const int interruption : {-1, 0, 1}) {
+         Transport transport;
+         transport.state.playing = scenario.playing; transport.state.paused = scenario.paused;
+         transport.interruptAt = interruption;
+         if (interruption >= 0) REQUIRE_THROWS(ApplyPreviewTransport(transport, scenario.action));
+         ApplyPreviewTransport(transport, scenario.action);
+         REQUIRE(transport.state.playing == (scenario.action != PreviewTransportAction::Stop));
+         REQUIRE(transport.state.paused == (scenario.action == PreviewTransportAction::Pause));
+         REQUIRE(transport.effects == 1);
+         for (int repeat = 0; repeat < 10; ++repeat) REQUIRE_FALSE(ApplyPreviewTransport(transport, scenario.action));
+         REQUIRE(transport.effects == 1);
+      }
+   }
+}
+
+TEST_CASE("Preview controls protect foreign playback and recording and retain Stop without picture")
+{
+   struct Transport {
+      ProjectTransportState state{true, true, true};
+      int effects{};
+      ProjectTransportState ReadState() const { return state; }
+      void StartPlayback() { ++effects; }
+      void SetPaused(bool) { ++effects; }
+      void StopPlayback() { ++effects; state.playing = false; }
+   };
+   for (const int blocked : {0, 1, 2}) {
+      Transport transport;
+      transport.state.canControl = blocked != 0;
+      transport.state.recording = blocked == 1;
+      transport.state.stopping = blocked == 2;
+      for (const auto action : {PreviewTransportAction::Play, PreviewTransportAction::Pause, PreviewTransportAction::Stop})
+         REQUIRE_FALSE(ApplyPreviewTransport(transport, action));
+      REQUIRE(transport.effects == 0);
+   }
+   Transport withoutPicture;
+   withoutPicture.state.hasVideo = false;
+   REQUIRE_FALSE(GetPreviewTransportControls(withoutPicture.state).play);
+   REQUIRE(ApplyPreviewTransport(withoutPicture, PreviewTransportAction::Stop));
+   REQUIRE(withoutPicture.effects == 1);
+   REQUIRE_FALSE(ApplyPreviewTransport(withoutPicture, PreviewTransportAction::Stop));
+   REQUIRE_THROWS(ApplyPreviewTransport(withoutPicture, static_cast<PreviewTransportAction>(99)));
+}
+
 TEST_CASE("Frame timecode keeps fractional source rates and rejects malformed input")
 {
    for (const double rate : {24.0, 25.0, 30.0, 60.0, 24000.0 / 1001, 30000.0 / 1001}) {

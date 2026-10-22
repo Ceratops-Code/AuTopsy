@@ -10,6 +10,7 @@ class AuTopsyVideoTrack final : public UniqueChannelTrack<> {
    VideoTimeline::Timeline mTimeline;
    double mClipboardDuration{};
    bool mVisible{true};
+   bool mSolo{};
    struct ReadingClip {
       VideoTimeline::Clip clip;
       std::shared_ptr<VideoTimeline::VideoClipContent> content;
@@ -31,6 +32,8 @@ public:
    void SetTimeline(VideoTimeline::Timeline timeline);
    bool VideoVisible() const { return mVisible; }
    void SetVideoVisible(bool visible);
+   bool VideoSolo() const { return mSolo; }
+   void SetVideoSolo(bool solo);
    Track::Holder Cut(double from, double to) override;
    Track::Holder Copy(double from, double to, bool forClipboard = true) const override;
    void Clear(double from, double to) override;
@@ -53,6 +56,10 @@ namespace VideoEditing { enum class VideoEditKind; }
 namespace VideoTimeline {
 // Native project operations stay at this boundary, outside the owned model.
 Timeline GetProjectTimeline(const AudacityProject &project);
+std::vector<const Timeline*> GetProjectVisibleVideoLayers(const AudacityProject &project);
+double GetProjectVideoDuration(const AudacityProject &project);
+bool SetProjectVideoTrackVisibility(AudacityProject &project, AuTopsyVideoTrack &track,
+   bool visible, bool solo);
 bool SplitProjectVideo(AudacityProject &project, double at);
 bool EditSelectedVideoStructure(AudacityProject &project, VideoEditing::VideoEditKind kind,
    double from, double to, bool recordHistory = true);

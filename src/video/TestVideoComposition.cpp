@@ -100,6 +100,45 @@ TEST_CASE("Mute wins over solo and never changes declared output duration", "[vi
    REQUIRE(frame.layers[0].trackId == "front");
 }
 
+TEST_CASE("Native layer selection shares mute and solo precedence with composition and flattened export", "[video-composition]")
+{
+   auto project = Project();
+   auto settings = Settings();
+   settings.layers = {{"front"}, {"back"}};
+   const auto before = project;
+   for (const auto front : {VideoTimeline::VideoLayerVisibility{},
+         VideoTimeline::VideoLayerVisibility{true, false}, VideoTimeline::VideoLayerVisibility{false, true},
+         VideoTimeline::VideoLayerVisibility{true, true}}) {
+      for (const auto back : {VideoTimeline::VideoLayerVisibility{},
+            VideoTimeline::VideoLayerVisibility{false, true}, VideoTimeline::VideoLayerVisibility{true, true}}) {
+         settings.layers[0].muted = front.muted; settings.layers[0].solo = front.solo;
+         settings.layers[1].muted = back.muted; settings.layers[1].solo = back.solo;
+         for (int repeat = 0; repeat < 3; ++repeat) {
+            const auto visible = VideoTimeline::VisibleVideoLayers({
+               {&project.tracks[0].timeline, front}, {&project.tracks[1].timeline, back}});
+            const auto preview = VideoTimeline::EvaluateVideoLayers(visible, 4);
+            const auto exportTimeline = VideoTimeline::ComposeVideoTracks(visible);
+            const auto exported = VideoTimeline::EvaluateVideoLayers({&exportTimeline}, 4);
+            const auto composition = EvaluateVideoTimeline(project, settings, 4);
+            REQUIRE(bool(preview.clip) == !composition.layers.empty());
+            REQUIRE(bool(exported.clip) == bool(preview.clip));
+            if (preview.clip) {
+               REQUIRE(preview.source.path == composition.layers.back().source.path);
+               REQUIRE(exported.source.path == preview.source.path);
+               REQUIRE(exported.sourceTime == Approx(preview.sourceTime));
+            }
+            REQUIRE(composition.duration == 25);
+            REQUIRE(SameVideoProject(project, before));
+         }
+      }
+   }
+   project.tracks[0].timeline.clips.clear();
+   const auto emptySolo = VideoTimeline::VisibleVideoLayers({
+      {&project.tracks[0].timeline, {false, true}}, {&project.tracks[1].timeline, {}}});
+   REQUIRE_FALSE(VideoTimeline::EvaluateVideoLayers(emptySolo, 4).clip);
+   REQUIRE_THROWS(VideoTimeline::VisibleVideoLayers({{nullptr, {true, false}}}));
+}
+
 TEST_CASE("Composition rejects stale properties and invalid geometry before producing a frame", "[video-composition]")
 {
    const auto project = Project();

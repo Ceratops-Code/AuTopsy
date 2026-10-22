@@ -98,7 +98,7 @@ public:
 AuTopsyVideoTrack::AuTopsyVideoTrack() { SetName(_("Video Track")); }
 AuTopsyVideoTrack::AuTopsyVideoTrack(const AuTopsyVideoTrack &other, ProtectedCreationArg &&arg)
    : UniqueChannelTrack<>(other, std::move(arg)), mTimeline(other.mTimeline),
-     mClipboardDuration(other.mClipboardDuration), mVisible(other.mVisible) {}
+     mClipboardDuration(other.mClipboardDuration), mVisible(other.mVisible), mSolo(other.mSolo) {}
 AuTopsyVideoTrack::~AuTopsyVideoTrack() = default;
 const Track::TypeInfo &AuTopsyVideoTrack::ClassTypeInfo()
 {
@@ -118,6 +118,8 @@ void AuTopsyVideoTrack::SetTimeline(VideoTimeline::Timeline timeline)
 }
 void AuTopsyVideoTrack::SetVideoVisible(bool visible)
 { mVisible = visible; Notify(false); }
+void AuTopsyVideoTrack::SetVideoSolo(bool solo)
+{ mSolo = solo; Notify(false); }
 size_t AuTopsyVideoTrack::NIntervals() const { return mTimeline.clips.size(); }
 std::shared_ptr<WideChannelGroupInterval> AuTopsyVideoTrack::DoGetInterval(size_t index)
 {
@@ -127,7 +129,7 @@ std::shared_ptr<WideChannelGroupInterval> AuTopsyVideoTrack::DoGetInterval(size_
 Track::Holder AuTopsyVideoTrack::Copy(double from, double to, bool) const
 {
    auto result = std::make_shared<AuTopsyVideoTrack>();
-   result->Init(*this); result->mVisible = mVisible;
+   result->Init(*this); result->mVisible = mVisible; result->mSolo = mSolo;
    result->mTimeline = VideoTimeline::CopyVideoRange(mTimeline, from, to);
    result->mClipboardDuration = to - from;
    return result;
@@ -152,7 +154,7 @@ void AuTopsyVideoTrack::Paste(double at, const Track &source)
 Track::Holder AuTopsyVideoTrack::PasteInto(AudacityProject &, TrackList &tracks) const
 {
    auto result = std::make_shared<AuTopsyVideoTrack>();
-   result->Init(*this); result->mVisible = mVisible; result->Paste(0, *this);
+   result->Init(*this); result->mVisible = mVisible; result->mSolo = mSolo; result->Paste(0, *this);
    tracks.Add(result); return result;
 }
 void AuTopsyVideoTrack::MoveTo(double start)
@@ -173,8 +175,11 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
          int schema{};
          if (!ReadOptionalAttribute(attributes, "videoSchema", schema) || schema < 0 || schema > 1) return false;
          int visible = 1;
-         if (!ReadOptionalAttribute(attributes, "videoVisible", visible)) return false;
+         int solo{};
+         if (!ReadOptionalAttribute(attributes, "videoVisible", visible) || visible < 0 || visible > 1 ||
+             !ReadOptionalAttribute(attributes, "videoSolo", solo) || solo < 0 || solo > 1) return false;
          mVisible = visible != 0;
+         mSolo = solo != 0;
          if (!ReadAttribute(attributes, "videoNextId", mTimeline.nextId)) return false;
          std::string_view source;
          if (ReadAttribute(attributes, "videoSource", source)) mTimeline.sourcePath = source;
@@ -240,6 +245,7 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
    writer.StartTag("videotrack"); WriteCommonXMLAttributes(writer);
    writer.WriteAttr("videoSchema", 1);
    writer.WriteAttr("videoVisible", mVisible ? 1 : 0);
+   writer.WriteAttr("videoSolo", mSolo ? 1 : 0);
    writer.WriteAttr("videoNextId", static_cast<long long>(mTimeline.nextId));
    if (!mTimeline.sourcePath.empty()) {
       writer.WriteAttr("videoSource", wxString::FromUTF8(mTimeline.sourcePath));
@@ -315,13 +321,39 @@ std::shared_ptr<AuTopsyVideoTrack> CreateProjectVideoTrack(AudacityProject &proj
 }
 ProjectPicture FindProjectPicture(AudacityProject &project, double time)
 {
-   std::vector<const Timeline*> layers;
-   for (const auto *track : ProjectVideoTracks(project))
-      if (track->VideoVisible()) layers.push_back(&track->Timeline());
-   const auto picture = EvaluateVideoLayers(layers, time);
+   const auto picture = EvaluateVideoLayers(GetProjectVisibleVideoLayers(project), time);
    if (!picture.clip) return {};
    return {true, picture.source,
       picture.sourceTime, picture.clip->id};
+}
+std::vector<const Timeline*> GetProjectVisibleVideoLayers(const AudacityProject &project)
+{
+   std::vector<VideoTimelineLayer> layers;
+   for (const auto *track : ProjectVideoTracks(const_cast<AudacityProject&>(project)))
+      layers.push_back({&track->Timeline(), {!track->VideoVisible(), track->VideoSolo()}});
+   return VisibleVideoLayers(layers);
+}
+double GetProjectVideoDuration(const AudacityProject &project)
+{
+   double end{};
+   for (const auto *track : ProjectVideoTracks(const_cast<AudacityProject&>(project)))
+      end = std::max(end, track->Timeline().End());
+   return end;
+}
+bool SetProjectVideoTrackVisibility(AudacityProject &project, AuTopsyVideoTrack &track,
+   bool visible, bool solo)
+{
+   if (track.GetOwner().get() != &TrackList::Get(project))
+      throw std::runtime_error("The video track is no longer in this project.");
+   const bool oldVisible = track.VideoVisible(), oldSolo = track.VideoSolo();
+   if (oldVisible == visible && oldSolo == solo) return false;
+   track.SetVideoVisible(visible); track.SetVideoSolo(solo);
+   try {
+      ProjectHistory::Get(project).PushState(XO("Changed video track mute/solo"), XO("Video Mute/Solo"));
+   }
+   catch (...) { track.SetVideoVisible(oldVisible); track.SetVideoSolo(oldSolo); throw; }
+   Viewport::Get(project).Redraw();
+   return true;
 }
 bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &source,
    AuTopsyVideoTrack &destination, uint64_t id, double start, bool recordHistory)

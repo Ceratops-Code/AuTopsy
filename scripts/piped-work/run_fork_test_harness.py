@@ -841,9 +841,9 @@ def ready_video_preview(client):
 
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
-    gesture="drag", area="header", menu_path=(), key=None
+    gesture="drag", area="header", menu_path=(), key=None, painted=None
 ):
-    """Exercise native clip gestures and popup menus, targeting only the owned PID.
+    """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
 
     Coordinates come from the painted native row, including its actual data
     origin. Menu choices use visible labels and keyboard navigation in the owned window;
@@ -853,7 +853,7 @@ def operate_owned_video_track(
         end_time = start_time
     if gesture not in ("drag", "click", "double-click", "context"):
         raise ValueError("Unknown native video gesture: " + gesture)
-    info = painted_video_tracks(client)
+    info = painted if painted is not None else painted_video_tracks(client)
     if not all(
         info["viewStart"] <= time <= info["viewEnd"] for time in (start_time, end_time)
     ):
@@ -880,6 +880,11 @@ def operate_owned_video_track(
         raise RuntimeError("The native TrackPanel belongs to another process.")
 
     def position(time, row):
+        if area in ("mute", "solo"):
+            button = row[area]
+            if button["width"] <= 0 or button["height"] <= 0:
+                raise RuntimeError("The requested native video button is not painted.")
+            return button["x"] + button["width"] // 2, button["y"] + button["height"] // 2
         x = row["dataLeft"] + round(
             (time - info["viewStart"])
             / (info["viewEnd"] - info["viewStart"])

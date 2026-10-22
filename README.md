@@ -120,9 +120,13 @@ inherited scripting examples retain their upstream conventions.
 The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` dispatches the feature scenarios and owns result records.
-`test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate and
-multi-source rendering/relinking cases. Native result identities include this
+`test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate,
+transport-button, video Mute/Solo and multi-source rendering/relinking cases. Native result identities include this
 module when those cases run.
+`fork-video-transport` covers the actual preview buttons, pause/resume, live
+picture mute, video-only playback and ownership between projects.
+`fork-video-visibility` covers track buttons and cancellation, Undo/Redo,
+clipboard/save/reopen, visible source selection and decoded picture/audio exports.
 The focused `fork-video-selection`, `fork-video-edges`, `fork-video-clipboard`
 and `fork-video-track-menu` cases exercise real clip clicks,
 double-click selection, Delete/Backspace, reversible edge drags, canceled edits,
@@ -190,9 +194,11 @@ pipes, so it can run alongside an installed copy of Audacity.
    moving, splitting, or trimming either keeps their linked partners together.
    Use **Edit > Clips > Unlink Video / Audio Clips...** for independent edits.
    Edit, mute, or delete audio normally. Silent videos add no audio tracks.
-3. Use the transport controls. Video follows normal-speed playback, pause,
-   stop, timeline seeks, and loop jumps. The preview player itself is muted,
-   so audio plays once through the editable project tracks.
+3. Use **Play**, **Pause** and **Stop** in the preview or the main transport.
+   Preview **Play** becomes **Resume** while paused. Both windows control the same
+   project audio/video playback; preview controls do not interrupt recording or
+   another project's stream. Video follows normal-speed playback, pause, stop,
+   timeline seeks and loop jumps. Audio plays once through the editable tracks.
 4. Closing the preview hides it. **View > Video Preview** shows it again, and
    starting playback also brings it back. Delete a video track using its normal
    close button or **Tracks > Remove Tracks**.
@@ -207,6 +213,15 @@ pipes, so it can run alongside an installed copy of Audacity.
    Export starts at zero and ends at the last video clip; short audio is padded
    with silence and later audio is excluded. The current selection does not
    limit this export. Audio is stereo AAC at 48 kHz, 256 kbit/s.
+
+Each video track has visible **Mute** and **Solo** buttons, also available in
+its track menu. They affect picture in both preview and export; the separate
+audio tracks keep their own mix settings. Several video tracks can be soloed.
+Video Mute overrides Solo, and a solo track's gaps remain black unless another
+solo track supplies picture there. Visibility changes support Undo/Redo and
+save/reopen. Hiding the final picture leaves a black tail; hiding every video
+exports black for the full video duration with the edited audio mix. Export does
+not need to open muted sources.
 
 Playback uses the normal audio transport, including when the soundtrack has
 been deleted. Video-only projects supply silence in memory to its clock; no

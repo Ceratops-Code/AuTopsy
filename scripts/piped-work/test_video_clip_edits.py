@@ -1,10 +1,225 @@
-"""Focused native clip-structure and edge cases, using generated test media."""
+"""Focused native video editing, transport and visibility cases with neutral media."""
 import json
+import os
+import re
 import shutil
 import time
 from pathlib import Path
 
-from run_fork_test_harness import operate_owned_video_track, run_process, save_reopen
+from run_fork_test_harness import (
+    assert_owned_test_display,
+    operate_owned_video_track,
+    painted_video_tracks,
+    ready_video_preview,
+    run_process,
+    save_reopen,
+)
+
+
+def wait_for_native_state(condition, description, timeout=8):
+    """Wait for an asynchronous GUI/audio state; never replay its effect."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() >= deadline:
+            raise AssertionError("Native state did not arrive: " + description)
+        time.sleep(0.025)
+
+
+def owned_preview_controls(client):
+    """Use real native button HWNDs, bound to this test PID and second display."""
+    import win32process
+
+    info = ready_video_preview(client)
+    frame = int(info["previewFrameHandle"])
+    owner = win32process.GetWindowThreadProcessId(frame)[1]
+    assert owner == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    assert_owned_test_display(owner, include_window=frame)
+    handles = {item["action"]: int(item["handle"]) for item in info["transportControls"]}
+    for handle in handles.values():
+        assert handle and win32process.GetWindowThreadProcessId(handle)[1] == owner
+    return info, handles
+
+
+def press_preview_button(handle):
+    """A native button event does not borrow shared mouse or keyboard input."""
+    import win32con
+    import win32gui
+    import win32process
+
+    assert win32process.GetWindowThreadProcessId(handle)[1] == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    wait_for_native_state(lambda: win32gui.IsWindowEnabled(handle), "preview button enabled")
+    win32gui.SendMessageTimeout(handle, win32con.BM_CLICK, 0, 0, win32con.SMTO_ABORTIFHUNG, 10000)
+
+
+def preview_project_seconds(status):
+    import win32gui
+
+    caption = win32gui.GetWindowText(status)
+    match = re.search(r"\|\s+(-?\d+(?:\.\d+)?) s", caption)
+    assert match, caption
+    return float(match[1])
+
+
+def check_video_transport(client, root):
+    """Real controls share native audio, pause/resume, silent clock and ownership."""
+    import win32gui
+
+    client.file("ImportVideo", root / "source.mp4")
+    client.send("FitInWindow")
+    for silent in (False, True):
+        if silent:
+            videos = {row["index"] for row in client.data("GetVideoClips")["tracks"]}
+            tracks = client.data("GetInfo: Type=Tracks Format=JSON")
+            for track in reversed([index for index in range(len(tracks)) if index not in videos]):
+                client.send(f"SelectTracks: Track={track} TrackCount=1 Mode=Set")
+                client.send("RemoveTracks")
+        for _ in range(2):
+            client.send("SelectTime: Start=0 End=0")
+            info, buttons = owned_preview_controls(client)
+            status = int(info["previewStatusHandle"])
+            press_preview_button(buttons["play"])
+            wait_for_native_state(lambda buttons=buttons: win32gui.IsWindowEnabled(buttons["pause"]), "project playing")
+            wait_for_native_state(lambda status=status: preview_project_seconds(status) > 0.15, "project clock advances")
+            assert not win32gui.IsWindowEnabled(buttons["play"])
+            press_preview_button(buttons["pause"])
+            wait_for_native_state(lambda buttons=buttons: win32gui.IsWindowEnabled(buttons["play"]) and
+                                  not win32gui.IsWindowEnabled(buttons["pause"]), "project paused")
+            time.sleep(0.08)
+            paused = preview_project_seconds(status)
+            time.sleep(0.2)
+            assert abs(preview_project_seconds(status) - paused) < 0.025
+            assert win32gui.IsWindowEnabled(buttons["stop"])
+            press_preview_button(buttons["play"])
+            wait_for_native_state(lambda status=status, paused=paused: preview_project_seconds(status) > paused + 0.12, "resumed project clock")
+            press_preview_button(buttons["stop"])
+            wait_for_native_state(lambda buttons=buttons: not win32gui.IsWindowEnabled(buttons["stop"]), "project stopped")
+    # Live picture mute must keep native playback running. This gesture uses
+    # the same already-painted, fixed control row, avoiding a scripting command
+    # whose native dispatch would stop the project before the click.
+    client.send("SelectTime: Start=0 End=0")
+    painted = painted_video_tracks(client)
+    info, buttons = owned_preview_controls(client)
+    press_preview_button(buttons["play"])
+    wait_for_native_state(lambda: win32gui.IsWindowEnabled(buttons["pause"]), "silent video playback")
+    video_track = painted["videoTrackRows"][0]["index"]
+    operate_owned_video_track(client, 0.5, track=video_track, gesture="click", area="mute", painted=painted)
+    wait_for_native_state(lambda: not win32gui.IsWindowVisible(int(info["previewSurfaceHandle"])), "muted picture hidden")
+    assert win32gui.IsWindowEnabled(buttons["pause"]), "Picture mute stopped native playback"
+    operate_owned_video_track(client, 0.5, track=video_track, gesture="click", area="mute", painted=painted)
+    wait_for_native_state(lambda: win32gui.IsWindowVisible(int(info["previewSurfaceHandle"])), "picture unmuted")
+    press_preview_button(buttons["stop"])
+    wait_for_native_state(lambda: not win32gui.IsWindowEnabled(buttons["stop"]), "live visibility stopped")
+    client.file("SaveProject2", root / "_transport-first.aup3")
+    first = buttons
+    client.send("New")
+    client.file("ImportVideo", root / "source.mp4")
+    _, second = owned_preview_controls(client)
+    press_preview_button(second["play"])
+    wait_for_native_state(lambda: win32gui.IsWindowEnabled(second["pause"]) and
+                          not any(win32gui.IsWindowEnabled(handle) for handle in first.values()),
+                          "other project owns playback")
+    time.sleep(0.15)
+    assert win32gui.IsWindowEnabled(second["stop"])
+    press_preview_button(second["pause"])
+    wait_for_native_state(lambda: win32gui.IsWindowEnabled(second["play"]), "other project paused")
+    assert not any(win32gui.IsWindowEnabled(handle) for handle in first.values())
+    press_preview_button(second["stop"])
+    wait_for_native_state(lambda: win32gui.IsWindowEnabled(first["play"]), "first project regains controls")
+    client.file("SaveProject2", root / "_transport-second.aup3")
+
+
+def check_video_visibility(client, root, ffmpeg, ffprobe):
+    """Track buttons, native history/storage and decoded export share visibility."""
+    source, other = root / "source.mp4", root / "other-source.mp4"
+    client.file("ImportVideo", source)
+    client.file("ImportVideo", other)
+    client.send("FitInWindow")
+    clips = clip_rows(client)
+    front = next(row["track"] for row in clips if Path(row["source"]) == other)
+    back = next(row["track"] for row in clips if Path(row["source"]) == source)
+    linked_before = client.data("GetLinkedMediaClips")
+
+    def states():
+        return client.data("GetVideoClips")["tracks"]
+
+    def toggle(track, area, cancel=False):
+        operate_owned_video_track(client, 0.5, track=track, gesture="drag" if cancel else "click",
+                                  area=area, cancel=cancel)
+
+    def picture(path):
+        client.send("SelectTime: Start=0.5 End=0.5")
+        def matches():
+            info = client.data("GetVideoPreviewInfo")
+            actual = Path(info["pictureSource"]) if info["pictureSource"] else None
+            return actual == path and info["pictureVisible"] == bool(path)
+        wait_for_native_state(matches, "selected video picture")
+
+    def exported(name, colors):
+        output = root / name
+        client.file("ExportVideoMix", output, 'Preset="h264" Width=160 Height=90 FrameRate=30 Quality=18')
+        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-of", "json", str(output)], timeout=30))
+        assert abs(float(metadata["format"]["duration"]) - 4) < 0.08, metadata
+        for when, color in colors:
+            pixel = run_process([ffmpeg, "-v", "error", "-ss", str(when), "-i", str(output), "-frames:v", "1",
+                                 "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
+            assert len(pixel) == 3, pixel
+            red, green, blue = pixel
+            assert (max(pixel) < 15 if color == "black" else red > 180 and green < 30 and blue < 30
+                    if color == "red" else blue > 180 and red < 30 and green < 30 if color == "blue"
+                    else red > 70 and green > 70 and blue < 30), (when, color, tuple(pixel))
+        import array
+
+        samples = array.array("h", run_process([ffmpeg, "-v", "error", "-i", str(output), "-map", "0:a:0",
+                                              "-f", "s16le", "-ac", "1", "-ar", "8000", "pipe:1"], timeout=30))
+        assert samples and max(abs(value) for value in samples) > 100, "Video mute changed the soundtrack mix"
+
+    baseline = states()
+    picture(other)
+    for _ in range(2):
+        toggle(front, "mute", cancel=True)
+        assert states() == baseline
+        toggle(front, "mute")
+        assert next(row for row in states() if row["index"] == front)["muted"]
+        picture(source)
+        client.send("Undo")
+        assert states() == baseline
+        client.send("Redo")
+        assert next(row for row in states() if row["index"] == front)["muted"]
+        client.send("Undo")
+    toggle(back, "solo")
+    picture(source)
+    exported("_solo-back.mp4", [(0.5, "red"), (2.5, "blue")])
+    toggle(front, "solo")
+    picture(other)
+    toggle(back, "mute")
+    picture(other)
+    exported("_muted-tail.mp4", [(0.5, "yellow"), (2.5, "black")])
+    toggle(front, "mute")
+    picture(None)
+    hidden = states()
+    assert client.data("GetLinkedMediaClips") == linked_before
+    project = root / "_muted-solo.aup3"
+    save_reopen(client, project)
+    assert states() == hidden
+    picture(None)
+    relocated = root / "_temporarily-offline.mp4"
+    source.replace(relocated)
+    try:
+        exported("_all-muted.mp4", [(0.5, "black"), (3.5, "black")])
+    finally:
+        relocated.replace(source)
+    # Normal clipboard track creation must carry visibility state, without
+    # baking it into clips or altering their retained media ranges.
+    select_clip_range(client, 0, 4, back)
+    client.send("Copy")
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    client.send("SelectTime: Start=0 End=0")
+    client.send("Paste")
+    copied = states()
+    assert copied and all(row["muted"] and row["solo"] for row in copied), copied
+    save_reopen(client, root / "_copied-visibility.aup3")
+    assert states() == copied
 
 
 def select_clip_range(client, start, end, track=0):

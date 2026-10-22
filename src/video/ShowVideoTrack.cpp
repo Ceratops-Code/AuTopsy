@@ -25,6 +25,10 @@
 #include "Clipboard.h"
 #include "tracks/ui/CommonChannelView.h"
 #include "tracks/ui/CommonTrackControls.h"
+#include "tracks/ui/CommonTrackInfo.h"
+#include "tracks/ui/ButtonHandle.h"
+#include "tracks/playabletrack/ui/PlayableTrackControls.h"
+#include "AColor.h"
 #include "tracks/ui/ChannelVRulerControls.h"
 #include "tracks/ui/TimeShiftHandle.h"
 #include "tracks/ui/AffordanceHandle.h"
@@ -559,10 +563,14 @@ class VideoTrackMenu final : public PopupMenuTable {
    VideoTrackMenu() : PopupMenuTable{"VideoTrack"} {}
    DECLARE_POPUP_MENU(VideoTrackMenu);
    CommonTrackControls::InitMenuData *mData{};
-   void ToggleVisible(wxCommandEvent &) {
+   void ToggleMute(wxCommandEvent &) {
       auto &track = static_cast<AuTopsyVideoTrack&>(mData->track);
-      track.SetVideoVisible(!track.VideoVisible());
-      ProjectHistory::Get(mData->project).PushState(XO("Changed video track visibility"),XO("Video Visibility"));
+      SetProjectVideoTrackVisibility(mData->project, track, !track.VideoVisible(), track.VideoSolo());
+      mData->result = RefreshCode::RefreshAll;
+   }
+   void ToggleSolo(wxCommandEvent &) {
+      auto &track = static_cast<AuTopsyVideoTrack&>(mData->track);
+      SetProjectVideoTrackVisibility(mData->project, track, track.VideoVisible(), !track.VideoSolo());
       mData->result = RefreshCode::RefreshAll;
    }
 public:
@@ -570,15 +578,108 @@ public:
    void InitUserData(void *data) override { mData = static_cast<CommonTrackControls::InitMenuData*>(data); }
 };
 BEGIN_POPUP_MENU(VideoTrackMenu)
-   AppendItem("ToggleVideoVisible",32001,XXO("Show / Hide Video"),POPUP_MENU_FN(ToggleVisible));
+   AppendCheckItem("ToggleVideoMute",32001,XXO("Mute Video"),POPUP_MENU_FN(ToggleMute),
+      [](PopupMenuHandler &handler, wxMenu &menu, int id) {
+         const auto &track = static_cast<AuTopsyVideoTrack&>(static_cast<VideoTrackMenu&>(handler).mData->track);
+         menu.Check(id, !track.VideoVisible());
+      });
+   AppendCheckItem("ToggleVideoSolo",32002,XXO("Solo Video"),POPUP_MENU_FN(ToggleSolo),
+      [](PopupMenuHandler &handler, wxMenu &menu, int id) {
+         const auto &track = static_cast<AuTopsyVideoTrack&>(static_cast<VideoTrackMenu&>(handler).mData->track);
+         menu.Check(id, track.VideoSolo());
+      });
 END_POPUP_MENU()
+
+class VideoVisibilityButtonHandle final : public ButtonHandle {
+   bool mSolo;
+public:
+   VideoVisibilityButtonHandle(const std::shared_ptr<Track> &track, const wxRect &rect, bool solo)
+      : ButtonHandle(track, rect), mSolo(solo) {}
+   VideoVisibilityButtonHandle &operator=(const VideoVisibilityButtonHandle&) = default;
+   bool SoloButton() const { return mSolo; }
+protected:
+   Result CommitChanges(const wxMouseEvent &, AudacityProject *project, wxWindow *parent) override {
+      const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(GetTrack());
+      if (!track || !project) return RefreshCode::RefreshNone;
+      try {
+         SetProjectVideoTrackVisibility(*project, *track,
+            mSolo ? track->VideoVisible() : !track->VideoVisible(),
+            mSolo ? !track->VideoSolo() : track->VideoSolo());
+      }
+      catch (const std::exception &error) {
+         wxMessageBox(wxString::FromUTF8(error.what()), _("Video Mute/Solo"), wxOK | wxICON_ERROR, parent);
+      }
+      return RefreshCode::RefreshAll;
+   }
+   TranslatableString Tip(const wxMouseState &, AudacityProject &) const override {
+      return mSolo ? XO("Solo this video track. Audio mixing is independent; video Mute overrides Solo.")
+         : XO("Mute this video track. Its audio remains in the separate audio track.");
+   }
+   bool StopsOnKeystroke() override { return true; }
+};
+
+void DrawVideoVisibilityButtons(TrackPanelDrawingContext &, const wxRect &, const Track *);
 class VideoTrackControls final : public CommonTrackControls {
+   std::weak_ptr<VideoVisibilityButtonHandle> mMuteHandle, mSoloHandle;
+   wxRect mBounds;
 public:
    using CommonTrackControls::CommonTrackControls;
-   std::vector<UIHandlePtr> HitTest(const TrackPanelMouseState &state,const AudacityProject *project) override
-   { return CommonTrackControls::HitTest(state,project); }
+   const TCPLines &GetTCPLines() const override {
+      static const TCPLines lines = [] {
+         auto result = CommonTrackInfo::StaticTCPLines();
+         result.push_back({TrackInfo::TCPLine::kItemMute | TrackInfo::TCPLine::kItemSolo,
+            20, 2, DrawVideoVisibilityButtons});
+         return result;
+      }();
+      return lines;
+   }
+   wxRect ButtonRect(bool solo, const wxRect *bounds = nullptr) const {
+      wxRect result;
+      const auto track = FindTrack();
+      if (!track) return result;
+      const auto &rect = bounds ? *bounds : mBounds;
+      // Reuse the host's semantic Mute/Solo layout, without making picture an
+      // audio PlayableTrack or copying the host's row positions.
+      PlayableTrackControls::GetMuteSoloRect(rect, result, solo, track.get());
+      if (CommonTrackInfo::HideTopItem(rect, result)) return {};
+      return result;
+   }
+   std::vector<UIHandlePtr> HitTest(const TrackPanelMouseState &state,const AudacityProject *project) override {
+      const auto track = FindTrack();
+      for (const bool solo : {false, true}) {
+         const auto rect = ButtonRect(solo, &state.rect);
+         if (track && rect.Contains(state.state.GetPosition())) {
+            auto handle = std::make_shared<VideoVisibilityButtonHandle>(track, rect, solo);
+            return {AssignUIHandlePtr(solo ? mSoloHandle : mMuteHandle, handle)};
+         }
+      }
+      return CommonTrackControls::HitTest(state,project);
+   }
+   void Draw(TrackPanelDrawingContext &context, const wxRect &rect, unsigned pass) override {
+      if (pass == TrackArtist::PassControls) mBounds = rect;
+      CommonTrackControls::Draw(context, rect, pass);
+   }
    PopupMenuTable *GetMenuExtension(Track *) override { return &VideoTrackMenu::Instance(); }
 };
+void DrawVideoVisibilityButtons(TrackPanelDrawingContext &context, const wxRect &, const Track *track)
+{
+   const auto *video = dynamic_cast<const AuTopsyVideoTrack*>(track);
+   if (!video) return;
+   const auto &controls = static_cast<const VideoTrackControls&>(TrackControls::Get(*video));
+   const auto *target = dynamic_cast<VideoVisibilityButtonHandle*>(context.target.get());
+   for (const bool solo : {false, true}) {
+      const auto rect = controls.ButtonRect(solo);
+      if (rect.IsEmpty()) continue;
+      const bool hit = target && target->GetTrack().get() == track && target->SoloButton() == solo;
+      const bool pressed = hit && target->IsDragging() && rect.Contains(context.lastState.GetPosition());
+      const bool active = solo ? video->VideoSolo() : !video->VideoVisible();
+      AColor::Bevel2(context.dc, active == pressed, rect, track->GetSelected(), hit);
+      TrackInfo::SetTrackInfoFont(&context.dc);
+      const auto label = solo ? _("Solo") : _("Mute");
+      const auto size = context.dc.GetTextExtent(label);
+      context.dc.DrawText(label, rect.x + (rect.width - size.x) / 2, rect.y + (rect.height - size.y) / 2);
+   }
+}
 }
 using GetVideoControls = DoGetControls::Override<AuTopsyVideoTrack>;
 DEFINE_ATTACHED_VIRTUAL_OVERRIDE(GetVideoControls) {
@@ -616,6 +717,11 @@ VideoTimeline::VideoTrackStatus VideoTimeline::GetProjectVideoTrackStatus(Audaci
          auto &nativeView = static_cast<VideoTrackView&>(ChannelView::Get(*video));
          const auto data = nativeView.DataRect();
          result.rows.push_back({index,rect.x,rect.y,rect.width,rect.height,data.x,data.width,data.y,video->GetSelected()});
+         auto &row = result.rows.back();
+         const auto &controls = static_cast<const VideoTrackControls&>(TrackControls::Get(*video));
+         const auto mute = controls.ButtonRect(false), solo = controls.ButtonRect(true);
+         row.mute = {mute.x, mute.y, mute.width, mute.height, !video->VideoVisible()};
+         row.solo = {solo.x, solo.y, solo.width, solo.height, video->VideoSolo()};
          result.thumbnails = result.thumbnails || nativeView.HasThumbnails();
       }
       ++index;
