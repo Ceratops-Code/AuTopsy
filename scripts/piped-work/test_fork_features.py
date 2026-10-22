@@ -50,6 +50,7 @@ from run_fork_test_harness import (
     write_neutral_preview_video,
     write_tone,
 )
+from test_track_groups import check_track_groups
 from test_video_clip_edits import (
     check_preview_navigation,
     check_split_video_edges,
@@ -961,6 +962,8 @@ def worker(args, root):
         check_transport_toolbar(client, root)
     elif args.case == "preview-navigation":
         check_preview_navigation(client, root)
+    elif args.case == "track-groups":
+        check_track_groups(client, root)
     elif args.case == "project-compatibility":
         check_project_compatibility(client, root)
     elif args.case == "video":
@@ -1108,6 +1111,9 @@ def native_test_inputs(args, executable, module, display):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "project-compatibility":
         inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
+    if args.case == "track-groups":
+        inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
+        inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
     return inputs
 
 
@@ -1241,6 +1247,7 @@ def main():
             "history-view",
             "transport-toolbar",
             "preview-navigation",
+            "track-groups",
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
@@ -1568,7 +1575,7 @@ def main():
                 if status:
                     raise RuntimeError(f"The owned app exited with status {status}.")
                 stock_result = None
-                if args.case == "project-compatibility":
+                if args.case in ("project-compatibility", "track-groups"):
                     stock_result = check_portable_audacity_projects(root, display, args.ffmpeg)
                 log.flush()
                 shows = re.findall(

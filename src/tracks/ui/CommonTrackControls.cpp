@@ -123,6 +123,8 @@ TrackMenuTable &TrackMenuTable::Instance()
    return instance;
 }
 
+PopupMenuTable &GetCommonTrackMenu() { return TrackMenuTable::Instance(); }
+
 void TrackMenuTable::InitUserData(void *pUserData)
 {
    mpData = static_cast<CommonTrackControls::InitMenuData*>(pUserData);

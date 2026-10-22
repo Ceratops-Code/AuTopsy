@@ -41,6 +41,8 @@ COMMON_INPUTS = (
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
+    CheckGroup("track-groups", ("src/track-groups/EditTrackGroups.*", "src/track-groups/RenderGroupWaveform.*",
+        "src/track-groups/TestTrackGroups.cpp", "src/track-groups/CMakeLists.txt"), "track-groups-test"),
     CheckGroup("video-playback", TIMELINE_INPUTS + (
         "src/video/SyncVideoPlayback.h", "src/video/ChooseVideoExport.h",
         "src/video/RelinkVideoMedia.h", "src/video/TestVideoPlayback.cpp"), "video-playback-test"),
@@ -72,6 +74,9 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/track-groups/CreateTrackGroup.*", "src/track-groups/ShowTrackGroups.*",
+    "scripts/piped-work/test_track_groups.py", "src/tracks/ui/ChannelView.cpp", "src/TrackPanel.cpp",
+    "src/TrackUtilities.cpp", "src/tracks/ui/CommonTrackControls.h",
     "libraries/lib-wave-track/WaveTrack.cpp",
     "scripts/piped-work/test_video_clip_edits.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
@@ -89,7 +94,7 @@ NATIVE_INPUTS = (
     "src/tracks/ui/CommonTrackControls.cpp",
     "libraries/lib-project-history/*", "libraries/lib-viewport/*", "CMakeLists.txt", "CMakePresets.json",
 )
-OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "scripts/*.py", "scripts/build/windows/*")
+OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "src/track-groups/*", "scripts/*.py", "scripts/build/windows/*")
 DOCUMENT_SUFFIXES = {".md", ".rst"}
 
 

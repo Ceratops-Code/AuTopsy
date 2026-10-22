@@ -19,6 +19,9 @@ class PopupMenuTable;
 class MinimizeButtonHandle;
 class TrackSelectHandle;
 
+// Feature menu entries register through the native popup registry.
+AUDACITY_DLL_API PopupMenuTable &GetCommonTrackMenu();
+
 namespace TrackInfo{ struct TCPLine; }
 using TCPLines = std::vector< TrackInfo::TCPLine >;
 

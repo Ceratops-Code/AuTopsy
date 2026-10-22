@@ -456,6 +456,22 @@ and paused seeks/resume. Both transport cases read the live preview status while
 playing; Audacity's configured scripting dispatch stops audio before returning
 command data, so it cannot serve as a live clock observer.
 
+Track-folder policy and streaming peak reduction have dedicated `track-groups::`
+core cases. The affected-test runner selects them for changes in their owned
+model/reducer inputs. `fork-track-groups` checks the native header, nonadjacent
+members, repeated/canceled collapse, phase cancellation, native move commands,
+Undo/Redo, saved identities and project reopening. Its collapsed and expanded
+project fixtures also pass to the same pinned portable Audacity consumers.
+The native group test owns only the marked case directory and uses the existing
+fixture/profile/process cleanup and finite acceptance-record owner.
+
+Group waveform jobs write no files. Each view owns at most one current result and
+one running job. Changed inputs cancel obsolete work between 4,096-sample mixer
+blocks; snapshots share immutable sample blocks, and view destruction joins its
+worker before project storage closes. Error text is one replaceable in-memory
+value, removed on the next successful result. Saved grouping metadata belongs
+only to the project's optional XML attributes/header.
+
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
 ffmpeg.exe, ffprobe.exe and

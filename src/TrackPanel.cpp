@@ -1473,6 +1473,7 @@ struct Subgroup final : TrackPanelGroup {
             auto &view = ChannelView::Get(*pChannel);
             height += view.GetHeight();
          }
+         if (height <= 0) continue;
          refinement.emplace_back( yy,
             std::make_shared<ResizingChannelGroup>(
                pTrack->SharedPointer(), viewInfo.GetLeftOffset())

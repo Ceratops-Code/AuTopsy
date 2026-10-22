@@ -215,6 +215,49 @@ including pause, or its edit cursor while stopped. It calls the native viewport
 scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into
 `RenderVideoFrames.h/.cpp` after separate path approval.
+
+### Track folders and summed waveforms
+
+The owned `src/track-groups/EditTrackGroups.*` model plans folder membership and
+whole-block ordering with opaque persistent identities. Groups are flat; a
+member cannot also be a header. The native adapter in `CreateTrackGroup.*` uses
+ordinary sibling tracks plus one `AuTopsyTrackGroup` header. Track attachments
+carry `autopsyTrackIdentity` and `autopsyTrackGroup`; the header uses an optional
+`autopsytrackgroup` element with `trackGroupSchema=1`, `folderId` and `collapsed`.
+No audio is nested inside optional XML. Stock readers may skip the header and
+attributes while retaining every supported audio track. Missing, duplicated or
+unsupported optional group metadata must leave audio visible rather than hide it.
+
+`ShowTrackGroups.cpp` owns pane controls, semantic menu entries, selection,
+dragging, preview generation and scripting. Collapsing is a projection: the
+native `ChannelView` adapter returns zero height for hidden members, and the
+pane omits zero-height rows. Native audio, effects, editing and project storage
+continue to own the unchanged member tracks. Expanded heights/minimized states
+are retained. Header movement publishes one permutation of the whole block;
+canceling a drag restores the original order. The header's close action ungroups
+instead of deleting audio. Creation, collapse, movement and ungrouping use one
+native history commit and restore their previous layout if that commit fails.
+The host history API performs autosave before its no-fail history commit.
+
+A collapsed waveform is reduced from the actual summed mono mix, never from
+individual track peak envelopes. A narrow `Mixer` adapter applies member gain,
+pan, mute/solo, envelopes, sample rates and clip stretching to GUI-created track
+container snapshots. Real-time effect stages are excluded, matching the ordinary
+track waveform's role. `RenderGroupWaveform.*` bins the summed samples, preserving
+transients and destructive phase cancellation. It has no native types.
+
+The renderer writes no caches or diagnostic files. A view retains one completed
+summary and one running job; a new requested viewport replaces obsolete intent.
+Cancellation is checked between 4,096-sample blocks. A GUI timer collects complete
+results; workers never traverse live editable tracks or call UI APIs. Destruction
+cancels and joins work before the project storage closes. The view's single error
+string is cleared after success. Native track/history events increment the
+presentation generation, so sample/effect/gain edits cannot reuse a stale summary.
+
+Independent named `track-groups::` cases cover layout, orphan metadata, movement,
+sum reduction, cancellation and failed readers. `fork-track-groups` owns native
+header/gesture/history/storage and portable Audacity consumer checks. Native
+current-candidate results are still required before releasing this feature.
 Extend existing adapters and extract coherent responsibilities when needed;
 do not create empty scaffolding or an all-purpose feature manager.
 

@@ -9,6 +9,9 @@
  **********************************************************************/
 
 #include "TrackUtilities.h"
+#ifdef AUTOPSY_HAS_TRACK_GROUPS
+#include "track-groups/ShowTrackGroups.h"
+#endif
 
 #include "PlayableTrack.h"
 #include "ProjectHistory.h"
@@ -203,6 +206,12 @@ void TrackUtilities::DoRemoveTrack(AudacityProject &project, Track &toRemove)
 void TrackUtilities::DoMoveTrack(
    AudacityProject &project, Track& target, MoveChoice choice)
 {
+#ifdef AUTOPSY_HAS_TRACK_GROUPS
+   const auto groupChoice = choice == OnMoveTopID ? TrackGroups::GroupMove::Top :
+      choice == OnMoveBottomID ? TrackGroups::GroupMove::Bottom :
+      choice == OnMoveUpID ? TrackGroups::GroupMove::Up : TrackGroups::GroupMove::Down;
+   if (TrackGroups::HandleTrackGroupMove(project, target, groupChoice)) return;
+#endif
    auto &tracks = TrackList::Get( project );
 
    TranslatableString longDesc, shortDesc;

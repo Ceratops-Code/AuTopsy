@@ -54,6 +54,17 @@ ordinary editing.
 The main transport uses compact 35-pixel buttons. **Go to Cursor** brings the
 current playhead into view during playback or pause, or the edit cursor when
 stopped, without changing zoom, selection or project content.
+
+Select several tracks, then use **Tracks > Track Groups > Group Selected
+Tracks...** or their track menu. The group arrow collapses its members into one
+summed-audio waveform; expanding restores the individual editable tracks. Track
+gain, pan, mute and clip envelopes contribute to that waveform. It describes the
+member audio before real-time effects. Opposite signals cancel in the summary.
+Clicking the header selects its members. Drag the header, or use the normal track
+move commands, to move the whole group. **Ungroup Tracks** and the header's **x**
+remove the grouping while keeping the member tracks and audio. Groups are flat.
+Ordinary audio stays in standard AUP3 tracks, so stock Audacity opens it without
+the optional group headers.
 Local deployments use the installer, including locally built releases; source
 and build directories are not installation inputs. A local installation runs from
 `%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing

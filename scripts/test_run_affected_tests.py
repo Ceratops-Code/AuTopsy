@@ -39,6 +39,15 @@ class SelectionTests(unittest.TestCase):
         for name in ("prepare_audacity_consumer.py", "test_prepare_audacity_consumer.py"):
             self.assertEqual(self.names(["scripts/piped-work/" + name]), {"fork-audacity-consumer-cache"})
 
+    def test_track_folder_policy_and_native_adapters_have_separate_scopes(self) -> None:
+        for path in ("src/track-groups/EditTrackGroups.cpp", "src/track-groups/RenderGroupWaveform.h",
+                     "src/track-groups/TestTrackGroups.cpp"):
+            self.assertEqual(self.names([path]), {"track-groups"})
+        for path in ("src/track-groups/CreateTrackGroup.cpp", "src/track-groups/ShowTrackGroups.cpp"):
+            groups, native = runner.select_groups([path])
+            self.assertEqual(groups, [])
+            self.assertEqual(native, [path])
+
     def test_unknown_owned_executable_input_requires_a_scope_decision(self) -> None:
         for path in ("scripts/new_operation.py", "src/video/NewVideoOperation.cpp",
                      "src/video/ShowVideoNewFeature.h", "src/clip-groups/ChangeClipLinks.cpp",

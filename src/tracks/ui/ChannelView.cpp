@@ -8,6 +8,9 @@ Paul Licameli split from TrackPanel.cpp
 
 **********************************************************************/
 #include "ChannelView.h"
+#ifdef AUTOPSY_HAS_TRACK_GROUPS
+#include "../../track-groups/ShowTrackGroups.h"
+#endif
 #include "ChannelAttachments.h"
 #include "ChannelVRulerControls.h"
 
@@ -198,6 +201,9 @@ void ChannelView::DoSetY(int y)
 
 int ChannelView::GetHeight() const
 {
+#ifdef AUTOPSY_HAS_TRACK_GROUPS
+   if (const auto track = FindTrack(); track && TrackGroups::IsTrackHidden(*track)) return 0;
+#endif
    if ( GetMinimized() )
       return GetMinimizedHeight();
 

@@ -38,11 +38,11 @@ def check_portable_audacity_projects(root, display, ffmpeg):
 
 
 def read_audio_project_state(query):
-    """Compare standard audio/label data while ignoring view state and video IDs."""
+    """Compare standard audio/label data, excluding optional presentation tracks."""
     tracks = query("GetInfo: Type=Tracks Format=JSON")
     return {
         "tracks": [{key: item[key] for key in ("kind", "name", "start", "end", "channels", "volume", "pan", "mute", "solo") if key in item}
-                   for item in tracks if item["kind"] != "video"],
+                   for item in tracks if item["kind"] not in ("video", "trackgroup")],
         "clips": [{key: item[key] for key in ("name", "start", "end") if key in item}
                   for item in query("GetInfo: Type=Clips Format=JSON")],
         "labels": [item[1] for item in query("GetInfo: Type=Labels Format=JSON")],
