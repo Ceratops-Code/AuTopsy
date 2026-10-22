@@ -145,7 +145,7 @@ def check_project_compatibility(client, root):
     joined = root / "_with-joined-video.aup3"
     client.file("SaveProject2", joined)
     expected.append({"project": joined.name, "state": read_audio_project_state(client.data), "audio": audio.name})
-    clip_id = client.data("GetVideoClips")[0]["id"]
+    clip_id = client.data("GetVideoClips")["clips"][0]["id"]
     client.send(f'SetVideoClipSpeed: Track=0 Id="{clip_id}" Speed=0.5')
     retimed, rendered = root / "_retimed-video.aup3", root / "_retimed-mix.wav"
     client.file("SaveProject2", retimed)
