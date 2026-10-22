@@ -967,8 +967,8 @@ def worker(args, root):
         check_video_compound_render(client, root, args.ffmpeg)
     elif args.case == "video-transport":
         check_video_transport(client, root)
-    elif args.case == "video-crop":
-        check_video_crop(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case in ("video-crop", "video-crop-controls"):
+        check_video_crop(client, root, args.ffmpeg, args.ffprobe, controls_only=args.case == "video-crop-controls")
     elif args.case == "video-visibility":
         check_video_visibility(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in ("video-speed", "video-speed-storage"):
@@ -1098,7 +1098,7 @@ def native_test_inputs(args, executable, module, display):
     if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-speed", "video-speed-storage",
-                     "video-clip-storage", "video-parent-links", "video-crop"):
+                     "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "project-compatibility":
         inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
@@ -1237,7 +1237,7 @@ def main():
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
             "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
-            "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop",
+            "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls",
             "media",
             "preview",
             "branding",

@@ -439,6 +439,11 @@ Margins are fractions in `[0, 1)`; opposing margins must leave a picture.
 Repeated equal values add no history entry. `GetVideoClips` reports the saved
 margins in `crop`; setting all four to zero restores the picture.
 
+`fork-video-crop` checks rendered preview/export pixels, saved margins, joined
+content and quarter-turn sources. `fork-video-crop-controls` checks the real
+clip menu, Reset, Cancel and history with idle shared input. Each case saves its
+owned fixture project before the worker closes it, preventing a save prompt.
+
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
 ffmpeg.exe, ffprobe.exe and

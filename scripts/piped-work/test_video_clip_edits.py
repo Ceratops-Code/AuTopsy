@@ -39,10 +39,8 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
     The bundled FFmpeg GDI input reads the decoder's GPU output without adding
     packages to the persistent plain-Python test runtime. The owned window is
     temporarily raised without activation and its prior topmost state is
-    restored. A worker watchdog bounds foreign API calls as well as the pixel
-    polling loop. Successful observations create no screenshot artifact.
+    restored. Successful observations create no screenshot artifact.
     """
-    import faulthandler
     from ctypes import wintypes as w
 
     info = ready_video_preview(client)
@@ -66,7 +64,6 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
     assert_owned_test_display(pid, window)
     previous_dpi = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
     was_topmost = bool(user.GetWindowLongW(window, -20) & 8)
-    faulthandler.dump_traceback_later(60, exit=True)
     try:
         assert user.SetWindowPos(window, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x13)
         deadline = time.monotonic() + 8
@@ -103,7 +100,6 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
             user.SetWindowPos(window, ctypes.c_void_p(-2), 0, 0, 0, 0, 0x13)
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
-        faulthandler.cancel_dump_traceback_later()
 
 
 def crop_dialog_roundtrip(client, commit, reset=False):
@@ -120,6 +116,7 @@ def crop_dialog_roundtrip(client, commit, reset=False):
     user.SetForegroundWindow.argtypes = [ctypes.c_void_p]
     user.GetForegroundWindow.restype = ctypes.c_void_p
     errors = []
+    reset_fields = []
 
     def open_menu():
         try:
@@ -160,18 +157,18 @@ def crop_dialog_roundtrip(client, commit, reset=False):
         return matches[0]
 
     def reset_fields_are_zero():
-        values = []
+        reset_fields.clear()
 
         @callback_type
         def visit(handle, _):
             kind = ctypes.create_unicode_buffer(64)
             user.GetClassNameW(handle, kind, len(kind))
             if kind.value == "Edit":
-                values.append(native.caption(handle))
+                reset_fields.append(native.control_text(handle))
             return 1
 
         user.EnumChildWindows(dialog, visit, 0)
-        return len(values) == 4 and all(float(value.replace(",", ".")) == 0 for value in values)
+        return len(reset_fields) == 4 and all(float(value.replace(",", ".")) == 0 for value in reset_fields)
 
     try:
         deadline = time.monotonic() + 10
@@ -191,7 +188,8 @@ def crop_dialog_roundtrip(client, commit, reset=False):
         wait_for_native_state(lambda: user.GetForegroundWindow() == dialog, "owned crop dialog active")
         if reset:
             native.click(button("Reset Crop"))
-            wait_for_native_state(reset_fields_are_zero, "crop reset shown in all four fields")
+            wait_for_native_state(reset_fields_are_zero,
+                                  lambda: f"crop reset shown in all four fields: {reset_fields}")
         native.click(button("OK" if commit else "Cancel"))
         wait_for_native_state(lambda: not native.visible(dialog), "crop dialog closed")
     finally:
@@ -203,7 +201,7 @@ def crop_dialog_roundtrip(client, commit, reset=False):
         raise errors[0]
 
 
-def check_video_crop(client, root, ffmpeg, ffprobe):
+def check_video_crop(client, root, ffmpeg, ffprobe, controls_only=False):
     """Real crop pixels, native history/dialogs, retained pieces and ordinary AUP3."""
     source = root / "source.mp4"
     recipe = ("color=c=black:s=160x90:r=30:d=4,"
@@ -226,19 +224,22 @@ def check_video_crop(client, root, ffmpeg, ffprobe):
         client.send(f'SetVideoClipCrop: Id="{clip_id}" Track=0 Left={left} Top={top} Right={right} Bottom={bottom}')
 
     set_crop(left=0.123456789)
-    print("crop: native dialog, reset and history", flush=True)
-    for commit, reset in ((False, True), (True, False)):
-        before = margins()
-        crop_dialog_roundtrip(client, commit, reset)
-        assert margins() == before  # Cancel/reset staging and untouched precision are no-ops.
-        client.send("Undo")
+    if controls_only:
+        print("crop: native dialog, reset and history", flush=True)
+        for commit, reset in ((False, True), (True, False)):
+            before = margins()
+            crop_dialog_roundtrip(client, commit, reset)
+            assert margins() == before  # Cancel/reset staging and untouched precision are no-ops.
+            client.send("Undo")
+            assert margins()["left"] == 0
+            client.send("Redo")
+            assert abs(margins()["left"] - 0.123456789) < 1e-12
+        crop_dialog_roundtrip(client, True, True)
         assert margins()["left"] == 0
-        client.send("Redo")
+        client.send("Undo")
         assert abs(margins()["left"] - 0.123456789) < 1e-12
-    crop_dialog_roundtrip(client, True, True)
-    assert margins()["left"] == 0
-    client.send("Undo")
-    assert abs(margins()["left"] - 0.123456789) < 1e-12
+        client.file("SaveProject2", root / "_crop-state.aup3")
+        return
     set_crop(left=0.5)
     set_crop(left=0.5)
     client.send("Undo")
@@ -301,6 +302,8 @@ def check_video_crop(client, root, ffmpeg, ffprobe):
     client.send("ShowVideoPreview")
     expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
     export_pixels("rotated-crop.mp4", {"green", "white"})
+    # The worker's normal Close must never prompt for these owned test edits.
+    client.file("SaveProject2", root / "_crop-state.aup3")
 
 
 def wait_for_native_state(condition, description, timeout=8):
@@ -351,6 +354,21 @@ class PreviewNativeWindows:
     def caption(self, handle):
         text = ctypes.create_unicode_buffer(512)
         self.api.GetWindowTextW(handle, text, len(text))
+        return text.value
+
+    def control_text(self, handle):
+        """Read live owned control text; cross-process captions can be stale.
+
+        Windows marshals WM_GETTEXT for another process. A bounded send avoids
+        hanging the worker if that process stops responding; caption() remains
+        the inexpensive identity lookup for window titles and button labels.
+        """
+        assert self.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+        text = ctypes.create_unicode_buffer(512)
+        reply = ctypes.c_size_t()
+        if not self.api.SendMessageTimeoutW(handle, 0xD, len(text), ctypes.addressof(text),
+                                           2, 1000, ctypes.byref(reply)):
+            raise RuntimeError(f"Native WM_GETTEXT failed for HWND={handle}: {ctypes.WinError()}")
         return text.value
 
     def click(self, handle):
