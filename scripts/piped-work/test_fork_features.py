@@ -971,8 +971,8 @@ def worker(args, root):
         check_video(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in ("video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu"):
         check_video_interactions(client, root, args.case)
-        if args.case in ("video-edges", "video-linked-edges"):
-            check_split_video_edges(client, root, args.case == "video-linked-edges")
+    elif args.case in ("video-split-edges", "video-linked-split-edges"):
+        check_split_video_edges(client, root, args.case == "video-linked-split-edges")
     elif args.case == "media":
         check_media(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "branding":
@@ -1082,6 +1082,7 @@ def main():
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
+            "video-split-edges", "video-linked-split-edges",
             "media",
             "preview",
             "branding",
@@ -1185,7 +1186,7 @@ def main():
         ("tone-stereo.wav", 2),
     ):
         write_tone(root / name, channels)
-    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu", "media", "project-compatibility"):
+    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clipboard", "video-track-menu", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,
