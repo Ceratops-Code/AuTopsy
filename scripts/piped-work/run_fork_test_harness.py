@@ -1011,7 +1011,7 @@ def operate_owned_video_track(
         return 1
 
     def position_pointer(x, y):
-        """Reach the exact native point; one pixel can select the other split edge."""
+        """Reach the exact seam column; vertical DPI rounding stays inside the row."""
         for _ in range(3):
             prior = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
             native = Point()
@@ -1020,7 +1020,7 @@ def operate_owned_video_track(
             user.SetThreadDpiAwarenessContext(prior)
             dx, dy = x-native.x, y-native.y
             user.GetCursorPos(ctypes.byref(point))
-            if dx == 0 and dy == 0:
+            if dx == 0 and abs(dy) <= 1:
                 return
             point.x += round(dx * rectangle[2] / info["videoTrackPanelWidth"])
             point.y += round(dy * rectangle[3] / info["videoTrackPanelHeight"])
