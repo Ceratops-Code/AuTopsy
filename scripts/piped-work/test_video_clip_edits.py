@@ -277,8 +277,13 @@ def check_video_visibility(client, root, ffmpeg, ffprobe):
     # Saved source geometry includes quarter-turn metadata. Black export must
     # use those dimensions rather than preview/window dimensions.
     rotated = root / "_rotated.mp4"
-    run_process([ffmpeg, "-v", "error", "-i", str(source), "-map", "0", "-c", "copy",
-                 "-metadata:s:v:0", "rotate=90", str(rotated)], timeout=30)
+    run_process([ffmpeg, "-v", "error", "-display_rotation:v:0", "90", "-i", str(source),
+                 "-map", "0", "-c", "copy", str(rotated)], timeout=30)
+    metadata = json.loads(run_process([ffprobe, "-v", "error", "-select_streams", "v:0",
+                                       "-show_entries", "stream_side_data=rotation", "-of", "json",
+                                       str(rotated)], timeout=30))
+    assert any(abs(side.get("rotation", 0)) == 90 for stream in metadata["streams"]
+               for side in stream.get("side_data_list", [])), metadata
     client.send("SelectAll")
     client.send("RemoveTracks")
     client.file("ImportVideo", rotated)
