@@ -397,8 +397,6 @@ def check_transport_toolbar(client, root):
     user.EnumWindows.argtypes = [callback_type, w.LPARAM]
     user.EnumChildWindows.argtypes = [w.HWND, callback_type, w.LPARAM]
     user.GetParent.argtypes, user.GetParent.restype = [w.HWND], w.HWND
-    user.GetForegroundWindow.restype = w.HWND
-    user.SetForegroundWindow.argtypes = [w.HWND]
     user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
     user.GetWindowDpiAwarenessContext.argtypes = [w.HWND]
     user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
@@ -450,14 +448,6 @@ def check_transport_toolbar(client, root):
             user.SetThreadDpiAwarenessContext(previous_dpi)
     def press(handle, cancel=False):
         assert native.owner(handle) == pid and native.enabled(handle)
-        # Native transport enablement and modifier appearance are refreshed
-        # while the application is active. Exercise a real foreground click's
-        # precondition before sending messages; never bypass a disabled button.
-        if user.GetForegroundWindow() != main:
-            user.SetForegroundWindow(main)
-            wait_for_native_state(lambda: user.GetForegroundWindow() == main,
-                                  "owned toolbar window foreground")
-            time.sleep(0.15)
         reply = ctypes.c_size_t()
 
         def send(message, flags, position):
@@ -645,6 +635,105 @@ def check_video_transport(client, root):
     press_preview_button(second["stop"])
     wait_for_native_state(lambda: windows.enabled(first["play"]), "first project regains controls")
     client.file("SaveProject2", root / "_transport-second.aup3")
+
+
+def check_preview_navigation(client, root):
+    """Exercise queued preview keys and the real slider without live script queries.
+
+    The preview's status is the clock observer. Scripted commands would stop the
+    stream before returning their data, so content/volume are read only at rest.
+    Every message is bound to the test PID and its guarded preview window.
+    """
+    from ctypes import wintypes as w
+
+    client.file("ImportVideo", root / "source.mp4")
+    client.send("FitInWindow")
+    original = client.data("GetLinkedMediaClips")
+    info, buttons = owned_preview_controls(client)
+    frame, slider, status = (int(info[key]) for key in
+                             ("previewFrameHandle", "previewTimelineHandle", "previewStatusHandle"))
+    windows = PreviewNativeWindows()
+    assert windows.owner(slider) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    user = windows.api
+    user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+    user.MapVirtualKeyW.argtypes = [w.UINT, w.UINT]
+    user.MapVirtualKeyW.restype = w.UINT
+
+    def message(handle, code, first=0, second=0):
+        assert windows.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+        reply = ctypes.c_size_t()
+        if not user.SendMessageTimeoutW(handle, code, first, second, 2, 10000, ctypes.byref(reply)):
+            raise RuntimeError(f"Preview navigation message {code:#x} to HWND={handle} failed: {ctypes.WinError()}")
+        return reply.value
+
+    def key(value):
+        scan = user.MapVirtualKeyW(value, 0)
+        down = 1 | (scan << 16) | (1 << 24)
+        for code, flags in ((0x100, down), (0x101, down | (3 << 30))):
+            if not user.PostMessageW(slider, code, value, flags):
+                raise RuntimeError(f"Preview key {value} failed: {ctypes.WinError()}")
+
+    def seek(value, release=True):
+        message(slider, 0x405, 1, value)  # TBM_SETPOS, real native slider state
+        message(frame, 0x114, 5, slider)  # SB_THUMBTRACK, no seek until release
+        if release:
+            message(frame, 0x114, 4, slider)  # SB_THUMBPOSITION
+
+    for _ in range(2):
+        seek(500000, release=False)
+        time.sleep(0.08)
+        assert abs(preview_project_seconds(status)) < 0.01
+        key(0x1B)  # Escape cancels the unpublished drag
+        wait_for_native_state(lambda: message(slider, 0x400) == 0, "canceled preview drag")
+    for value in (500000, 500000, 250000):
+        seek(value)
+        expected = 16 * value / 1000000
+        wait_for_native_state(lambda: abs(preview_project_seconds(status) - expected) < 0.015,
+                              f"preview seek to {expected}")
+        assert abs(client.data("GetInfo: Type=Selection Format=JSON")["Start"] - expected) < 0.0001
+
+    for direction, virtual_key in ((1, 0x27), (-1, 0x25)):
+        before = preview_project_seconds(status)
+        key(virtual_key)
+        wait_for_native_state(lambda: abs(preview_project_seconds(status) - before - direction / 30) < 0.01,
+                              "stopped preview frame key")
+    volume = client.data("GetVideoPreviewInfo")["playbackVolume"]
+    for _ in range(2):
+        key(0x28)
+        time.sleep(0.1)
+    lower = client.data("GetVideoPreviewInfo")["playbackVolume"]
+    assert lower < volume, (volume, lower)
+    for _ in range(2):
+        key(0x26)
+        time.sleep(0.1)
+    assert abs(client.data("GetVideoPreviewInfo")["playbackVolume"] - volume) < 0.001
+
+    press_preview_button(buttons["play"])
+    wait_for_native_state(lambda: windows.enabled(buttons["pause"]), "preview navigation playback")
+    before = preview_project_seconds(status)
+    key(0x27)
+    wait_for_native_state(lambda: preview_project_seconds(status) > before + 4.8, "live five-second preview seek")
+    assert windows.enabled(buttons["pause"])
+    seek(125000)
+    wait_for_native_state(lambda: 1.9 <= preview_project_seconds(status) < 3.5, "live preview timeline seek")
+    press_preview_button(buttons["pause"])
+    wait_for_native_state(lambda: windows.enabled(buttons["play"]), "preview paused before navigation")
+    time.sleep(0.1)
+    before = preview_project_seconds(status)
+    key(0x27)
+    wait_for_native_state(lambda: abs(preview_project_seconds(status) - before - 1 / 30) < 0.02,
+                          "paused preview frame key")
+    assert windows.enabled(buttons["play"]) and not windows.enabled(buttons["pause"])
+    seek(750000)
+    wait_for_native_state(lambda: abs(preview_project_seconds(status) - 12) < 0.015, "paused preview timeline seek")
+    time.sleep(0.15)
+    assert abs(preview_project_seconds(status) - 12) < 0.015
+    press_preview_button(buttons["play"])
+    wait_for_native_state(lambda: preview_project_seconds(status) > 12.15, "resume at the paused destination")
+    press_preview_button(buttons["stop"])
+    wait_for_native_state(lambda: not windows.enabled(buttons["stop"]), "preview navigation stopped")
+    assert client.data("GetLinkedMediaClips") == original
+    client.file("SaveProject2", root / "_preview-navigation.aup3")
 
 
 def check_video_speed(client, root, ffmpeg, ffprobe, storage_only=False):

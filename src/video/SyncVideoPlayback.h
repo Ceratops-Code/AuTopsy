@@ -38,6 +38,64 @@ inline PreviewTransportControls GetPreviewTransportControls(const ProjectTranspo
       state.playing && !state.paused, state.playing};
 }
 
+constexpr int PreviewTimelineSteps = 1000000;
+inline double PreviewTimelineTime(int value, double duration)
+{
+   if (!std::isfinite(duration) || duration < 0)
+      throw std::runtime_error("The preview timeline needs a finite duration.");
+   return duration * std::clamp(value, 0, PreviewTimelineSteps) / PreviewTimelineSteps;
+}
+inline int PreviewTimelineValue(double time, double duration)
+{
+   if (!std::isfinite(time) || !std::isfinite(duration) || duration < 0)
+      throw std::runtime_error("The preview timeline needs a finite time and duration.");
+   return duration > 0 ? int(std::llround(std::clamp(time / duration, 0.0, 1.0) * PreviewTimelineSteps)) : 0;
+}
+
+struct PreviewNavigationState {
+   ProjectTransportState transport;
+   double position{}, cursor{}, duration{};
+};
+struct PreviewSeekTarget {
+   double position{};
+   bool playing{}, paused{};
+};
+
+// A seek has an absolute destination and desired transport mode. Re-reading
+// native state between effects lets the same request converge after interruption
+// without a saved execution step. Starting a paused stream happens only after
+// pause is set, so navigation cannot emit a burst of sound.
+template<typename Transport>
+bool ApplyPreviewSeek(Transport &transport, const PreviewSeekTarget &target)
+{
+   if (!std::isfinite(target.position) || target.position < 0)
+      throw std::runtime_error("Choose a finite preview destination.");
+   auto state = transport.ReadNavigation();
+   const auto allowed = [](const auto &s) {
+      return s.transport.hasVideo && s.transport.canControl &&
+         !s.transport.recording && !s.transport.stopping;
+   };
+   if (!allowed(state)) return false;
+   if (!std::isfinite(state.duration) || !std::isfinite(state.position) || !std::isfinite(state.cursor) ||
+       state.duration < 0 || target.position > state.duration)
+      throw std::runtime_error("The preview destination is outside the project.");
+   const bool playing = target.playing && target.position < state.duration;
+   bool changed{};
+   const auto effect = [&](auto action) {
+      action(); changed = true; state = transport.ReadNavigation();
+      if (!allowed(state)) throw std::runtime_error("Project playback changed during preview navigation.");
+   };
+   if (state.transport.playing && (!playing || std::abs(state.position - target.position) > 0.04))
+      effect([&] { transport.StopPlayback(); });
+   if (state.cursor != target.position)
+      effect([&] { transport.SetProjectCursor(target.position); });
+   if (state.transport.paused != (playing && target.paused))
+      effect([&] { transport.SetNavigationPaused(playing && target.paused); });
+   if (playing && !state.transport.playing)
+      effect([&] { transport.StartPlaybackAtCursor(); });
+   return changed;
+}
+
 // Each request has at most one native effect. Repeating it reads live state and
 // performs only the unmet effect; Pause is a desired state, not a toggle.
 template<typename Transport>

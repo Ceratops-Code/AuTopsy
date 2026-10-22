@@ -222,6 +222,11 @@ pipes, so it can run alongside an installed copy of Audacity.
    project audio/video playback; preview controls do not interrupt recording or
    another project's stream. Video follows normal-speed playback, pause, stop,
    timeline seeks and loop jumps. Audio plays once through the editable tracks.
+   The preview timeline seeks picture and sound together, retaining playback or
+   pause. Dragging commits on release; **Escape** cancels an unfinished drag.
+   With preview focus, **Left/Right** step one source frame while stopped or
+   paused, or jump five seconds while playing. **Shift+Left/Right** always jump
+   five seconds. **Up/Down** adjust AuTopsy's playback volume.
 4. Closing the preview hides it. **View > Video Preview** shows it again, and
    starting playback also brings it back. Delete a video track using its normal
    close button or **Tracks > Remove Tracks**.

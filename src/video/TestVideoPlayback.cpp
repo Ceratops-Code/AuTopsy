@@ -97,6 +97,70 @@ TEST_CASE("Frame timecode keeps fractional source rates and rejects malformed in
    REQUIRE_THROWS(ParseFrameTimecode("00:00:00:00", 0));
 }
 
+TEST_CASE("Preview timeline maps the whole project including gaps and audio tails")
+{
+   REQUIRE(PreviewTimelineTime(0, 24) == 0);
+   REQUIRE(PreviewTimelineTime(PreviewTimelineSteps, 24) == 24);
+   REQUIRE(PreviewTimelineTime(PreviewTimelineSteps / 4, 24) == 6);
+   REQUIRE(PreviewTimelineValue(6, 24) == PreviewTimelineSteps / 4);
+   REQUIRE(PreviewTimelineValue(-3, 24) == 0);
+   REQUIRE(PreviewTimelineValue(25, 24) == PreviewTimelineSteps);
+   REQUIRE(PreviewTimelineValue(0, 0) == 0);
+   REQUIRE_THROWS(PreviewTimelineTime(0, -1));
+   REQUIRE_THROWS(PreviewTimelineValue(std::numeric_limits<double>::infinity(), 24));
+}
+
+TEST_CASE("Preview seeking preserves desired playback and pause after every interrupted effect")
+{
+   struct Transport {
+      PreviewNavigationState state{{true, true, true, false}, 2, 1, 20};
+      int boundary{}, interrupt{-1}, effects{};
+      std::vector<bool> startsPaused;
+      PreviewNavigationState ReadNavigation() const { return state; }
+      void Boundary() { if (boundary++ == interrupt) { interrupt = -1; throw std::runtime_error("interrupted seek"); } }
+      void StopPlayback() { Boundary(); state.transport.playing = state.transport.paused = false; ++effects; Boundary(); }
+      void SetProjectCursor(double position) { Boundary(); state.cursor = state.position = position; ++effects; Boundary(); }
+      void SetNavigationPaused(bool paused) { Boundary(); state.transport.paused = paused; ++effects; Boundary(); }
+      void StartPlaybackAtCursor() {
+         Boundary(); startsPaused.push_back(state.transport.paused); state.transport.playing = true;
+         state.position = state.cursor; ++effects; Boundary();
+      }
+   };
+   for (const auto target : {PreviewSeekTarget{10, true, true}, PreviewSeekTarget{10, true, false},
+         PreviewSeekTarget{10, false, false}, PreviewSeekTarget{20, true, false}}) {
+      Transport complete;
+      ApplyPreviewSeek(complete, target);
+      const int count = complete.effects;
+      for (int interruption = -1; interruption < count * 2; ++interruption) {
+         Transport transport;
+         transport.interrupt = interruption;
+         if (interruption >= 0) REQUIRE_THROWS(ApplyPreviewSeek(transport, target));
+         ApplyPreviewSeek(transport, target);
+         REQUIRE(transport.state.position == target.position);
+         REQUIRE(transport.state.cursor == target.position);
+         REQUIRE(transport.state.transport.playing == (target.playing && target.position < 20));
+         REQUIRE(transport.state.transport.paused == (target.playing && target.paused));
+         for (bool paused : transport.startsPaused) REQUIRE(paused == target.paused);
+         REQUIRE(transport.effects == count);
+         for (int repeat = 0; repeat < 3; ++repeat) REQUIRE_FALSE(ApplyPreviewSeek(transport, target));
+      }
+   }
+   for (int blocked = 0; blocked < 4; ++blocked) {
+      Transport transport;
+      transport.state.transport.canControl = blocked != 0;
+      transport.state.transport.recording = blocked == 1;
+      transport.state.transport.stopping = blocked == 2;
+      transport.state.transport.hasVideo = blocked != 3;
+      REQUIRE_FALSE(ApplyPreviewSeek(transport, {10, true, false}));
+      REQUIRE(transport.effects == 0);
+   }
+   Transport transport;
+   REQUIRE_THROWS(ApplyPreviewSeek(transport, {-1}));
+   REQUIRE_THROWS(ApplyPreviewSeek(transport, {21}));
+   REQUIRE_THROWS(ApplyPreviewSeek(transport, {std::numeric_limits<double>::quiet_NaN()}));
+   REQUIRE(transport.effects == 0);
+}
+
 TEST_CASE("Frame steps use source boundaries after moves and trims")
 {
    const double start = 7.0, source = 1.0 / 60;

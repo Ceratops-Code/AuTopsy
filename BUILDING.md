@@ -450,6 +450,12 @@ left/right offscreen edit cursors, playback and pause, preserving zoom, selectio
 audio content and history. It does not move the shared pointer or press shared
 keyboard keys.
 
+`fork-preview-navigation` exercises the real timeline and queued preview arrow
+keys, canceled/repeated drags, frame steps, playback-volume changes, live seeks
+and paused seeks/resume. Both transport cases read the live preview status while
+playing; Audacity's configured scripting dispatch stops audio before returning
+command data, so it cannot serve as a live clock observer.
+
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
 ffmpeg.exe, ffprobe.exe and

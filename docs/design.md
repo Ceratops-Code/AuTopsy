@@ -478,6 +478,21 @@ effect, and converges after an interrupted request. Controls are disabled during
 recording, stopping or a foreign project's stream. A decoder failure leaves the
 timer observing transport controls so the editor can still stop playback.
 
+The preview slider maps the whole project duration, including video gaps and
+audio tails. A drag publishes one absolute seek on release; Escape cancels the
+unpublished drag. Timer updates never overwrite a dragged thumb. The owned
+`ApplyPreviewSeek` policy reads native state between each effect, protects foreign
+streams/recording and retains the requested playback or pause mode. A changed
+destination stops the old stream, sets the project cursor and pause before
+starting the new stream at that cursor, preventing a paused seek from briefly
+emitting sound. Repeating an already satisfied destination has no effect.
+`OnNavigationKey` belongs to the preview window: Left/Right step source frames
+at rest or while paused, and seek five seconds during playback; Shift forces
+five seconds. Up/Down use the native playback-gain commands, never track gain.
+Core cases cover absolute mapping and interruption on both sides of every seek
+effect. `fork-preview-navigation` exercises the native slider and queued keys;
+live observations use its status label because configured scripting stops audio.
+
 Video track Mute/Solo uses the host's semantic button-row layout and ordinary
 button capture/cancellation. The owned `VisibleVideoLayers` policy feeds both
 `FindProjectPicture` and export's flattened timeline; the spatial evaluator uses
