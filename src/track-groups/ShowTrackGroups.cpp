@@ -169,6 +169,12 @@ struct SummaryKey {
    }
    bool operator!=(const SummaryKey &other) const { return !(*this == other); }
 };
+SummaryKey CurrentSummaryKey(AudacityProject &project, const wxRect &rect)
+{
+   const auto &view = ViewInfo::Get(project);
+   return {TrackGroupRevision(project), view.PositionToTime(rect.x, rect.x),
+      view.PositionToTime(rect.GetRight() + 1, rect.x), std::min(65536, rect.width)};
+}
 struct SummaryReply {
    std::optional<std::vector<WaveformColumn>> columns;
    std::string error;
@@ -191,9 +197,7 @@ class GroupView final : public CommonChannelView, public wxEvtHandler {
       if (auto track = FindTrack()) if (auto owner = track->GetOwner()) if (auto *project = owner->GetOwner()) Viewport::Get(*project).Redraw();
    }
    void RequestSummary(AudacityProject &project, AuTopsyTrackGroup &header, const wxRect &rect) {
-      const auto &view = ViewInfo::Get(project);
-      const SummaryKey key{TrackGroupRevision(project), view.PositionToTime(rect.x, rect.x),
-         view.PositionToTime(rect.GetRight() + 1, rect.x), std::min(65536, rect.width)};
+       const auto key = CurrentSummaryKey(project, rect);
       mWanted = key;
       if (mCompleted == mWanted) return;
       if (mJob.valid()) { if (mRunning != mWanted) mCancel->store(true); return; }
@@ -276,7 +280,15 @@ public:
       // in progress; no detached worker can retain a closed project's database.
       if (mJob.valid()) mJob.wait();
    }
-   bool SummaryReady() const { return mCompleted == mWanted && mCompleted && mError.empty(); }
+    bool SummaryReady() const {
+       if (!mCompleted || !mError.empty() || mBounds.IsEmpty()) return false;
+       const auto track = FindTrack();
+       const auto owner = track ? track->GetOwner() : nullptr;
+       auto *project = owner ? owner->GetOwner() : nullptr;
+       // A zoom/edit command can finish before the next paint requests a job.
+       // Never report the previous view's waveform as the current result.
+       return project && *mCompleted == CurrentSummaryKey(*project, mBounds);
+    }
    const auto &Summary() const { return mSummary; }
    const auto &SummaryError() const { return mError; }
    const wxRect &Bounds() const { return mBounds; }
