@@ -219,22 +219,45 @@ class GroupView final : public CommonChannelView, public wxEvtHandler {
                 !std::isfinite(rate) || rate <= 0 || (key.to - key.from) * rate > double(uint64_t{1} << 48))
                throw std::runtime_error("The visible group waveform range is too large.");
             if (inputs.empty()) return {std::vector<WaveformColumn>(key.columns), {}};
+            double first = inputs.front().pSequence->GetStartTime(), last = inputs.front().pSequence->GetEndTime();
+            for (const auto &input : inputs) {
+               first = std::min(first, input.pSequence->GetStartTime());
+               last = std::max(last, input.pSequence->GetEndTime());
+            }
+            const auto from = std::max(key.from, first), to = std::min(key.to, last);
+            if (to <= from) return {std::vector<WaveformColumn>(key.columns), {}};
             Mixer mixer(std::move(inputs), std::nullopt, true,
-               Mixer::WarpOptions(static_cast<const BoundedEnvelope*>(nullptr)), key.from, key.to,
+               Mixer::WarpOptions(static_cast<const BoundedEnvelope*>(nullptr)), from, to,
                1, 4096, false, rate, floatSample, true, nullptr, Mixer::ApplyVolume::Mixdown);
             const auto frames = uint64_t(std::max(0.0, std::floor((key.to - key.from) * rate)));
+            const auto leading = uint64_t(std::max(0.0, std::floor((from - key.from) * rate)));
+            const auto mixed = uint64_t(std::max(0.0, std::floor((to - from) * rate)));
             uint64_t produced{};
             const auto read = [&](float *output, size_t count) {
-               const auto got = mixer.Process(count);
-               if (got) std::copy_n(reinterpret_cast<const float*>(mixer.GetBuffer(0)), got, output);
-               produced += got;
-               // Native absolute-time bounds and this view's sample grid can
-               // differ by one endpoint sample. Only that finite tail is silence;
-               // an earlier unexpected end remains an error, never a partial mix.
-               if (!got && frames - produced <= 1 && mixer.MixGetCurrentTime() >= key.to - 2 / rate) {
-                  std::fill_n(output, count, 0.0f); produced += count; return count;
+               // The view may extend beyond every member. Those known leading
+               // and trailing gaps are silence, not an unexpected mixer EOF.
+               std::fill_n(output, count, 0.0f);
+               size_t written{};
+               while (written < count) {
+                  if (produced < leading) {
+                     const auto blank = size_t(std::min<uint64_t>(count - written, leading - produced));
+                     produced += blank; written += blank; continue;
+                  }
+                  if (produced >= leading + mixed) { produced += count - written; break; }
+                  const auto wanted = size_t(std::min<uint64_t>(count - written, leading + mixed - produced));
+                  const auto got = mixer.Process(wanted);
+                  if (got) {
+                     std::copy_n(reinterpret_cast<const float*>(mixer.GetBuffer(0)), got, output + written);
+                     produced += got; written += got;
+                  }
+                  else if (leading + mixed - produced <= 1 && mixer.MixGetCurrentTime() >= to - 2 / rate) {
+                     // Absolute-time/sample-grid rounding can leave one endpoint
+                     // sample. Earlier termination remains a concrete error.
+                     ++produced; ++written;
+                  }
+                  else throw std::runtime_error("The group mixer stopped before the member audio ended.");
                }
-               return got;
+               return count;
             };
             return {RenderSummedWaveform(read, frames, key.columns, [cancel] { return cancel->load(); }), {}};
          }

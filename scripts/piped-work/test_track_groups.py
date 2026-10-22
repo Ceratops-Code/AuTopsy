@@ -134,6 +134,14 @@ def check_track_groups(client, root):
     collapse(True)
     _, group = settled_summary(client, group_id)
     assert group["maximum"] > 0.4 and group["minimum"] < -0.4, group
+    client.send("SelectTime: Start=7 End=9")
+    client.send("ZoomSel")
+    _, empty = settled_summary(client, group_id)
+    assert empty["minimum"] == 0 and empty["maximum"] == 0, empty
+    client.send("SelectTime: Start=0 End=2")
+    client.send("ZoomSel")
+    _, group = settled_summary(client, group_id)
+    assert group["maximum"] > 0.4, group
     # Gain/mute/effect edits refresh the summary without flattening any member.
     def clip_content():
         return [{key: value for key, value in item.items() if key != "track"}
