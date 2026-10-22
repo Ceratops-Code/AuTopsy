@@ -120,6 +120,9 @@ inherited scripting examples retain their upstream conventions.
 The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` dispatches the feature scenarios and owns result records.
+`test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate and
+multi-source rendering/relinking cases. Native result identities include this
+module when those cases run.
 The focused `fork-video-selection`, `fork-video-edges`, `fork-video-clipboard`
 and `fork-video-track-menu` cases exercise real clip clicks,
 double-click selection, Delete/Backspace, reversible edge drags, canceled edits,
@@ -242,6 +245,16 @@ native video track. Source files remain external and must stay accessible.
 Cancelling or failing an import keeps existing tracks. Importing picture with
 audio is one combined Undo action; removing its picture leaves the audio.
 
+Select touching video pieces and use **Edit > Clips > Heal Video Split** to
+remove an accidental seam. **Join** (Ctrl+J) makes one editable clip from selected
+pieces, retaining gaps and outer trim handles. **Separate Joined Video** restores
+the visible source pieces, including nested joins; untrim first to include fully
+hidden pieces. These actions also appear on the video clip's right-click menu.
+They preserve clip flags and linked soundtrack movement, support Undo/Redo and
+save inside the ordinary project file. Picture joins keep the original
+soundtrack clips and samples separate. A gap flag must be moved or removed
+before separating its container.
+
 Synchronization uses the audio clock with periodic drift correction;
 the preview has no guarantee of frame-accurate external
 monitoring. Play-at-speed, scrub, and time-track warping are outside the first
@@ -292,6 +305,10 @@ only when focus or an unambiguous clip ID identifies the track. Empty tracks
 can be added through `NewVideoTrack`, `AddVideoTrackBefore: Track=1`, and
 `AddVideoTrackAfter: Track=1`. Repeating a split at an existing boundary,
 an absolute move to the same start, or deletion of an absent ID makes no change.
+
+With a video track and time range selected, `HealVideoSplit`, `JoinVideoClips`
+and `SeparateVideoClips` call the same structural operations. `GetVideoClips`
+also reports `joined` and the retained direct `pieces` count for each clip.
 
 ## Undo and Redo
 

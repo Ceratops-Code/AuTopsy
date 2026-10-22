@@ -2,6 +2,7 @@
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
 #include "CreateVideoTrack.h"
+#include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
 #include "Project.h"
@@ -49,7 +50,7 @@ struct ShiftInterval final : ChannelGroupInterval, ClipGroups::LinkedClipInterva
    explicit ShiftInterval(Clip value) : clip(std::move(value)) {}
    double Start() const override { return clip.start; }
    double End() const override { return clip.End(); }
-   const std::string &MediaGroupId() const override { return clip.linkGroup; }
+   std::vector<std::string> MediaGroupIds() const override { return VideoTimeline::VideoContentLinkGroups(clip); }
    unsigned long long VideoClipId() const override { return clip.id; }
 };
 
@@ -97,7 +98,8 @@ public:
    }
    double QuantizeOffset(double offset) override {
       if (mMoving.empty()) return offset;
-      const auto rate = Data(mMoving.front()).clip.media.frameRate;
+      const auto &clip = Data(mMoving.front()).clip;
+      const auto rate = VideoContentFrameRate(clip, clip.media);
       return std::round(offset * rate) / rate;
    }
    double AdjustOffsetSmaller(double offset) override {
@@ -139,7 +141,8 @@ public:
        // The native engine calls the source policy with the destination as an
        // argument. Its hovered destination has no moving intervals yet, so
        // finish source-frame snapping here before checking destination space.
-       const auto rate = Data(intervals.front()).clip.media.frameRate;
+       const auto &clip = Data(intervals.front()).clip;
+       const auto rate = VideoContentFrameRate(clip, clip.media);
        const auto fittedOffset = std::round(offset * rate) / rate;
        auto candidate = videoDestination->Timeline();
        for (const auto &interval : intervals) {
@@ -371,6 +374,10 @@ public:
       if (clip && state.state.GetY() < state.rect.y+24)
          return {AssignUIHandlePtr(mAffordanceHandle,
             std::make_shared<VideoAffordanceHandle>(track))};
+      // Gaps need only the native range selector. Adding a second selector
+      // there lets the host retain its old lower-priority hit after Escape,
+      // masking a newly hovered video edge on the next gesture.
+      if (!clip) return {};
       return {AssignUIHandlePtr(mVideoSelectionHandle,
          std::make_shared<VideoSelectionHandle>(shared_from_this(), track, state, *project))};
    }
@@ -399,17 +406,21 @@ public:
          dc.SetPen(*wxTRANSPARENT_PEN);
          dc.SetBrush(wxBrush(track->VideoVisible() ? wxColour(57,105,143) : wxColour(69,72,77)));
          dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
-         auto &frames = Frames(source,&ProjectWindow::Get(*project)).frames;
          const int pictureHeight = std::max(0,std::min(FrameHeight,rect.height-30));
          if (pictureHeight) {
             dc.SetClippingRegion(left,rect.y+25,right-left,pictureHeight);
             int cell = from+int(std::floor(double(left-from)/FrameWidth))*FrameWidth;
             for (; cell < right; cell += FrameWidth) {
-               if (!frames.empty()) {
-                  const auto time = view.PositionToTime(cell+FrameWidth/2,rect.x);
-                  const auto sourceTime = clip.sourceStart+std::clamp(time-clip.start,0.0,clip.duration);
-                  const auto index = std::clamp(int(sourceTime/source.duration*frames.size()),0,int(frames.size())-1);
-                  dc.DrawBitmap(frames[index],cell,rect.y+25);
+               const auto time = std::clamp(view.PositionToTime(cell+FrameWidth/2,rect.x),
+                  clip.start, std::nextafter(clip.End(), clip.start));
+               const auto sample = SampleVideoContent(clip, source, clip.sourceStart + time - clip.start);
+               if (sample) {
+                  auto &frames = Frames(sample.source,&ProjectWindow::Get(*project)).frames;
+                  if (!frames.empty()) {
+                     const auto index = std::clamp(int(sample.sourceTime/sample.source.duration*frames.size()),
+                        0,int(frames.size())-1);
+                     dc.DrawBitmap(frames[index],cell,rect.y+25);
+                  }
                }
                dc.SetPen(wxPen(wxColour(22,23,26))); dc.DrawLine(cell,rect.y+25,cell,rect.y+25+pictureHeight);
             }
@@ -421,7 +432,8 @@ public:
          dc.SetPen(wxPen(selected ? wxColour(252,211,90) : wxColour(111,155,187),selected ? 2 : 1));
          dc.SetBrush(*wxTRANSPARENT_BRUSH); dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
          dc.SetTextForeground(*wxWHITE);
-         dc.DrawText(wxFileName(wxString::FromUTF8(source.path)).GetFullName(),left+5,rect.y+5);
+         dc.DrawText(clip.content ? wxString::Format(_("Joined video (%zu pieces)"), clip.content->parts.size())
+            : wxFileName(wxString::FromUTF8(source.path)).GetFullName(),left+5,rect.y+5);
          {
             wxDCClipper clipFlags{dc, wxRect{left, rect.y, right-left, 24}};
             ClipMarkers::DrawClipMarkerFlags(dc, rect, view, clip.markers,
@@ -489,6 +501,9 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &,AudacityP
          menu.Append(1,_("Cut")); menu.Append(2,_("Copy")); menu.Append(3,_("Paste"));
          menu.AppendSeparator(); menu.Append(4,_("Split at Cursor")); menu.Append(5,_("Delete and Leave Gap"));
          menu.Append(6,_("Trim to Selection"));
+         menu.AppendSeparator(); menu.Append(7,_("Heal Split")); menu.Append(8,_("Join"));
+         menu.Append(9,_("Separate Joined Clip"));
+         for (int id : {7, 8, 9}) menu.Enable(id, mId != 0);
          for (int id : {1, 2, 4, 5, 6})
             menu.Enable(id, !ViewInfo::Get(*project).selectedRegion.isPoint());
          menu.Enable(3, !Clipboard::Get().GetTracks().Any<const AuTopsyVideoTrack>().empty());
@@ -505,6 +520,12 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &,AudacityP
                [&](const auto &clip) { return clip.id == mId; });
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],mId,found->start);
+         }
+         else if (choice >= 7 && choice <= 9) {
+            const VideoEditing::VideoEditKind kinds[]{VideoEditing::VideoEditKind::HealClips,
+               VideoEditing::VideoEditKind::JoinClips, VideoEditing::VideoEditKind::SeparateClips};
+            const auto &selection = ViewInfo::Get(*project).selectedRegion;
+            EditSelectedVideoStructure(*project, kinds[choice - 7], selection.t0(), selection.t1());
          }
          else {
             const wxString commands[]{"","Cut","Copy","Paste","Split","SplitDelete","Trim"};

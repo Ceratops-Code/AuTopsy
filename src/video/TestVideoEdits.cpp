@@ -1,5 +1,7 @@
 // Dedicated planner cases; no Audacity process, native classes or media files.
 #include "PlanVideoEdits.h"
+#include "JoinVideoClips.h"
+#include "RelinkVideoMedia.h"
 #include <catch2/catch.hpp>
 #include <limits>
 
@@ -11,6 +13,186 @@ VideoProjectSnapshot Project()
       {"child", 9, VideoTimeline::CreateVideoTimeline("child.mp4", 8, 25), "parent"},
       {"other", 2, VideoTimeline::CreateVideoTimeline("other.mp4", 20, 24)}}};
 }
+}
+
+TEST_CASE("Heal Split removes only continuous compatible seams and is repeatable", "[video-edits][video-join]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 8, 30);
+   timeline.clips[0].markers = {{std::string(32, 'a'), 6, "hidden flag"}};
+   SplitClipAt(timeline, 3); SplitClipAt(timeline, 5);
+   REQUIRE(HealVideoClips(timeline, 0, 8));
+   REQUIRE(timeline.clips.size() == 1);
+   REQUIRE(timeline.clips[0].id == 1);
+   REQUIRE(timeline.clips[0].duration == 8);
+   REQUIRE(timeline.clips[0].markers.size() == 1);
+   REQUIRE_FALSE(HealVideoClips(timeline, 0, 8));
+   SplitClipAt(timeline, 3); MoveClipTo(timeline, timeline.clips[1].id, 4);
+   const auto before = VideoProjectSnapshot{{{"track", 0, timeline}}};
+   REQUIRE_THROWS(HealVideoClips(timeline, 0, 9));
+   REQUIRE(SameVideoProject(before, {{{"track", 0, timeline}}}));
+}
+
+TEST_CASE("Joined footage retains gaps source cuts outer handles and nested editability", "[video-edits][video-join]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("red.mp4", 10, 30);
+   SplitClipAt(timeline, 4);
+   TrimVideoClip(timeline, 1, 1, 3);
+   TrimVideoClip(timeline, 2, 5, 8);
+   const auto before = timeline;
+   REQUIRE(JoinVideoClips(timeline, 0, 10));
+   REQUIRE(timeline.clips.size() == 1);
+   REQUIRE(timeline.clips[0].content);
+   REQUIRE(timeline.clips[0].sourceStart == 1);
+   REQUIRE_FALSE(PictureAt(timeline, 4).visible);
+   REQUIRE(PictureAt(timeline, 5.5).sourceTime == Approx(5.5));
+   REQUIRE_FALSE(JoinVideoClips(timeline, 0, 10));
+   auto gapOnly = timeline;
+   TrimVideoClip(gapOnly, 1, 3, 5);
+   REQUIRE_THROWS(SeparateVideoClips(gapOnly, 0, 10));
+   REQUIRE(gapOnly.clips[0].content);
+   // Neither this join nor an outer trim can resurrect the deleted interior.
+   TrimVideoClip(timeline, 1, 0, 10);
+   REQUIRE_FALSE(PictureAt(timeline, 4).visible);
+   REQUIRE(PictureAt(timeline, .5).sourceTime == Approx(.5));
+   REQUIRE(PictureAt(timeline, 9).sourceTime == Approx(9));
+   REQUIRE_FALSE(SampleVideoContent(timeline.clips[0], SourceFor(timeline, timeline.clips[0]), -1));
+   REQUIRE_FALSE(SampleVideoContent(timeline.clips[0], SourceFor(timeline, timeline.clips[0]), 10));
+   TrimVideoClip(timeline, 1, 1, 8);
+   REQUIRE(SeparateVideoClips(timeline, 0, 10));
+   REQUIRE(timeline.clips.size() == 2);
+   for (size_t i{}; i < 2; ++i) {
+      REQUIRE(timeline.clips[i].id == before.clips[i].id);
+      REQUIRE(timeline.clips[i].start == before.clips[i].start);
+      REQUIRE(timeline.clips[i].sourceStart == before.clips[i].sourceStart);
+      REQUIRE(timeline.clips[i].duration == before.clips[i].duration);
+   }
+   REQUIRE_FALSE(SeparateVideoClips(timeline, 0, 10));
+}
+
+TEST_CASE("Compounds use actual leaf media in playback export copy and relink", "[video-edits][video-join]")
+{
+   using namespace VideoTimeline;
+   auto upper = CreateVideoTimeline("red.mp4", 4, 30);
+   auto blue = CreateVideoTimeline("blue.mp4", 3, 24);
+   PasteVideoRange(upper, 5, blue, 3);
+   REQUIRE(JoinVideoClips(upper, 0, 8));
+   auto lower = CreateVideoTimeline("green.mp4", 10, 25);
+   auto mix = ComposeVideoTracks({&upper, &lower});
+   REQUIRE(SourceFor(mix, *ClipAt(mix, 2)).path == "red.mp4");
+   REQUIRE(SourceFor(mix, *ClipAt(mix, 4.5)).path == "green.mp4");
+   REQUIRE(SourceFor(mix, *ClipAt(mix, 6)).path == "blue.mp4");
+   REQUIRE(PictureAt(mix, 6).sourceTime == Approx(1));
+   auto copied = CopyVideoRange(upper, 2, 7);
+   REQUIRE(copied.clips[0].content == upper.clips[0].content);
+   REQUIRE(ReplaceVideoSource(copied, "blue.mp4", {"moved.mp4", 3, 24}));
+   REQUIRE(EvaluateVideoLayers({&copied}, 4).source.path == "moved.mp4");
+   REQUIRE(EvaluateVideoLayers({&upper}, 6).source.path == "blue.mp4");
+   REQUIRE_THROWS(ReplaceVideoSource(copied, "moved.mp4", {"short.mp4", 1, 24}));
+   REQUIRE(EvaluateVideoLayers({&copied}, 4).source.path == "moved.mp4");
+   SplitClipAt(copied, 3.5);
+   REQUIRE(copied.clips[1].content);
+   REQUIRE(JoinVideoClips(copied, 0, 5));
+   REQUIRE(copied.clips[0].content->parts[0].content);
+   REQUIRE(SeparateVideoClips(copied, 0, 5));
+   REQUIRE(copied.clips.size() == 3);
+   REQUIRE(std::none_of(copied.clips.begin(), copied.clips.end(), [](const auto &clip) { return bool(clip.content); }));
+   REQUIRE_FALSE(SeparateVideoClips(copied, 0, 5));
+}
+
+TEST_CASE("Compound flags keep occurrences hidden footage and edits after separation", "[video-edits][video-join]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("flags.mp4", 8, 30);
+   timeline.clips[0].markers = {{std::string(32, 'a'), 1, "first"}, {std::string(32, 'b'), 6, "second"}};
+   SplitClipAt(timeline, 4);
+   timeline.clips[1].media = SourceFor(timeline, timeline.clips[1]);
+   REQUIRE(JoinVideoClips(timeline, 0, 8));
+   REQUIRE(timeline.clips[0].markers.size() == 2);
+   ClipMarkers::PutMarker(timeline.clips[0].markers, {std::string(32, 'b'), 7, "changed"});
+   TrimVideoClip(timeline, 1, 2, 8);
+   REQUIRE(SeparateVideoClips(timeline, 0, 8));
+   const auto first = std::find_if(timeline.clips[0].markers.begin(), timeline.clips[0].markers.end(),
+      [](const auto &marker) { return marker.id == std::string(32, 'a'); });
+   REQUIRE(first != timeline.clips[0].markers.end());
+   REQUIRE(first->position == 1);
+   const auto second = std::find_if(timeline.clips[1].markers.begin(), timeline.clips[1].markers.end(),
+      [](const auto &marker) { return marker.id == std::string(32, 'b'); });
+   REQUIRE(second != timeline.clips[1].markers.end());
+   REQUIRE(second->text == "changed");
+   REQUIRE(second->position == 7);
+}
+
+TEST_CASE("Structural plans converge around publication and reject stale nested content", "[video-edits][video-join]")
+{
+   using namespace VideoTimeline;
+   for (const auto kind : {VideoEditKind::HealClips, VideoEditKind::JoinClips, VideoEditKind::SeparateClips}) {
+      auto timeline = CreateVideoTimeline("source.mp4", 8, 30); SplitClipAt(timeline, 4);
+      if (kind == VideoEditKind::SeparateClips) JoinVideoClips(timeline, 0, 8);
+      const VideoProjectSnapshot original{{{"track", 1, timeline}}};
+      for (const bool publish : {false, true}) {
+         auto project = original;
+         const std::vector<VideoEditRequest> request{{kind, "track", 0, 0, 8}};
+         const auto plan = PlanVideoEdits(project, request);
+         if (publish) ApplyVideoEditPlan(project, plan);
+         const auto fresh = PlanVideoEdits(project, request);
+         ApplyVideoEditPlan(project, fresh);
+         REQUIRE(PlanVideoEdits(project, request).ChangedTrackIds().empty());
+         REQUIRE(project.tracks[0].revision == 2);
+      }
+   }
+   auto timeline = CreateVideoTimeline("source.mp4", 8, 30); SplitClipAt(timeline, 4);
+   JoinVideoClips(timeline, 0, 8);
+   VideoProjectSnapshot project{{{"track", 1, timeline}}};
+   auto hostCopy = project;
+   // The XML boundary may include representative media metadata on a joined
+   // node. Only its owned leaves determine picture identity and stale edits.
+   hostCopy.tracks[0].timeline.clips[0].media = {"representative.mp4", 99, 24};
+   REQUIRE(SameVideoProject(project, hostCopy));
+   const auto plan = PlanVideoEdits(project, {{VideoEditKind::MoveClip, "track", 1, 2}});
+   ReplaceVideoSource(project.tracks[0].timeline, "source.mp4", {"changed.mp4", 8, 30});
+   REQUIRE_THROWS(ApplyVideoEditPlan(project, plan));
+}
+
+TEST_CASE("Malformed compounds and excessive nesting cannot publish", "[video-edits][video-join]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 8, 30);
+   auto content = std::make_shared<VideoClipContent>(); content->duration = 8;
+   content->parts = timeline.clips;
+   timeline.clips[0].content = content;
+   REQUIRE_THROWS(RequireWellFormedTimeline(timeline)); // Unresolved child source.
+   content->parts[0].media = {"source.mp4", 8, 30};
+   REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
+   for (int i{}; i < 18; ++i) {
+      auto outer = std::make_shared<VideoClipContent>(); outer->duration = 8;
+      outer->parts = timeline.clips; timeline.clips[0].content = std::move(outer);
+   }
+   REQUIRE_THROWS(RequireWellFormedTimeline(timeline));
+}
+
+TEST_CASE("Joined soundtrack windows retain physical source edges through complete hiding", "[video-edits][video-join]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 4, 30);
+   timeline.clips[0].linkGroup = std::string(32, 'a');
+   SplitClipAt(timeline, 2); timeline.clips[1].linkGroup = std::string(32, 'b');
+   JoinVideoClips(timeline, 0, 4); MoveClipTo(timeline, 1, 2);
+   TrimVideoClip(timeline, 1, 5, 6);
+   auto windows = VideoContentLinkWindows(timeline.clips[0]);
+   REQUIRE(windows.size() == 2);
+   REQUIRE(windows[0].start == 4);
+   REQUIRE(windows[0].end == 4);
+   REQUIRE(windows[1].start == 5);
+   REQUIRE(windows[1].sourceOrigin == 2);
+   REQUIRE(windows[1].sourceEnd == 6);
+   TrimVideoClip(timeline, 1, 2, 6);
+   windows = VideoContentLinkWindows(timeline.clips[0]);
+   REQUIRE(windows[0].start == 2);
+   REQUIRE(windows[0].end == 4);
+   REQUIRE(windows[1].start == 4);
+   REQUIRE(windows[1].end == windows[1].sourceEnd);
 }
 
 TEST_CASE("Edit plans publish all replacements once and reject stale snapshots", "[video-edits]")

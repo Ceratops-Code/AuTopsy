@@ -84,9 +84,12 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
       const auto appearance = std::find_if(style.clips.begin(), style.clips.end(),
          [&](const auto &value) { return value.clipId == clip->id; });
       if (appearance != style.clips.end() && appearance->muted) continue;
+      const auto sample = VideoTimeline::SampleVideoContent(*clip, VideoTimeline::SourceFor(track.timeline, *clip),
+         clip->sourceStart + time - clip->start);
+      if (!sample) continue;
       const auto rectangle = PlaceWithin(item.parent, style.rectangle);
-      result.layers.push_back({track.id, clip->id, VideoTimeline::SourceFor(track.timeline, *clip),
-         clip->sourceStart + time - clip->start,
+      result.layers.push_back({track.id, clip->id, sample.source,
+         sample.sourceTime,
          appearance == style.clips.end() ? VideoFrameCrop{} : appearance->crop, rectangle});
       // Lower roots are processed first. Children go above their own parent,
       // irrespective of where an upstream pane happens to display their rows.

@@ -3,6 +3,7 @@
 #include "../CommonCommandFlags.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "../video/CreateVideoTrack.h"
+#include "../video/PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #endif
 #include "LabelTrack.h"
@@ -1024,6 +1025,18 @@ void OnJoin(const CommandContext &context)
    auto &project = context.project;
    auto &tracks = TrackList::Get(project);
    auto &selectedRegion = ViewInfo::Get(project).selectedRegion;
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   for (auto *track : VideoTimeline::ProjectVideoTracks(project)) if (track->GetSelected()) {
+      try {
+         VideoTimeline::EditSelectedVideoStructure(project, VideoEditing::VideoEditKind::JoinClips,
+            selectedRegion.t0(), selectedRegion.t1());
+      }
+      catch (const std::exception &error) {
+         AudacityMessageBox(Verbatim(wxString::FromUTF8(error.what())), XO("Video Clips"));
+      }
+      return;
+   }
+#endif
    const auto selectedTracks = tracks.Selected<WaveTrack>();
    TimeStretching::WithClipRenderingProgress(
       [&](const ProgressReporter& reportProgress) {
@@ -1145,6 +1158,17 @@ const ReservedCommandFlag
       if(AudioIOBusyPred(project))
          return false;
 
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      const auto &region = ViewInfo::Get(project).selectedRegion;
+      for (const auto *track : TrackList::Get(project).Selected<const Track>())
+         if (const auto *video = dynamic_cast<const AuTopsyVideoTrack*>(track)) {
+            size_t count{};
+            for (const auto &clip : video->Timeline().clips)
+               if (region.isPoint() ? clip.start <= region.t0() && clip.End() >= region.t0()
+                   : clip.start < region.t1() && clip.End() > region.t0()) ++count;
+            if (count > 1) return true;
+         }
+#endif
       const auto &viewInfo = ViewInfo::Get(project);
       if(viewInfo.selectedRegion.isPoint())
          return false;

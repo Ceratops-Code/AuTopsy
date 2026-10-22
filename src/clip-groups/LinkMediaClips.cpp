@@ -58,6 +58,18 @@ std::vector<MediaChoice> MediaChoices(AudacityProject &project)
    }
    return result;
 }
+std::vector<std::string> ChoiceGroups(const MediaChoice &choice)
+{
+   if (!choice.video) return choice.group.empty() ? std::vector<std::string>{} : std::vector<std::string>{choice.group};
+   for (const auto &clip : choice.video->Timeline().clips)
+      if (clip.id == choice.id) return VideoTimeline::VideoContentLinkGroups(clip);
+   throw std::runtime_error("A linked video clip was removed.");
+}
+bool HasGroup(const MediaChoice &choice, const std::string &group)
+{
+   const auto groups = ChoiceGroups(choice);
+   return std::find(groups.begin(), groups.end(), group) != groups.end();
+}
 bool Selected(const MediaChoice &choice, const SelectedRegion &region)
 {
    return choice.track->GetSelected() && (region.isPoint()
@@ -71,7 +83,9 @@ bool ApplyGroups(AudacityProject &project, const std::vector<MediaChoice> &membe
    std::map<AuTopsyVideoTrack*, VideoTimeline::Timeline> candidates, originals;
    std::vector<std::pair<WaveClip*, std::string>> audio, oldAudio;
    for (const auto &member : members) {
-      if (member.group == group) continue;
+      const auto previousGroups = ChoiceGroups(member);
+      if (member.group == group && std::all_of(previousGroups.begin(), previousGroups.end(),
+            [&](const auto &old) { return old == group; })) continue;
       if (member.audio) {
          audio.emplace_back(member.audio, group); oldAudio.emplace_back(member.audio, member.group);
       }
@@ -84,6 +98,9 @@ bool ApplyGroups(AudacityProject &project, const std::vector<MediaChoice> &membe
          const auto found = std::find_if(clips.begin(), clips.end(),
             [&](const auto &clip) { return clip.id == member.id; });
          if (found == clips.end()) throw std::runtime_error("A media clip was removed.");
+         std::vector<std::pair<std::string, std::string>> mapping;
+         for (const auto &old : VideoTimeline::VideoContentLinkGroups(*found)) mapping.emplace_back(old, group);
+         VideoTimeline::RemapVideoContentLinks(*found, mapping);
          found->linkGroup = group;
       }
    }
@@ -110,6 +127,7 @@ bool ApplyGroups(AudacityProject &project, const std::vector<MediaChoice> &membe
 struct MediaBounds {
    MediaChoice member;
    double start{}, end{};
+   bool retainEmpty{};
 };
 void ApplyMediaBounds(AudacityProject &project, const std::vector<MediaBounds> &bounds,
    bool history)
@@ -119,10 +137,10 @@ void ApplyMediaBounds(AudacityProject &project, const std::vector<MediaBounds> &
    for (const auto &change : bounds) {
       const auto &member = change.member;
       if (member.audio) {
-         if (change.end > change.start &&
+         if ((change.end > change.start || change.retainEmpty) &&
              (change.start < member.audio->GetSequenceStartTime() - 1e-7 ||
               change.end > member.audio->GetSequenceEndTime() + 1e-7 ||
-              change.end - change.start < 1.0 / member.audio->GetRate()))
+              (change.end < change.start || (!change.retainEmpty && change.end - change.start < 1.0 / member.audio->GetRate()))))
             throw std::runtime_error("A linked audio clip cannot be trimmed to that boundary.");
          audio[member.audio] = {change.start, change.end};
       }
@@ -151,7 +169,7 @@ void ApplyMediaBounds(AudacityProject &project, const std::vector<MediaBounds> &
       for (auto &entry : video) entry.first->SetTimeline(std::move(entry.second));
       for (const auto &change : bounds) if (change.member.audio) {
          auto &clip = *change.member.audio;
-         if (change.end <= change.start) {
+         if (change.end <= change.start && !change.retainEmpty) {
             auto *track = static_cast<WaveTrack*>(change.member.track);
             const auto clips = track->SortedIntervalArray();
             const auto found = std::find_if(clips.begin(), clips.end(),
@@ -160,6 +178,9 @@ void ApplyMediaBounds(AudacityProject &project, const std::vector<MediaBounds> &
             track->RemoveInterval(*found);
          }
          else {
+            // Expand first, then cut the requested window. This also restores a
+            // piece whose previous visible interval was empty.
+            clip.TrimRightTo(clip.GetSequenceEndTime());
             clip.TrimLeftTo(change.start);
             clip.TrimRightTo(change.end);
          }
@@ -217,13 +238,16 @@ public:
                [&](const auto &choice) { return choice.key == key; });
             if (found == choices.end()) throw std::runtime_error("Unknown media clip; use zero-based track:clip pairs.");
             members.push_back(*found); audio |= found->audio != nullptr; video |= found->video != nullptr;
-            if (!found->group.empty()) groups.insert(found->group);
+            for (const auto &group : ChoiceGroups(*found)) groups.insert(group);
          }
          if (members.empty() || (!Unlink() && (!audio || !video)))
             throw std::runtime_error("Choose at least one video clip and one audio clip to link.");
          for (const auto &choice : choices)
-            if (!choice.group.empty() && groups.count(choice.group) && !keys.count(choice.key))
-               members.push_back(choice);
+            if (!keys.count(choice.key)) {
+               const auto related = ChoiceGroups(choice);
+               if (std::any_of(related.begin(), related.end(), [&](const auto &group) { return groups.count(group); }))
+                  members.push_back(choice);
+            }
          const auto group = Unlink() ? std::string{}
             : groups.size() == 1 ? *groups.begin() : ClipGroups::CreateClipGroupId();
          ApplyGroups(context.project, members, group, true);
@@ -294,7 +318,11 @@ void MediaCopyGroups::AssignToCopiedTrack(Track &track)
    }
    else if (auto *video = dynamic_cast<AuTopsyVideoTrack*>(&track)) {
       auto timeline = video->Timeline();
-      for (auto &clip : timeline.clips) clip.linkGroup = copyGroup(clip.linkGroup);
+      for (auto &clip : timeline.clips) {
+         std::vector<std::pair<std::string, std::string>> mapping;
+         for (const auto &group : VideoTimeline::VideoContentLinkGroups(clip)) mapping.emplace_back(group, copyGroup(group));
+         VideoTimeline::RemapVideoContentLinks(clip, mapping);
+      }
       video->SetTimeline(std::move(timeline));
    }
 }
@@ -353,7 +381,7 @@ bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    const auto &clips = track.Timeline().clips;
    const auto found = std::find_if(clips.begin(), clips.end(), [id](const auto &clip) { return clip.id == id; });
    if (found == clips.end()) throw std::runtime_error("Unknown video clip.");
-   const auto rate = VideoTimeline::SourceFor(track.Timeline(), *found).frameRate;
+   const auto rate = VideoTimeline::VideoContentFrameRate(*found, VideoTimeline::SourceFor(track.Timeline(), *found));
    const auto desired = std::round(start * rate) / rate - found->start;
    if (std::abs(desired) < 1e-10) return false;
    auto shifter = MakeTrackShifter::Call(track, project);
@@ -381,16 +409,18 @@ bool SplitMediaAtSelection(AudacityProject &project, double from, double to, Tra
       if (requested == to && to == from && changed) break;
       const auto choices = MediaChoices(project);
       std::set<std::string> groupsWithVideo;
-      for (const auto &choice : choices)
-         if (choice.video && !choice.group.empty()) groupsWithVideo.insert(choice.group);
+      for (const auto &choice : choices) if (choice.video)
+         for (const auto &group : ChoiceGroups(choice)) groupsWithVideo.insert(group);
       std::map<std::string, double> cuts;
       for (const auto &choice : choices)
-         if (groupsWithVideo.count(choice.group) && (only ? choice.track == only : choice.track->GetSelected()) &&
+         if ((only ? choice.track == only : choice.track->GetSelected()) &&
              requested > choice.start + 1e-7 && requested < choice.end - 1e-7)
-            cuts.emplace(choice.group, requested);
+            for (const auto &group : ChoiceGroups(choice))
+               if (groupsWithVideo.count(group)) cuts.emplace(group, requested);
       for (auto &entry : cuts) {
          // Imported soundtracks use the source video's exact frame boundary.
-         for (const auto &choice : choices) if (choice.video && choice.group == entry.first &&
+         for (const auto &choice : choices) if (choice.video &&
+             HasGroup(choice, entry.first) &&
              requested > choice.start + 1e-7 && requested < choice.end - 1e-7) {
             auto trial = choice.video->Timeline();
             const auto next = trial.nextId;
@@ -407,7 +437,10 @@ bool SplitMediaAtSelection(AudacityProject &project, double from, double to, Tra
       for (const auto &entry : cuts) rightGroups.emplace(entry.first, CreateClipGroupId());
       std::set<std::pair<WaveTrack*, double>> audioCuts;
       for (const auto &choice : choices) {
-         const auto cut = cuts.find(choice.group);
+         auto cut = cuts.end();
+         for (const auto &group : ChoiceGroups(choice)) {
+            cut = cuts.find(group); if (cut != cuts.end()) break;
+         }
          if (cut == cuts.end() && !(only ? choice.track == only : choice.track->GetSelected())) continue;
          const auto at = cut == cuts.end() ? requested : cut->second;
          // Later members may live on tracks that do not cross this cut. They
@@ -421,10 +454,14 @@ bool SplitMediaAtSelection(AudacityProject &project, double from, double to, Tra
          }
       }
       for (auto &entry : video) for (auto &clip : entry.second.clips) {
-         const auto cut = cuts.find(clip.linkGroup);
-         if (cut != cuts.end() && clip.start >= cut->second -
-             0.51 / VideoTimeline::SourceFor(entry.second, clip).frameRate)
-            clip.linkGroup = rightGroups.at(clip.linkGroup);
+         std::vector<std::pair<std::string, std::string>> mapping;
+         for (const auto &group : VideoTimeline::VideoContentLinkGroups(clip)) {
+            const auto cut = cuts.find(group);
+            if (cut != cuts.end() && clip.start >= cut->second -
+                0.51 / VideoTimeline::VideoContentFrameRate(clip, VideoTimeline::SourceFor(entry.second, clip)))
+               mapping.emplace_back(group, rightGroups.at(group));
+         }
+         VideoTimeline::RemapVideoContentLinks(clip, mapping);
       }
       try {
          for (const auto &entry : audioCuts) entry.first->Split(entry.second, entry.second);
@@ -480,9 +517,38 @@ void CommitVideoClipTrim(AudacityProject &project, AuTopsyVideoTrack &track, Vid
       if (found == candidate.clips.end()) throw std::runtime_error("A video trim cannot remove a clip.");
       const auto left = found->start - original.start, right = found->End() - original.End();
       if (std::abs(left) < 1e-7 && std::abs(right) < 1e-7) continue;
-      for (const auto &choice : choices)
+      if (original.content) {
+         const auto windows = VideoTimeline::VideoContentLinkWindows(*found);
+         std::map<std::string, VideoTimeline::VideoLinkWindow> ranges;
+         for (const auto &window : windows) {
+            auto item = ranges.emplace(window.group, window);
+            if (!item.second) {
+               // Multiple occurrences of one linked group cannot identify a
+               // unique soundtrack window. Reject before either medium changes.
+               throw std::runtime_error("Separate or unlink repeated soundtrack occurrences before trimming this joined clip.");
+            }
+         }
+         for (const auto &choice : choices) {
+            if (choice.video == &track && choice.id == original.id)
+               changes.push_back({choice, found->start, found->End()});
+            else if (choice.audio && ranges.count(choice.group)) {
+               const auto range = ranges.at(choice.group);
+               const auto sourceStart = choice.audio->GetSequenceStartTime();
+               const auto sourceEnd = choice.audio->GetSequenceEndTime();
+               // Encoded soundtracks can contain a fraction of a frame of
+               // padding. Retain it at a physical source edge, never at an
+               // internal cut or a fully hidden piece.
+               const auto begin = std::clamp(range.start, sourceStart, sourceEnd);
+               const auto padding = range.end > range.start && std::abs(range.end - range.sourceEnd) < 1e-7
+                  ? sourceEnd - range.sourceEnd : 0.0;
+               const auto end = std::clamp(range.end + padding, begin, sourceEnd);
+               changes.push_back({choice, begin, end, true});
+            }
+         }
+      }
+      else for (const auto &choice : choices)
          if ((choice.video == &track && choice.id == original.id) ||
-             (!original.linkGroup.empty() && choice.group == original.linkGroup))
+             (!original.linkGroup.empty() && HasGroup(choice, original.linkGroup)))
             changes.push_back({choice, choice.start + left, choice.end + right});
    }
    if (!changes.empty()) ApplyMediaBounds(project, changes, true);

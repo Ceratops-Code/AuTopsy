@@ -79,7 +79,8 @@ public:
       std::set<std::string> sources;
       for (const auto *track : VideoTimeline::ProjectVideoTracks(project))
          for (const auto &clip : track->Timeline().clips)
-            sources.insert(VideoTimeline::SourceFor(track->Timeline(), clip).path);
+            for (const auto &source : VideoTimeline::VideoContentSources(clip, VideoTimeline::SourceFor(track->Timeline(), clip)))
+               sources.insert(source.path);
       if (sources.empty()) return false;
       wxArrayString paths, labels;
       for (const auto &source : sources) {
@@ -105,7 +106,8 @@ public:
          const auto tracks = VideoTimeline::ProjectVideoTracks(project);
          bool pending{};
          for (const auto *track : tracks) for (const auto &clip : track->Timeline().clips)
-            pending |= VideoTimeline::SourceFor(track->Timeline(), clip).path == Utf8(mOldPath);
+            for (const auto &source : VideoTimeline::VideoContentSources(clip, VideoTimeline::SourceFor(track->Timeline(), clip)))
+               pending |= source.path == Utf8(mOldPath);
          if (!pending) return true;
          if (!wxFileExists(mFileName)) throw std::runtime_error("The replacement video is unavailable.");
          const auto source = InspectReplacement(mFileName, &ProjectWindow::Get(project));

@@ -49,45 +49,11 @@ from run_fork_test_harness import (
     write_neutral_preview_video,
     write_tone,
 )
-
-
-def check_split_video_edges(client, root, linked):
-    """A split seam must trim the right clip, including its linked soundtrack."""
-    if client.data("GetInfo: Type=Tracks Format=JSON"):
-        client.send("SelectAll")
-        client.send("RemoveTracks")
-    client.file("ImportVideo", root / "source.mp4")
-    if not linked:
-        client.send('UnlinkMediaClips: Clips="0:0"')
-    client.send("FitInWindow")
-    view = client.data("GetInfo: Type=View Format=JSON")
-    # Prefer a seam whose painted pixel falls before its exact source time.
-    at = next((frame / 30 for frame in range(30, 90)
-               if 0.02 < ((frame / 30 - view["horizontalStart"]) * view["pixelsPerSecond"]) % 1 < 0.48), 2)
-    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
-    client.send(f"SelectTime: Start={at} End={at}")
-    client.send("Split")
-    original = client.data("GetLinkedMediaClips")
-    video = client.data("GetVideoClips")
-    for _ in range(2):
-        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True)
-        assert client.data("GetLinkedMediaClips") == original
-        operate_owned_video_track(client, at, at + 0.5, track=0)
-        trimmed = client.data("GetLinkedMediaClips")
-        assert len(trimmed) == len(original), trimmed
-        for before, after in zip(original, trimmed, strict=True):
-            start = before["start"] + (0.5 if before["clip"] == 1 and (linked or before["kind"] == "video") else 0)
-            assert abs(after["start"] - start) < 0.04 and after["end"] == before["end"], trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True)
-        assert client.data("GetLinkedMediaClips") == trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0)
-        assert client.data("GetLinkedMediaClips") == original
-        assert client.data("GetVideoClips") == video
-        client.send("Undo")
-        assert client.data("GetLinkedMediaClips") == trimmed
-        client.send("Redo")
-        assert client.data("GetLinkedMediaClips") == original
-    client.file("SaveProject2", root / "_split-video-edges.aup3")
+from test_video_clip_edits import (
+    check_split_video_edges,
+    check_video_clip_structure,
+    check_video_compound_render,
+)
 
 
 def check_groups(client, root):
@@ -168,6 +134,14 @@ def check_project_compatibility(client, root):
     audio = root / "_original-mix.wav"
     client.file("Export2", audio, "NumChannels=2")
     expected = [{"project": project.name, "state": state, "audio": audio.name}]
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=2 End=2")
+    client.send("Split")
+    client.send("SelectTime: Start=0 End=4")
+    client.send("JoinVideoClips")
+    joined = root / "_with-joined-video.aup3"
+    client.file("SaveProject2", joined)
+    expected.append({"project": joined.name, "state": read_audio_project_state(client.data), "audio": audio.name})
     client.send("SelectTracks: Track=1 TrackCount=3 Mode=Set")
     client.send("RemoveTracks")
     tracks = client.data("GetInfo: Type=Tracks Format=JSON")
@@ -974,6 +948,10 @@ def worker(args, root):
         check_video_interactions(client, root, args.case)
     elif args.case in ("video-split-edges", "video-linked-split-edges"):
         check_split_video_edges(client, root, args.case == "video-linked-split-edges")
+    elif args.case == "video-compound-render":
+        check_video_compound_render(client, root, args.ffmpeg)
+    elif args.case in ("video-clip-edits", "video-linked-clip-edits"):
+        check_video_clip_structure(client, root, args.case == "video-linked-clip-edits")
     elif args.case == "media":
         check_media(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "branding":
@@ -1083,7 +1061,7 @@ def main():
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
-            "video-split-edges", "video-linked-split-edges",
+            "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
             "media",
             "preview",
             "branding",
@@ -1187,7 +1165,7 @@ def main():
         ("tone-stereo.wav", 2),
     ):
         write_tone(root / name, channels)
-    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clipboard", "video-track-menu", "media", "project-compatibility"):
+    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,
@@ -1299,6 +1277,9 @@ def main():
         "harness_sha256": hashlib.sha256(
             Path(__file__).with_name("run_fork_test_harness.py").read_bytes()
         ).hexdigest(),
+        "clip_edits_sha256": hashlib.sha256(
+            Path(__file__).with_name("test_video_clip_edits.py").read_bytes()
+        ).hexdigest() if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render") else None,
         "pipe_client_sha256": hashlib.sha256(
             Path(__file__).with_name("pipeclient.py").read_bytes()
         ).hexdigest(),

@@ -16,7 +16,7 @@ struct VideoProjectSnapshot {
    std::vector<VideoTrackSnapshot> tracks;
 };
 
-enum class VideoEditKind { MoveClip, TrimClip, SplitClip, RemoveClip, MoveBoundTracks };
+enum class VideoEditKind { MoveClip, TrimClip, SplitClip, RemoveClip, MoveBoundTracks, HealClips, JoinClips, SeparateClips };
 struct VideoEditRequest {
    VideoEditKind kind;
    std::string trackId;

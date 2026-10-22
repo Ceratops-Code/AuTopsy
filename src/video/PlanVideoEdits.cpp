@@ -1,15 +1,10 @@
 #include "PlanVideoEdits.h"
+#include "JoinVideoClips.h"
 #include <limits>
 #include <unordered_map>
 
 namespace VideoEditing {
 namespace {
-bool SameSource(const VideoTimeline::MediaSource &a, const VideoTimeline::MediaSource &b)
-{
-   return a.path == b.path && a.duration == b.duration && a.frameRate == b.frameRate &&
-      a.width == b.width && a.height == b.height;
-}
-
 bool SameTimeline(const VideoTimeline::Timeline &a, const VideoTimeline::Timeline &b)
 {
    if (a.sourcePath != b.sourcePath || a.sourceDuration != b.sourceDuration ||
@@ -19,12 +14,8 @@ bool SameTimeline(const VideoTimeline::Timeline &a, const VideoTimeline::Timelin
       return false;
    for (size_t i = 0; i < a.clips.size(); ++i) {
       const auto &x = a.clips[i], &y = b.clips[i];
-      if (x.id != y.id || x.start != y.start || x.sourceStart != y.sourceStart ||
-          x.duration != y.duration || !SameSource(x.media, y.media) ||
-          x.linkGroup != y.linkGroup || x.markers.size() != y.markers.size()) return false;
-      for (size_t m = 0; m < x.markers.size(); ++m)
-         if (x.markers[m].id != y.markers[m].id || x.markers[m].position != y.markers[m].position ||
-             x.markers[m].text != y.markers[m].text) return false;
+      if (!VideoTimeline::SameVideoContent(x, y) || x.id != y.id || x.start != y.start || x.sourceStart != y.sourceStart ||
+          x.duration != y.duration || x.linkGroup != y.linkGroup) return false;
    }
    return true;
 }
@@ -112,6 +103,12 @@ VideoEditPlan PlanVideoEdits(const VideoProjectSnapshot &project,
          VideoTimeline::RemoveClip(timeline, request.clipId); break;
       case VideoEditKind::MoveBoundTracks:
          MoveBoundTracks(plan.mAfter, index, request.start); break;
+      case VideoEditKind::HealClips:
+         VideoTimeline::HealVideoClips(timeline, request.start, request.end); break;
+      case VideoEditKind::JoinClips:
+         VideoTimeline::JoinVideoClips(timeline, request.start, request.end); break;
+      case VideoEditKind::SeparateClips:
+         VideoTimeline::SeparateVideoClips(timeline, request.start, request.end); break;
       default:
          throw std::runtime_error("Unknown video edit operation.");
       }

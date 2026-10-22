@@ -39,7 +39,7 @@ COMMON_INPUTS = (
     "src/video/CMakeLists.txt", "scripts/run_affected_tests.py", "sdlc/sdlc.yml",
     "scripts/pyproject.toml", "scripts/uv.lock", "tests/Catch2Main.cpp",
 )
-TIMELINE_INPUTS = ("src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
+TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
     CheckGroup("video-playback", TIMELINE_INPUTS + (
         "src/video/SyncVideoPlayback.h", "src/video/ChooseVideoExport.h",
@@ -68,6 +68,8 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "libraries/lib-wave-track/WaveTrack.cpp",
+    "scripts/piped-work/test_video_clip_edits.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
     "src/video/CreateVideoTrack.h", "src/video/CreateVideoTrack.cpp",
     "src/video/ShowVideoTrack.h", "src/video/ShowVideoTrack.cpp",

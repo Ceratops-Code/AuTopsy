@@ -136,9 +136,9 @@ interface cannot promise immunity to every future product requirement.
 | Decision | Status and reason | Alternative and tradeoff |
 | --- | --- | --- |
 | Owned editing kernel, native adapters | Target. Upstream pointers, track classes, XML hooks and commands stay at boundaries. | Reusing native audio clips as fake picture containers couples video to sample storage and audio-only transformations. |
-| Content separate from placement | Target. Joining and retiming should not destroy trims, sources or flags. | One source/start/duration tuple is sufficient today but cannot represent an editable multi-source join. |
+| Content separate from placement | Implemented for joins: immutable retained content and an independent visible window. Retiming remains planned. | A single media tuple cannot represent an editable multi-source join or preserve deleted interior gaps. |
 | One edit plan and one native history transaction | Target. All linked members are checked before any visible change. | Separate per-track commands expose half-edited picture/sound on failure. |
-| One evaluation policy for preview/export | Current simple paths share picture selection. Rich composition planning exists independently; native adoption remains next. | Two visibility implementations drift when mute, solo and compounds are added. |
+| One evaluation policy for preview/export | Simple and joined clips share source sampling and internal picture boundaries. Spatial composition still awaits native adoption. | Two visibility implementations drift when mute, solo and compounds are added. |
 | In-process kernel, isolated media workers | Selected. Transactions and the native audio clock stay synchronous; expensive media work can be replaced separately. | Network microservices increase deployment and partial-failure work without improving local editing. |
 | Existing mpv and FFmpeg | Retained. They already decode/render the supported media. | Writing a decoder or compositor duplicates mature libraries and increases maintenance. |
 | OpenTimelineIO | Assessed, not selected as the internal engine. Useful later for interchange. | Its editorial schemas do not supply native edit transactions, source-bound enforcement, preview or rendering; adopting the whole model now adds another adapter and format lifecycle. |
@@ -178,7 +178,9 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 
 | Location | Current ownership | Intended responsibility |
 | --- | --- | --- |
-| `src/video/EditVideoTimeline.h` | Host-free simple timelines and pure edits | Retain simple supported clip behavior during staged adoption |
+| `src/video/EditVideoTimeline.h` | Host-free timeline placement, range edits and layered source selection | Preserve native editing contracts for simple and joined clips |
+| `src/video/EditVideoContent.h/.cpp` | Immutable retained content, leaf sampling, sources and link windows | Keep source identity independent of native tracks and decoders |
+| `src/video/JoinVideoClips.h/.cpp` | Heal, editable Join and Separate | Atomic structural changes without rendering samples or video |
 | `src/video/PlanVideoEdits.h/.cpp` | Host-free batch planner and one-swap snapshot application | Native coordinator consumes complete plans in one history transaction |
 | `src/video/EvaluateVideoTimeline.h/.cpp` | Host-free ordered layers, crop, mute/solo and embedded rectangles | Native preview/export consume the same composition semantics |
 | `src/video/EditVideoTimeline.cpp` | Native project commands and earlier project-format reader | Boundary commands and saved-format support |
@@ -195,7 +197,8 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/TestVideoEdits.cpp` | Dedicated edit-plan and publication cases | Stale-state, rejected-batch, repeated/interrupted and bound-movement contracts |
 | `src/video/TestVideoComposition.cpp` | Dedicated layer/crop/embedded-geometry cases | Picture eligibility and placement without native objects or codecs |
 | `scripts/run_affected_tests.py` and `test_run_affected_tests.py` | One portable input/check map, named execution and bounded receipts | Local/CI affected selection; separate native-acceptance impact |
-| `scripts/piped-work/test_fork_features.py` | Native feature scenarios | Adapter contract cases through public commands |
+| `scripts/piped-work/test_fork_features.py` | Native feature dispatch and accepted result records | Adapter contracts through public commands |
+| `scripts/piped-work/test_video_clip_edits.py` | Dedicated split edges, structural edits and compound rendering cases | Reused public-command/gesture cases with generated media |
 
 Later responsibility-based files, whose creation needs separate path approval:
 `ControlVideoTransport.h/.cpp` for the native transport facade and
@@ -205,15 +208,18 @@ do not create empty scaffolding or an all-purpose feature manager.
 
 ## 6. Owned data model and persistence
 
-Current simple clips have a track-local integer ID, project start, source in,
-duration, optional source override, link group and content-relative flags. Tracks
-own clips, a default source and visibility. The current model is intentionally
+Clips have a track-local integer ID, project start, content-window start,
+duration, optional source override, link group and content-relative flags. An
+optional immutable `VideoClipContent` stores ordered child clips, retained source
+handles and transparent gaps. Simple clips use source seconds directly; joined
+clips use content seconds. Tracks own placements, a default source and visibility.
+The model remains
 limited to ordered non-overlapping, non-negative picture ranges at ordinary speed.
 
 The first planner uses transient `VideoProjectSnapshot` / `VideoTrackSnapshot`
-values: opaque track identity, revision, current simple timeline and optional
-parent identity. `PlanVideoEdits` prepares move, trim, split, removal and bound-group
-movement batches without publishing. `ApplyVideoEditPlan` compares the complete
+values: opaque track identity, revision, current timeline and optional
+parent identity. `PlanVideoEdits` prepares move, trim, split, removal, Heal Split,
+Join, Separate and bound-group movement batches without publishing. `ApplyVideoEditPlan` compares the complete
 expected state, allocates the completed replacement before its one nonthrowing
 swap, and treats an already-applied exact plan as a no-op. Stale states, collisions,
 invalid ranges and exhausted revisions reject the whole plan. Bound movements use
@@ -310,12 +316,53 @@ before adopting that format; do not silently lose feature data on ordinary Save.
 Saving a copy in stock Audacity intentionally drops unknown video/link/group/flag
 metadata. Keep the original AuTopsy file for a later full-feature round trip.
 
-Join rules are explicit: heal contiguous pieces only when source/time mapping,
-properties and relationships are compatible. Otherwise create a compound whose
-sequence contains exactly the visible pieces and intentional gaps. Joining after
-a delete must not reintroduce the removed interior footage. Edge untrim reveals
-retained outer handles, bounded by content, neighbours and link policy. Separate
-restores constituent identities/occurrences according to the declared command.
+Implemented structural semantics:
+
+- **Heal Split** requires touching windows of continuous compatible content.
+  Conflicting edits to the same flag reject the request. Ordinary compatible
+  splits retain the left identity; differing soundtrack groups remain retained
+  pieces inside one container instead of baking or merging audio samples.
+- **Join** retains each selected clip's content and intentional project gaps.
+  Only the first and last pieces contribute outer untrim handles. Hidden footage
+  at internal cuts cannot leak into those gaps. Join never reencodes a source.
+  Its editing grid uses the first piece's frame rate; each sampled picture still
+  resolves its actual source time/rate.
+- **Separate** unpacks selected containers to visible source pieces, including
+  nested joins. Original child IDs are restored where available; collisions get
+  fresh track-local IDs. Outer hidden handles and hidden flags stay attached to
+  surviving pieces. Completely hidden pieces are omitted, so untrim a container
+  first when those pieces should also be unpacked. A window containing only a
+  gap, or a visible flag inside a gap, rejects separation before any effect.
+  A repeat on separated pieces is a no-op.
+
+`VideoClipContent` contains values and shared immutable children, with no host
+pointers. Split, range copy, paste, native Undo and track migration copy the
+placement/window while sharing content. Relinking copies only changed content
+branches. `SampleVideoContent` resolves a leaf source/time; `VideoContentEdges`
+also exposes internal cuts to the export flattener. A transparent joined gap
+therefore reveals a lower eligible track in both preview and export. Source
+protection and relinking include hidden and nested source references.
+
+The native adapter plans every selected picture track before replacing any and
+records one history action. Native Join with picture selected leaves individual
+soundtrack chunks intact. Moving a container closes over all its retained link
+groups; splitting remaps right-hand groups in a private content copy. Trimming
+uses each retained piece's own soundtrack window, rather than shifting every
+internal seam by an outer-edge delta. Fully hidden soundtrack pieces retain
+empty native play windows and their samples for untrim. The native WaveTrack
+discard policy now distinguishes an empty play window from empty sample storage
+during load cleanup, insertion and copy. This small audio-level change lets
+native history retain those samples without a parallel audio store.
+Physical source edges
+retain encoder padding; internal cuts do not gain padding. Repeated occurrences
+of one soundtrack group are ambiguous for a trim and reject before publication.
+
+Native XML uses optional `videoSchema=1` and `contentVersion=1` on compounds,
+with nested `videoclip` values. Existing simple projects still load. The reader
+bounds content depth at 16 and the total wire pieces at 10,000, checks child
+sources/ranges, and reports incomplete or unsupported content instead of
+silently flattening or discarding it. There are no new project sidecars,
+checkpoints, diagnostic logs or database schema changes for this feature.
 
 ## 7. Editing and playback sequences
 
@@ -392,8 +439,9 @@ No authentication is needed inside the local edit kernel; scripting pipes retain
 the local application's access boundary. Service credentials belong to release
 infrastructure, not project or media payloads.
 
-Current preview/export share `EvaluateVideoLayers`: the highest visible simple
-track wins, with lower pictures exposed through gaps. The new independent
+Current preview/export share `EvaluateVideoLayers` and `SampleVideoContent`: the
+highest visible track with a picture sample wins, including nested joins, with
+lower pictures exposed through gaps. The new independent
 `EvaluateVideoTimeline` returns an owned bottom-to-top `VideoFramePlan`, retaining
 multiple simultaneous samples rather than flattening them to one winner. Each
 sample carries source/clip identity, source time, retained crop and resolved canvas
@@ -417,8 +465,8 @@ It must retain crop/embedding through copy, split, compatible joins, save/reopen
 and Undo/Redo before release. Hidden clips still contribute to project duration
 and source protection. Audio mute/solo/gain remain separate native operations.
 
-The current export flattens eligible simple layers only at its boundary and
-passes source ranges to FFmpeg. Rich RenderPlan evaluation will replace that
+The current export flattens eligible simple and joined layers only at its boundary
+and passes leaf source ranges and transparent gaps to FFmpeg. Rich RenderPlan evaluation will replace that
 translation gradually, with paired preview/export cases before enabling a new
 content type. The new geometry evaluator does not yet render pixels or change
 the installed feature set. All-muted output is black for the explicit project duration and

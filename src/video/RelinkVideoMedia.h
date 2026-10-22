@@ -12,9 +12,7 @@ inline bool ReplaceVideoSource(Timeline &timeline, const std::string &oldPath,
    auto changed = timeline;
    bool found{};
    for (auto &clip : changed.clips)
-      if (SourceFor(timeline, clip).path == oldPath) {
-         clip.media = replacement; found = true;
-      }
+      found |= ReplaceVideoContentSource(clip, SourceFor(timeline, clip), oldPath, replacement);
    if (!found) return false;
    if (changed.sourcePath == oldPath) {
       changed.sourcePath = replacement.path; changed.sourceDuration = replacement.duration;

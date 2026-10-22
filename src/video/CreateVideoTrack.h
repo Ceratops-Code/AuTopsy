@@ -10,6 +10,13 @@ class AuTopsyVideoTrack final : public UniqueChannelTrack<> {
    VideoTimeline::Timeline mTimeline;
    double mClipboardDuration{};
    bool mVisible{true};
+   struct ReadingClip {
+      VideoTimeline::Clip clip;
+      std::shared_ptr<VideoTimeline::VideoClipContent> content;
+   };
+   std::vector<ReadingClip> mReadingClips;
+   size_t mReadingCount{};
+   bool mReadError{};
    Track::Holder Clone(bool backup) const override;
    std::shared_ptr<WideChannelGroupInterval> DoGetInterval(size_t index) override;
 public:
@@ -36,15 +43,19 @@ public:
    size_t NIntervals() const override;
    bool HandleXMLTag(const std::string_view &tag, const AttributesList &attributes) override;
    XMLTagHandler *HandleXMLChild(const std::string_view &tag) override;
+   void HandleXMLEndTag(const std::string_view &tag) override;
    void WriteXML(XMLWriter &writer) const override;
    std::optional<TranslatableString> GetErrorOpening() const override;
 };
 ENUMERATE_TRACK_TYPE(AuTopsyVideoTrack);
 
+namespace VideoEditing { enum class VideoEditKind; }
 namespace VideoTimeline {
 // Native project operations stay at this boundary, outside the owned model.
 Timeline GetProjectTimeline(const AudacityProject &project);
 bool SplitProjectVideo(AudacityProject &project, double at);
+bool EditSelectedVideoStructure(AudacityProject &project, VideoEditing::VideoEditKind kind,
+   double from, double to, bool recordHistory = true);
 bool MoveProjectVideoClip(AudacityProject &project, uint64_t id, double start);
 bool RemoveProjectVideoClip(AudacityProject &project, uint64_t id);
 void ShowProjectVideoPreview(AudacityProject &project, bool raise = false);
