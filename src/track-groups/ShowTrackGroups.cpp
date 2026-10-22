@@ -487,7 +487,7 @@ AttachedItem sGroupsMenu{Section("TrackFolders", Menu("TrackGroups", XXO("Track 
    Command("CollapseTrackGroup", XXO("&Collapse Group"), [](const CommandContext &context) { if (auto *group = SelectedGroup(context.project)) CollapseProjectTrackGroup(context.project, group->GroupId(), true); }, AudioIONotBusyFlag()),
    Command("ExpandTrackGroup", XXO("&Expand Group"), [](const CommandContext &context) { if (auto *group = SelectedGroup(context.project)) CollapseProjectTrackGroup(context.project, group->GroupId(), false); }, AudioIONotBusyFlag()),
    Command("UngroupTracks", XXO("&Ungroup Tracks"), [](const CommandContext &context) { if (auto *group = SelectedGroup(context.project)) UngroupProjectTracks(context.project, group->GroupId()); }, AudioIONotBusyFlag())
-)), "Tracks"};
+)), Registry::Placement{wxT("Tracks")}};
 }
 using GetFolderControls = DoGetControls::Override<AuTopsyTrackGroup>;
 DEFINE_ATTACHED_VIRTUAL_OVERRIDE(GetFolderControls) {
