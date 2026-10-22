@@ -222,6 +222,9 @@ solo track supplies picture there. Visibility changes support Undo/Redo and
 save/reopen. Hiding the final picture leaves a black tail; hiding every video
 exports black for the full video duration with the edited audio mix. Export does
 not need to open muted sources.
+New imports retain their original display size, including quarter-turn rotation.
+For an older project without saved dimensions, choose an explicit export resolution
+when all video is hidden.
 
 Playback uses the normal audio transport, including when the soundtrack has
 been deleted. Video-only projects supply silence in memory to its clock; no

@@ -1,4 +1,5 @@
 """Focused native video editing, transport and visibility cases with neutral media."""
+import ctypes
 import json
 import os
 import re
@@ -21,40 +22,81 @@ def wait_for_native_state(condition, description, timeout=8):
     deadline = time.monotonic() + timeout
     while not condition():
         if time.monotonic() >= deadline:
-            raise AssertionError("Native state did not arrive: " + description)
+            raise AssertionError("Native state did not arrive: " + (description() if callable(description) else description))
         time.sleep(0.025)
+
+
+class PreviewNativeWindows:
+    """Use the harness's retained plain Python and the stable Win32 window API.
+
+    The compiler records that interpreter outside uv's disposable overlays.
+    ctypes keeps GUI test dependencies available for a later ordinary CTest call;
+    pointer-sized signatures and PID checks bound effects to the owned process.
+    """
+
+    def __init__(self):
+        from ctypes import wintypes as w
+
+        self.api = ctypes.WinDLL("user32", use_last_error=True)
+        signatures = {
+            "GetWindowThreadProcessId": ([w.HWND, ctypes.POINTER(w.DWORD)], w.DWORD),
+            "IsWindowEnabled": ([w.HWND], w.BOOL),
+            "IsWindowVisible": ([w.HWND], w.BOOL),
+            "GetWindowTextW": ([w.HWND, w.LPWSTR, ctypes.c_int], ctypes.c_int),
+            "SendMessageTimeoutW": ([w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT,
+                                     ctypes.POINTER(ctypes.c_size_t)], ctypes.c_size_t),
+        }
+        for name, (arguments, result) in signatures.items():
+            operation = getattr(self.api, name)
+            operation.argtypes, operation.restype = arguments, result
+
+    def owner(self, handle):
+        owner = ctypes.c_uint32()
+        if not self.api.GetWindowThreadProcessId(handle, ctypes.byref(owner)):
+            raise RuntimeError(f"Cannot read native window owner for HWND={handle}: {ctypes.WinError()}")
+        return owner.value
+
+    def enabled(self, handle):
+        return bool(self.api.IsWindowEnabled(handle))
+
+    def visible(self, handle):
+        return bool(self.api.IsWindowVisible(handle))
+
+    def caption(self, handle):
+        text = ctypes.create_unicode_buffer(512)
+        self.api.GetWindowTextW(handle, text, len(text))
+        return text.value
+
+    def click(self, handle):
+        assert self.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+        wait_for_native_state(lambda: self.enabled(handle), f"preview button HWND={handle} enabled")
+        reply = ctypes.c_size_t()
+        if not self.api.SendMessageTimeoutW(handle, 0xF5, 0, 0, 2, 10000, ctypes.byref(reply)):
+            raise RuntimeError(f"Native BM_CLICK failed for HWND={handle}: {ctypes.WinError()}")
 
 
 def owned_preview_controls(client):
     """Use real native button HWNDs, bound to this test PID and second display."""
-    import win32process
+    windows = PreviewNativeWindows()
 
     info = ready_video_preview(client)
     frame = int(info["previewFrameHandle"])
-    owner = win32process.GetWindowThreadProcessId(frame)[1]
+    owner = windows.owner(frame)
     assert owner == int(os.environ["AUTOPSY_OWNED_APP_PID"])
     assert_owned_test_display(owner, include_window=frame)
     handles = {item["action"]: int(item["handle"]) for item in info["transportControls"]}
     for handle in handles.values():
-        assert handle and win32process.GetWindowThreadProcessId(handle)[1] == owner
+        assert handle and windows.owner(handle) == owner
     return info, handles
 
 
 def press_preview_button(handle):
     """A native button event does not borrow shared mouse or keyboard input."""
-    import win32con
-    import win32gui
-    import win32process
-
-    assert win32process.GetWindowThreadProcessId(handle)[1] == int(os.environ["AUTOPSY_OWNED_APP_PID"])
-    wait_for_native_state(lambda: win32gui.IsWindowEnabled(handle), "preview button enabled")
-    win32gui.SendMessageTimeout(handle, win32con.BM_CLICK, 0, 0, win32con.SMTO_ABORTIFHUNG, 10000)
+    PreviewNativeWindows().click(handle)
 
 
 def preview_project_seconds(status):
-    import win32gui
-
-    caption = win32gui.GetWindowText(status)
+    caption = PreviewNativeWindows().caption(status)
     match = re.search(r"\|\s+(-?\d+(?:\.\d+)?) s", caption)
     assert match, caption
     return float(match[1])
@@ -62,7 +104,7 @@ def preview_project_seconds(status):
 
 def check_video_transport(client, root):
     """Real controls share native audio, pause/resume, silent clock and ownership."""
-    import win32gui
+    windows = PreviewNativeWindows()
 
     client.file("ImportVideo", root / "source.mp4")
     client.send("FitInWindow")
@@ -78,21 +120,21 @@ def check_video_transport(client, root):
             info, buttons = owned_preview_controls(client)
             status = int(info["previewStatusHandle"])
             press_preview_button(buttons["play"])
-            wait_for_native_state(lambda buttons=buttons: win32gui.IsWindowEnabled(buttons["pause"]), "project playing")
+            wait_for_native_state(lambda buttons=buttons: windows.enabled(buttons["pause"]), "project playing")
             wait_for_native_state(lambda status=status: preview_project_seconds(status) > 0.15, "project clock advances")
-            assert not win32gui.IsWindowEnabled(buttons["play"])
+            assert not windows.enabled(buttons["play"])
             press_preview_button(buttons["pause"])
-            wait_for_native_state(lambda buttons=buttons: win32gui.IsWindowEnabled(buttons["play"]) and
-                                  not win32gui.IsWindowEnabled(buttons["pause"]), "project paused")
+            wait_for_native_state(lambda buttons=buttons: windows.enabled(buttons["play"]) and
+                                  not windows.enabled(buttons["pause"]), "project paused")
             time.sleep(0.08)
             paused = preview_project_seconds(status)
             time.sleep(0.2)
             assert abs(preview_project_seconds(status) - paused) < 0.025
-            assert win32gui.IsWindowEnabled(buttons["stop"])
+            assert windows.enabled(buttons["stop"])
             press_preview_button(buttons["play"])
             wait_for_native_state(lambda status=status, paused=paused: preview_project_seconds(status) > paused + 0.12, "resumed project clock")
             press_preview_button(buttons["stop"])
-            wait_for_native_state(lambda buttons=buttons: not win32gui.IsWindowEnabled(buttons["stop"]), "project stopped")
+            wait_for_native_state(lambda buttons=buttons: not windows.enabled(buttons["stop"]), "project stopped")
     # Live picture mute must keep native playback running. This gesture uses
     # the same already-painted, fixed control row, avoiding a scripting command
     # whose native dispatch would stop the project before the click.
@@ -100,31 +142,31 @@ def check_video_transport(client, root):
     painted = painted_video_tracks(client)
     info, buttons = owned_preview_controls(client)
     press_preview_button(buttons["play"])
-    wait_for_native_state(lambda: win32gui.IsWindowEnabled(buttons["pause"]), "silent video playback")
+    wait_for_native_state(lambda: windows.enabled(buttons["pause"]), "silent video playback")
     video_track = painted["videoTrackRows"][0]["index"]
     operate_owned_video_track(client, 0.5, track=video_track, gesture="click", area="mute", painted=painted)
-    wait_for_native_state(lambda: not win32gui.IsWindowVisible(int(info["previewSurfaceHandle"])), "muted picture hidden")
-    assert win32gui.IsWindowEnabled(buttons["pause"]), "Picture mute stopped native playback"
+    wait_for_native_state(lambda: not windows.visible(int(info["previewSurfaceHandle"])), "muted picture hidden")
+    assert windows.enabled(buttons["pause"]), "Picture mute stopped native playback"
     operate_owned_video_track(client, 0.5, track=video_track, gesture="click", area="mute", painted=painted)
-    wait_for_native_state(lambda: win32gui.IsWindowVisible(int(info["previewSurfaceHandle"])), "picture unmuted")
+    wait_for_native_state(lambda: windows.visible(int(info["previewSurfaceHandle"])), "picture unmuted")
     press_preview_button(buttons["stop"])
-    wait_for_native_state(lambda: not win32gui.IsWindowEnabled(buttons["stop"]), "live visibility stopped")
+    wait_for_native_state(lambda: not windows.enabled(buttons["stop"]), "live visibility stopped")
     client.file("SaveProject2", root / "_transport-first.aup3")
     first = buttons
     client.send("New")
     client.file("ImportVideo", root / "source.mp4")
     _, second = owned_preview_controls(client)
     press_preview_button(second["play"])
-    wait_for_native_state(lambda: win32gui.IsWindowEnabled(second["pause"]) and
-                          not any(win32gui.IsWindowEnabled(handle) for handle in first.values()),
+    wait_for_native_state(lambda: windows.enabled(second["pause"]) and
+                          not any(windows.enabled(handle) for handle in first.values()),
                           "other project owns playback")
     time.sleep(0.15)
-    assert win32gui.IsWindowEnabled(second["stop"])
+    assert windows.enabled(second["stop"])
     press_preview_button(second["pause"])
-    wait_for_native_state(lambda: win32gui.IsWindowEnabled(second["play"]), "other project paused")
-    assert not any(win32gui.IsWindowEnabled(handle) for handle in first.values())
+    wait_for_native_state(lambda: windows.enabled(second["play"]), "other project paused")
+    assert not any(windows.enabled(handle) for handle in first.values())
     press_preview_button(second["stop"])
-    wait_for_native_state(lambda: win32gui.IsWindowEnabled(first["play"]), "first project regains controls")
+    wait_for_native_state(lambda: windows.enabled(first["play"]), "first project regains controls")
     client.file("SaveProject2", root / "_transport-second.aup3")
 
 
@@ -133,10 +175,16 @@ def check_video_visibility(client, root, ffmpeg, ffprobe):
     source, other = root / "source.mp4", root / "other-source.mp4"
     client.file("ImportVideo", source)
     client.file("ImportVideo", other)
+    other_track = next(row["track"] for row in clip_rows(client) if Path(row["source"]) == other)
+    select_clip_range(client, 0, 2, other_track)
+    client.send("SetTrackStatus: Focused=1")
+    client.send("TrackMoveTop")
+    client.send("FitV")
     client.send("FitInWindow")
     clips = clip_rows(client)
     front = next(row["track"] for row in clips if Path(row["source"]) == other)
     back = next(row["track"] for row in clips if Path(row["source"]) == source)
+    assert front < back, clips
     linked_before = client.data("GetLinkedMediaClips")
 
     def states():
@@ -148,16 +196,18 @@ def check_video_visibility(client, root, ffmpeg, ffprobe):
 
     def picture(path):
         client.send("SelectTime: Start=0.5 End=0.5")
+        observed = {}
         def matches():
             info = client.data("GetVideoPreviewInfo")
+            observed.update({key: info[key] for key in ("pictureSource", "pictureVisible", "ready", "position")})
             actual = Path(info["pictureSource"]) if info["pictureSource"] else None
             return actual == path and info["pictureVisible"] == bool(path)
-        wait_for_native_state(matches, "selected video picture")
+        wait_for_native_state(matches, lambda: f"picture expected={path}; observed={observed}")
 
-    def exported(name, colors):
+    def exported(name, colors, options='Preset="h264" Width=160 Height=90 FrameRate=30 Quality=18'):
         output = root / name
-        client.file("ExportVideoMix", output, 'Preset="h264" Width=160 Height=90 FrameRate=30 Quality=18')
-        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-of", "json", str(output)], timeout=30))
+        client.file("ExportVideoMix", output, options)
+        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(output)], timeout=30))
         assert abs(float(metadata["format"]["duration"]) - 4) < 0.08, metadata
         for when, color in colors:
             pixel = run_process([ffmpeg, "-v", "error", "-ss", str(when), "-i", str(output), "-frames:v", "1",
@@ -172,6 +222,7 @@ def check_video_visibility(client, root, ffmpeg, ffprobe):
         samples = array.array("h", run_process([ffmpeg, "-v", "error", "-i", str(output), "-map", "0:a:0",
                                               "-f", "s16le", "-ac", "1", "-ar", "8000", "pipe:1"], timeout=30))
         assert samples and max(abs(value) for value in samples) > 100, "Video mute changed the soundtrack mix"
+        return metadata
 
     baseline = states()
     picture(other)
@@ -206,6 +257,9 @@ def check_video_visibility(client, root, ffmpeg, ffprobe):
     source.replace(relocated)
     try:
         exported("_all-muted.mp4", [(0.5, "black"), (3.5, "black")])
+        canvas = exported("_all-muted-source-size.mp4", [(1, "black")], 'Preset="h264"')
+        video = next(stream for stream in canvas["streams"] if stream["codec_type"] == "video")
+        assert (video["width"], video["height"]) == (90, 160), video
     finally:
         relocated.replace(source)
     # Normal clipboard track creation must carry visibility state, without
@@ -220,6 +274,20 @@ def check_video_visibility(client, root, ffmpeg, ffprobe):
     assert copied and all(row["muted"] and row["solo"] for row in copied), copied
     save_reopen(client, root / "_copied-visibility.aup3")
     assert states() == copied
+    # Saved source geometry includes quarter-turn metadata. Black export must
+    # use those dimensions rather than preview/window dimensions.
+    rotated = root / "_rotated.mp4"
+    run_process([ffmpeg, "-v", "error", "-i", str(source), "-map", "0", "-c", "copy",
+                 "-metadata:s:v:0", "rotate=90", str(rotated)], timeout=30)
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    client.file("ImportVideo", rotated)
+    track = states()[0]["index"]
+    toggle(track, "mute")
+    save_reopen(client, root / "_rotated-muted.aup3")
+    canvas = exported("_rotated-black.mp4", [(1, "black")], 'Preset="h264"')
+    video = next(stream for stream in canvas["streams"] if stream["codec_type"] == "video")
+    assert (video["width"], video["height"]) == (90, 160), video
 
 
 def select_clip_range(client, start, end, track=0):

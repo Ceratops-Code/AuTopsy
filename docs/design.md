@@ -445,6 +445,10 @@ Black gaps/tails use FFmpeg's existing color source. A fully hidden composition
 retains a source-derived canvas and full duration without opening hidden media;
 the existing mixer still supplies the unchanged audio-track mix. No cache,
 sidecar or persistent operational record is added by these controls.
+Import captures display dimensions and quarter-turn orientation before loading
+any proxy, then saves those source properties. Explicit export dimensions take
+precedence; an older hidden project without saved geometry asks for an output
+resolution rather than guessing a canvas or reopening hidden media.
 
 Complex preview uses bounded derived chunks/lookahead only after a performance
 spike demonstrates adequate cancellation, latency and smoothness. Every worker

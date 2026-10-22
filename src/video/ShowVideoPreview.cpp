@@ -368,6 +368,7 @@ class VideoPreviewFrame final : public wxFrame {
    std::shared_ptr<const VideoPreview::PreparedMedia> mMedia;
    std::deque<std::shared_ptr<const VideoPreview::PreparedMedia>> mPreviousMedia;
    double mSourceDuration{}, mSourceFrameRate{30};
+   int mSourceWidth{}, mSourceHeight{};
    bool mSourceHasAudio{}, mDurationChecked{};
    struct PlaybackSample {
       double audio, video, dropped, decoderDropped; bool paused;
@@ -586,6 +587,7 @@ public:
          // Reopening/undo must not enter a nested modal event loop: queued
          // Close commands could otherwise destroy the project during loading.
          mSourceDuration = saved->sourceDuration; mSourceFrameRate = saved->frameRate;
+         mSourceWidth = saved->sourceWidth; mSourceHeight = saved->sourceHeight;
          mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, true, this, false);
          if (!mMedia) mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, false, this, false);
       }
@@ -610,6 +612,18 @@ public:
       const auto state = mPlayer->ReadState();
       mSourceHasAudio = mPlayer->HasAudio();
       mSourceDuration = state.duration; mSourceFrameRate = state.frameRate;
+      // Capture ORIGINAL display geometry before replacing this decoder's file
+      // with a low-resolution proxy. Rotation is applied by the output, not dw/dh.
+      double width = mPlayer->Property("video-params/dw"), height = mPlayer->Property("video-params/dh");
+      if (width <= 0 || height <= 0) { width = mPlayer->Property("width"); height = mPlayer->Property("height"); }
+      if (!std::isfinite(width) || !std::isfinite(height) || width < 1 || height < 1 || width > 65536 || height > 65536)
+         throw std::runtime_error("The video has no usable source canvas size.");
+      mSourceWidth = int(std::llround(width)); mSourceHeight = int(std::llround(height));
+      const auto sourceRotation = mPlayer->Property("video-params/rotate");
+      if (!std::isfinite(sourceRotation) || std::abs(sourceRotation) > 360000)
+         throw std::runtime_error("The video has no usable source rotation.");
+      const auto rotation = int(std::llround(sourceRotation)) % 360;
+      if (rotation == 90 || rotation == 270 || rotation == -90 || rotation == -270) std::swap(mSourceWidth, mSourceHeight);
       const bool lightweight = mPlayer->Property("width") * mPlayer->Property("height") > 1280.0 * 720.0 ||
          state.frameRate > 60;
       mMedia = VideoPreview::PrepareVideoMedia(path, state.duration, lightweight, this);
@@ -628,6 +642,8 @@ public:
    const wxString &GetVideoPath() const { return mPath; }
    double GetVideoDuration() const { return mSourceDuration; }
    double GetVideoFrameRate() const { return mSourceFrameRate; }
+   int GetVideoSourceWidth() const { return mSourceWidth; }
+   int GetVideoSourceHeight() const { return mSourceHeight; }
    auto Media() const { return mMedia; }
    auto PlayerState() { return mPlayer ? mPlayer->ReadState() : VideoPreview::PlayerSnapshot{}; }
    wxButton *TransportButton(VideoPreview::PreviewTransportAction action) const {
@@ -874,7 +890,8 @@ bool ImportVideo(const CommandContext &context, const wxString &path)
    try {
        if (!candidate->Load(path)) return false;
        auto timeline = VideoTimeline::CreateVideoTimeline(Utf8(path),
-          candidate->GetVideoDuration(), candidate->GetVideoFrameRate());
+          candidate->GetVideoDuration(), candidate->GetVideoFrameRate(),
+          candidate->GetVideoSourceWidth(), candidate->GetVideoSourceHeight());
        const auto hasAudio = candidate->HasAudio();
        auto pictureTrack = VideoTimeline::CreateProjectVideoTrack(project, nullptr, false, false,
           std::move(timeline),wxFileName(path).GetName() + _(" Video"));

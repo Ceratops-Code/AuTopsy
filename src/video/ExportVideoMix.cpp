@@ -391,14 +391,14 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
 
    std::optional<std::pair<int,int>> pictureSize;
    if (!copyPicture) {
-      if (inputs.empty()) {
+      if (settings.width) pictureSize = std::pair{settings.width, settings.height};
+      else if (inputs.empty()) {
          if (timeline.sourceWidth <= 0 || timeline.sourceHeight <= 0)
-            throw std::runtime_error("The hidden video composition has no usable canvas size.");
+            throw std::runtime_error("Choose an output resolution for this hidden video; its older project has no saved canvas size.");
          pictureSize = std::pair{(timeline.sourceWidth + 1) / 2 * 2, (timeline.sourceHeight + 1) / 2 * 2};
       }
       else pictureSize = ReadExportPictureSize(inputs.front(), parent);
       if (!pictureSize) return false;
-      if (settings.width) pictureSize = std::pair{settings.width, settings.height};
    }
    ExportWorkspace workspace{ target };
    const auto mix = workspace.path / "_mix.wav";
