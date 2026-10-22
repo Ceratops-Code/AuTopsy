@@ -1,6 +1,7 @@
 """Behavior cases for installer builds and interrupted SDK publication."""
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import shutil
@@ -27,9 +28,10 @@ class InstallerBuildTests(unittest.TestCase):
 
     def test_preview_publication_repeats_and_interrupts_each_remote_effect(self):
         revision, body = "a" * 40, "Unsigned AuTopsy preview.\n"
-        for boundary in range(5):
+        for boundary, line_ending in itertools.product(range(5), ("\n", "\r\n")):
+            returned_body = body.replace("\n", line_ending)
             for after in ((False, True) if boundary else (False,)):
-                with self.subTest(boundary=boundary, after=after), tempfile.TemporaryDirectory(prefix="_release-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                with self.subTest(boundary=boundary, after=after, line_ending=line_ending), tempfile.TemporaryDirectory(prefix="_release-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
                     root = Path(temporary)
                     source, build = root / "source", root / "build"
                     source.mkdir()
@@ -50,7 +52,7 @@ class InstallerBuildTests(unittest.TestCase):
                                                "stopped": False, "effects": []}
 
                     def command(arguments, _source, _diagnostics, *, state=remote,
-                                selected=boundary, after_effect=after, **_options):
+                                selected=boundary, after_effect=after, release_body=returned_body, **_options):
                         if arguments[0] == "git":
                             return ""
                         if arguments[:3] == ["gh", "release", "view"]:
@@ -68,7 +70,7 @@ class InstallerBuildTests(unittest.TestCase):
                         state["effects"].append(action)
                         if action == "create":
                             state["release"] = {"draft": True, "prerelease": True, "assets": [],
-                                                "target_commitish": revision, "body": body,
+                                                "target_commitish": revision, "body": release_body,
                                                 "name": "AuTopsy v3.7.10-autopsy.2",
                                                 "html_url": "https://github.com/Ceratops-Code/AuTopsy/releases/tag/v3.7.10-autopsy.2"}
                         elif action == "upload":
@@ -95,6 +97,11 @@ class InstallerBuildTests(unittest.TestCase):
                         self.assertEqual(effects, ["create", "upload", "upload", "edit"])
                         self.assertEqual(result["status"], "published")
                         self.assertEqual(set(result["assets"]), {installer.name, manifest.name})
+                        remote["release"]["body"] = returned_body + "Different release text."
+                        with self.assertRaisesRegex(RuntimeError, "requested release metadata"):
+                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
+                        self.assertEqual(remote["effects"], effects)
+                        remote["release"]["body"] = returned_body
                         remote["tag"] = "b" * 40
                         with self.assertRaisesRegex(RuntimeError, "different source revision"):
                             builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)

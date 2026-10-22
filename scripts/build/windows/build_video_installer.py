@@ -402,6 +402,7 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
     an unchanged accepted installer. Existing conflicting releases/assets fail
     closed. The build lock protects the two local upload inputs while they are
     read. One current child-failure report belongs to this publication operation.
+    Release notes may use LF or CRLF line endings; all other text must match.
     """
     source, build, notes = source.resolve(), build.resolve(), notes.resolve()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -499,7 +500,8 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
                      "--prerelease", "--title", title, "--notes-file", str(notes)])
         release = current_release()
         require_tag()
-        if release["draft"] or not release["prerelease"] or release["body"] != body or release["name"] != title:
+        if (release["draft"] or not release["prerelease"]
+                or release["body"].replace("\r\n", "\n") != body or release["name"] != title):
             raise RuntimeError("The public preview does not match the requested release metadata.")
         diagnostics.unlink(missing_ok=True)
         return {"schema": "autopsy-preview-publication.v1", "status": "published",
