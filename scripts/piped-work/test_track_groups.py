@@ -6,6 +6,7 @@ retention. This module never touches an installed editor or personal project.
 import ctypes
 import json
 import os
+import threading
 import time
 
 from run_fork_test_harness import (
@@ -20,6 +21,66 @@ def read_group(client, group_id):
     info = client.data("GetTrackGroups")
     group = next(item for item in info["groups"] if item["id"] == group_id)
     return info, group
+
+
+def history_command(client, command):
+    """Report owned modal text if history blocks, without dismissing anything."""
+    finished = threading.Event()
+
+    def observe():
+        if finished.wait(5):
+            return
+        from ctypes import wintypes as w
+
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        callback = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+        user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+        user.IsWindowVisible.argtypes = [w.HWND]
+        user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+        user.EnumWindows.argtypes = [callback, w.LPARAM]
+        user.EnumChildWindows.argtypes = [w.HWND, callback, w.LPARAM]
+        user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
+                                           w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
+        user.SendMessageTimeoutW.restype = ctypes.c_size_t
+        rows = []
+
+        def owner(handle):
+            pid = w.DWORD()
+            user.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+            return pid.value == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+
+        @callback
+        def window(handle, _):
+            if len(rows) >= 8 or not owner(handle) or not user.IsWindowVisible(handle):
+                return True
+            text = ctypes.create_unicode_buffer(256)
+            user.GetWindowTextW(handle, text, len(text))
+            row = {"title": text.value, "controls": []}
+
+            @callback
+            def child(control, _):
+                if len(row["controls"]) < 20 and owner(control) and user.IsWindowVisible(control):
+                    reply = ctypes.c_size_t()
+                    content = ctypes.create_unicode_buffer(256)
+                    if user.SendMessageTimeoutW(control, 0xD, len(content), ctypes.addressof(content),
+                                                2, 100, ctypes.byref(reply)) and content.value:
+                        row["controls"].append(content.value)
+                return True
+
+            user.EnumChildWindows(handle, child, 0)
+            rows.append(row)
+            return True
+
+        user.EnumWindows(window, 0)
+        print(json.dumps({"blocked_history": command, "owned_windows": rows}), flush=True)
+
+    observer = threading.Thread(target=observe, daemon=True)
+    observer.start()
+    try:
+        return client.send(command)
+    finally:
+        finished.set()
+        observer.join(timeout=2)
 
 
 def settled_summary(client, group_id):
@@ -116,11 +177,11 @@ def check_track_groups(client, root):
     _, group = settled_summary(client, group_id)
     assert abs(group["minimum"]) < 0.00001 and abs(group["maximum"]) < 0.00001, group
     # Repeated collapse requests must not add extra history transitions.
-    client.send("Undo")
+    history_command(client, "Undo")
     undone, group = read_group(client, group_id)
     assert not group["collapsed"]
     assert {row["id"] for row in undone["tracks"] if row["group"] == group_id} == members
-    client.send("Redo")
+    history_command(client, "Redo")
     assert read_group(client, group_id)[1]["collapsed"]
     collapse(False)
     click_group_toggle(client, group_id, cancel=True)
@@ -174,9 +235,9 @@ def check_track_groups(client, root):
         client.send(f'SetTrackGroup: Id="{group_id}" Ungroup=1')
         assert not client.data("GetTrackGroups")["groups"]
     assert clip_content() == clips
-    client.send("Undo")
+    history_command(client, "Undo")
     assert read_group(client, group_id)[1]["collapsed"]
-    client.send("Redo")
+    history_command(client, "Redo")
     assert not client.data("GetTrackGroups")["groups"]
     client.file("SaveProject2", root / "_ungrouped.aup3")
     (root / "_compatibility-expected.json").write_text(json.dumps(expected), encoding="utf-8")
