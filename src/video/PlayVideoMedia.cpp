@@ -109,7 +109,9 @@ class VideoMediaPlayer::Impl final {
    bool ApplyCrop()
    {
       if (!mLoaded) return false;
-      std::string geometry{"0x0"};
+      // An empty value restores the source's ordinary container crop. "0x0"
+      // is not a valid rectangle in the bundled player's option parser.
+      std::string geometry;
       if (!(mCrop == VideoEditing::VideoFrameCrop{})) {
          const auto width = Number("video-params/w"), height = Number("video-params/h");
          const auto rotation = Number("video-params/rotate").value_or(0);
@@ -215,8 +217,8 @@ public:
    {
       ReadEvents();
       SetPaused(true);
-      if (!mAppliedCrop.empty() && mAppliedCrop != "0x0") {
-         mApi.Check(mApi.setPropertyString(mHandle.get(), "video-crop", "0x0"),
+      if (!mAppliedCrop.empty()) {
+         mApi.Check(mApi.setPropertyString(mHandle.get(), "video-crop", ""),
             "Clearing the previous picture crop");
       }
       mAppliedCrop.clear();
