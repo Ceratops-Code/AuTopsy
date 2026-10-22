@@ -5,6 +5,8 @@ Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
 per-clip speed and picture crop are implemented in this branch. Embedded-layer
 geometry remains an independent foundation awaiting native controls, saved
 parent identities and pixel rendering.
+Collapsible track groups, compact transport controls and the preview timeline
+and keyboard controls are also implemented.
 Other later operations remain targets until their delivery status says otherwise.
 Owner: AuTopsy maintainers.
 
@@ -231,7 +233,10 @@ unsupported optional group metadata must leave audio visible rather than hide it
 `ShowTrackGroups.cpp` owns pane controls, semantic menu entries, selection,
 dragging, preview generation and scripting. Collapsing is a projection: the
 native `ChannelView` adapter returns zero height for hidden members, and the
-pane omits zero-height rows. Native audio, effects, editing and project storage
+pane omits zero-height rows. The native ruler adapter omits those rows before
+calculating channel proportions, including during partial history restoration.
+Membership attributes serialize their owned IDs even from saved history snapshots
+without a live project owner. Native audio, effects, editing and project storage
 continue to own the unchanged member tracks. Expanded heights/minimized states
 are retained. Header movement publishes one permutation of the whole block;
 canceling a drag restores the original order. The header's close action ungroups
@@ -253,6 +258,8 @@ results; workers never traverse live editable tracks or call UI APIs. Destructio
 cancels and joins work before the project storage closes. The view's single error
 string is cleared after success. Native track/history events increment the
 presentation generation, so sample/effect/gain edits cannot reuse a stale summary.
+Readiness compares the completed key with the current viewport and generation;
+an edit or zoom cannot expose an older result while waiting for the next paint.
 
 Independent named `track-groups::` cases cover layout, orphan metadata, movement,
 sum reduction, cancellation and failed readers. `fork-track-groups` owns native

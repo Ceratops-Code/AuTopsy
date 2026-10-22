@@ -159,6 +159,10 @@ picture mute, video-only playback and ownership between projects.
 `fork-transport-toolbar` covers compact button dimensions, canceled clicks,
 repeated cursor navigation in both directions, playback/pause and unchanged
 selection, zoom and history.
+`fork-preview-navigation` covers preview timeline seeks, canceled/repeated drags,
+focused arrow keys, paused frame steps, playback volume and resume.
+`fork-track-groups` covers grouping, phase-aware summed waveforms, repeated
+Undo/Redo, native collapse controls, saved identities and stock Audacity readers.
 `fork-video-visibility` covers track buttons and cancellation, Undo/Redo,
 clipboard/save/reopen, visible source selection and decoded picture/audio exports.
 The focused `fork-video-selection`, `fork-video-edges`, `fork-video-clipboard`
