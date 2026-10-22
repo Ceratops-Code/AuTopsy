@@ -2,6 +2,7 @@
 // these values retain media, nested pieces and gaps without rendering them.
 #pragma once
 #include "../clip-groups/EditClipMarkers.h"
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -9,6 +10,11 @@
 #include <vector>
 
 namespace VideoTimeline {
+// Limits apply to one retained content tree, including its owning clip. The
+// native reader uses the same bounds; a track may contain many such trees.
+inline constexpr size_t MaximumVideoContentDepth = 16;
+inline constexpr size_t MaximumVideoContentClips = 10000;
+inline constexpr size_t MaximumVideoTrackClips = 10000;
 struct MediaSource {
    std::string path;
    double duration{}, frameRate{30.0};
@@ -63,6 +69,7 @@ struct VideoLinkWindow {
    std::string group;
    double start{}, end{}, sourceOrigin{}, sourceEnd{};
    double playbackRate{1};
+   bool wholeContent{}; // A manual link owned by a joined parent, not a source leaf.
 };
 // Empty windows retain a fully trimmed linked soundtrack piece for untrim.
 std::vector<VideoLinkWindow> VideoContentLinkWindows(const Clip &clip);

@@ -48,7 +48,7 @@ inline void RequireWellFormedTimeline(const Timeline &timeline)
    if (!timeline.sourcePath.empty())
       RequireUsableVideoSource({timeline.sourcePath, timeline.sourceDuration, timeline.frameRate,
          timeline.sourceWidth, timeline.sourceHeight});
-   if (timeline.clips.size() > 10000 || !timeline.nextId)
+   if (timeline.clips.size() > MaximumVideoTrackClips || !timeline.nextId)
       throw std::runtime_error("The video timeline has invalid clip information.");
    std::unordered_set<uint64_t> ids;
    double previousEnd{};

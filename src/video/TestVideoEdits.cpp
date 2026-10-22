@@ -15,6 +15,53 @@ VideoProjectSnapshot Project()
 }
 }
 
+TEST_CASE("A link assigned to a joined parent retains a whole soundtrack window", "[video-edits][video-links]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 8, 30);
+   SplitClipAt(timeline, 4);
+   JoinVideoClips(timeline, 0, 8);
+   timeline.clips[0].linkGroup = std::string(32, 'a');
+   ChangeVideoClipSpeed(timeline, 1, 2);
+   TrimVideoClip(timeline, 1, 1, 3);
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto windows = VideoContentLinkWindows(timeline.clips[0]);
+      REQUIRE(windows.size() == 1);
+      REQUIRE(windows[0].group == std::string(32, 'a'));
+      REQUIRE(windows[0].start == 1);
+      REQUIRE(windows[0].end == 3);
+      REQUIRE(windows[0].sourceOrigin == 0);
+      REQUIRE(windows[0].sourceEnd == 4);
+      REQUIRE(windows[0].playbackRate == 2);
+      REQUIRE(windows[0].wholeContent);
+   }
+}
+
+TEST_CASE("Track and retained-tree bounds are independent", "[video-edits][video-storage]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 1, 30);
+   timeline.clips.clear();
+   for (size_t i{}; i < MaximumVideoTrackClips; ++i)
+      timeline.clips.push_back({i + 1, double(i) / 30, 0, 1.0 / 30});
+   timeline.nextId = timeline.clips.size() + 1;
+   REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
+   auto extra = timeline.clips.back(); extra.id = timeline.nextId++; extra.start = timeline.End();
+   timeline.clips.push_back(extra);
+   REQUIRE_THROWS(RequireWellFormedTimeline(timeline));
+   auto content = std::make_shared<VideoClipContent>();
+   content->duration = timeline.End(); content->frameRate = 30;
+   content->parts = timeline.clips;
+   for (auto &part : content->parts) part.media = {"source.mp4", 1, 30};
+   Clip joined{1, 0, 0, content->duration}; joined.content = content;
+   REQUIRE_THROWS(RequireUsableVideoContent(joined, {}));
+   content->parts.resize(MaximumVideoContentClips - 1);
+   REQUIRE_NOTHROW(RequireUsableVideoContent(joined, {}));
+   timeline.clips = {joined, joined}; timeline.nextId = 3;
+   timeline.clips[1].id = 2; timeline.clips[1].start = joined.End();
+   REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
+}
+
 TEST_CASE("Video speed retains source handles flags and split editability", "[video-edits][video-speed]")
 {
    using namespace VideoTimeline;

@@ -418,7 +418,7 @@ def clip_rows(client):
     return client.data("GetVideoClips")["clips"]
 
 
-def check_video_clip_structure(client, root, linked):
+def check_video_clip_structure(client, root, linked, storage_only=False):
     """Exercise real commands, repeat boundaries, gestures, Undo and native XML.
 
     Candidates have one visible history effect. Cancelled gestures exercise the
@@ -426,6 +426,34 @@ def check_video_clip_structure(client, root, linked):
     boundary without restoring caller progress. Linked audio stays as samples
     in its original clips, with both source handles and flags intact.
     """
+    if storage_only:
+        client.file("ImportVideo", root / "source.mp4")
+        client.send('UnlinkMediaClips: Clips="0:0"')
+        client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
+        client.send("RemoveTracks")
+        count = 1
+        for _ in range(13):
+            select_clip_range(client, 0, 4 * count)
+            client.send("Copy")
+            client.send(f"SelectTime: Start={4 * count} End={4 * count}")
+            client.send("Paste")
+            count *= 2
+        select_clip_range(client, 0, 4 * count)
+        client.send("Copy")
+        client.send(f"SelectTime: Start={4 * count} End={4 * count}")
+        client.send("Paste", success=False)
+        assert len(clip_rows(client)) == 8192
+        select_clip_range(client, 0, 4 * count)
+        client.send("JoinVideoClips")
+        client.send("Copy")
+        client.send(f"SelectTime: Start={4 * count} End={4 * count}")
+        client.send("Paste")
+        expected = clip_rows(client)
+        assert len(expected) == 2 and all(row["pieces"] == 8192 for row in expected), expected
+        for repeat in range(2):
+            save_reopen(client, root / f"_large-track-{repeat}.aup3")
+            assert clip_rows(client) == expected
+        return
     # The inherited menu listing does not escape every shortcut as JSON. Only
     # menu captions are needed here; leave that unrelated serializer untouched.
     menus = client.send("GetInfo: Type=Menus Format=JSON")
@@ -536,6 +564,33 @@ def check_video_clip_structure(client, root, linked):
         assert [round(row["start"], 6) for row in audio] == [1, 4], audio
         client.send("Undo")
     client.send("Save")
+    if not linked:
+        # A manual link after Join belongs to the parent timeline, rather than
+        # to the original unlinked leaves. Its audio must follow both edges.
+        select_clip_range(client, 2, 6)
+        client.send("JoinVideoClips")
+        client.send('LinkMediaClips: Clips="0:0,1:0"')
+        before = client.data("GetLinkedMediaClips")
+        client.send('LinkMediaClips: Clips="0:0,1:0"')
+        assert client.data("GetLinkedMediaClips") == before
+        client.send("FitInWindow")
+        previous = {row["kind"]: row for row in before}
+        for start, end, edge in ((2, 3, "start"), (6, 5, "end")):
+            for repeat in range(2):
+                operate_owned_video_track(client, start, end, track=0, cancel=True)
+                assert client.data("GetLinkedMediaClips") == before
+                operate_owned_video_track(client, start, end, track=0)
+                trimmed = client.data("GetLinkedMediaClips")
+                assert all(abs(row[edge] - previous[row["kind"]][edge] - (end - start)) < 0.04 for row in trimmed), trimmed
+                save_reopen(client, root / f"_relinked-joined-{edge}-{repeat}.aup3")
+                assert client.data("GetLinkedMediaClips") == trimmed
+                operate_owned_video_track(client, end, start, track=0)
+                assert client.data("GetLinkedMediaClips") == before
+                client.send("Undo")
+                assert client.data("GetLinkedMediaClips") == trimmed
+                client.send("Redo")
+                assert client.data("GetLinkedMediaClips") == before
+        client.send("Save")
 
 
 def check_video_compound_render(client, root, ffmpeg):

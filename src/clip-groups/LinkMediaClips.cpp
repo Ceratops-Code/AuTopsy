@@ -611,6 +611,7 @@ void CommitVideoClipTrim(AudacityProject &project, AuTopsyVideoTrack &track, Vid
       if (std::abs(left) < 1e-7 && std::abs(right) < 1e-7) continue;
       if (original.content) {
          const auto windows = VideoTimeline::VideoContentLinkWindows(*found);
+         const auto previousWindows = VideoTimeline::VideoContentLinkWindows(original);
          std::map<std::string, VideoTimeline::VideoLinkWindow> ranges;
          for (const auto &window : windows) {
             auto item = ranges.emplace(window.group, window);
@@ -625,6 +626,18 @@ void CommitVideoClipTrim(AudacityProject &project, AuTopsyVideoTrack &track, Vid
                changes.push_back({choice, found->start, found->End()});
             else if (choice.audio && ranges.count(choice.group)) {
                const auto range = ranges.at(choice.group);
+                if (range.wholeContent) {
+                   // A manually linked soundtrack keeps its own source and
+                   // placement. Follow this parent's edge deltas, including
+                   // when it is nested inside another joined clip.
+                   const auto previous = std::find_if(previousWindows.begin(), previousWindows.end(),
+                      [&](const auto &window) { return window.group == range.group; });
+                   if (previous == previousWindows.end())
+                      throw std::runtime_error("A linked parent soundtrack window was removed.");
+                   changes.push_back({choice, choice.start + range.start - previous->start,
+                      choice.end + range.end - previous->end, true});
+                   continue;
+                }
                const auto sourceStart = choice.audio->GetSequenceStartTime();
                const auto sourceEnd = choice.audio->GetSequenceEndTime();
                // Encoded soundtracks can contain a fraction of a frame of

@@ -128,6 +128,10 @@ audio pitch and decoded preview/export timing. Project interoperability includes
 a retimed joined clip and its stretched native audio. `fork-video-speed-storage`
 separately covers native save/reopen so a window-lifecycle failure cannot hide
 editing or rendering results.
+`fork-video-clip-storage` checks repeated native round trips of two joined clips
+containing 16,384 retained pieces. The separate-clip and retained-tree bounds
+are independent; the reader and editing model share those limits. The clip-edit case
+also covers manually linking previously unlinked joined content before trimming.
 `fork-video-transport` covers the actual preview buttons, pause/resume, live
 picture mute, video-only playback and ownership between projects.
 `fork-video-visibility` covers track buttons and cancellation, Undo/Redo,

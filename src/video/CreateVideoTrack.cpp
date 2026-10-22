@@ -170,6 +170,7 @@ void AuTopsyVideoTrack::ShiftBy(double from, double delta)
 bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const AttributesList &attributes)
 {
    try {
+      if (mReadError) return false;
       if (tag == "videotrack") {
          mTimeline = {}; mReadingClips.clear(); mReadingCount = 0; mReadError = false;
          int schema{};
@@ -209,7 +210,9 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
           !ReadOptionalAttribute(attributes, "mediaFps", clip.media.frameRate) ||
           !ReadOptionalAttribute(attributes, "mediaWidth", clip.media.width) ||
           !ReadOptionalAttribute(attributes, "mediaHeight", clip.media.height)) return false;
-      if (++mReadingCount > 10000 || mReadingClips.size() >= 17) return false;
+      if (mReadingClips.empty()) mReadingCount = 0;
+      if (++mReadingCount > VideoTimeline::MaximumVideoContentClips ||
+          mReadingClips.size() > VideoTimeline::MaximumVideoContentDepth) return false;
       int version{};
       if (!ReadOptionalAttribute(attributes, "contentVersion", version) || version < 0) return false;
       ReadingClip reading{std::move(clip)};
@@ -226,14 +229,23 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
 }
 void AuTopsyVideoTrack::HandleXMLEndTag(const std::string_view &tag)
 {
-   if (tag != "videoclip" || mReadingClips.empty() || mReadError) return;
+   if (mReadError) return;
    try {
+      if (tag == "videotrack") {
+         VideoTimeline::RequireWellFormedTimeline(mTimeline);
+         return;
+      }
+      if (tag != "videoclip" || mReadingClips.empty()) return;
       auto reading = std::move(mReadingClips.back()); mReadingClips.pop_back();
       reading.clip.content = std::move(reading.content);
       if (!mReadingClips.empty()) mReadingClips.back().content->parts.push_back(std::move(reading.clip));
+      // This track is private to the host's project-load transaction. Append
+      // once and check the complete timeline at its closing tag, rather than
+      // repeatedly copying and checking every earlier clip for a large track.
       else {
-         auto changed = mTimeline; changed.clips.push_back(std::move(reading.clip));
-         VideoTimeline::RequireWellFormedTimeline(changed); mTimeline = std::move(changed);
+         if (mTimeline.clips.size() >= VideoTimeline::MaximumVideoTrackClips)
+            throw std::runtime_error("A video track exceeds its clip limit.");
+         mTimeline.clips.push_back(std::move(reading.clip));
       }
    }
    catch (const std::exception &) { mReadError = true; mReadingClips.clear(); }

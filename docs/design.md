@@ -222,6 +222,19 @@ supports 0.01–100 including the effective product through nested joined conten
 Named project/content conversions are shared by trim, split, copy, join, flags,
 frame stepping, preview and export. Retiming changes the visible placement map;
 retained media and hidden source handles are immutable.
+The retained-tree bounds (16 nested levels and 10,000 clips including the root)
+are declared once in the owned model and consumed by the native XML reader.
+They apply separately to each top-level clip; the track independently permits
+10,000 top-level clips. Reading appends to the host's
+private project-load transaction and checks the complete timeline at its closing
+tag, avoiding a full-track copy for every clip. A native round-trip case saves
+and reopens two joined clips containing 16,384 retained pieces twice.
+
+Soundtrack windows belong to the node that owns a link. A link assigned after
+joining previously unlinked pieces spans the whole retained parent timeline;
+trim and speed conversions preserve its audio mapping. A parent's alias of a
+child link is not a second soundtrack occurrence. Existing distinct child links
+continue to identify their separate audio windows.
 
 `ChangeLinkedVideoClipSpeed` expands the saved link graph before mutation. It
 prepares every video replacement and checks every linked audio stretch, final

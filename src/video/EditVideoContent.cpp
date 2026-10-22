@@ -4,7 +4,6 @@
 
 namespace VideoTimeline {
 namespace {
-constexpr size_t MaxDepth = 16, MaxParts = 10000;
 MediaSource Source(const Clip &clip, const MediaSource &fallback)
 { return clip.media.path.empty() ? fallback : clip.media; }
 bool SameSource(const MediaSource &a, const MediaSource &b)
@@ -12,7 +11,7 @@ bool SameSource(const MediaSource &a, const MediaSource &b)
    a.width == b.width && a.height == b.height; }
 void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &count, double parentRate = 1)
 {
-   if (depth > MaxDepth || ++count > MaxParts)
+   if (depth > MaximumVideoContentDepth || ++count > MaximumVideoContentClips)
       throw std::runtime_error("Joined video exceeds the supported nesting or piece limit.");
    const auto duration = VideoContentDuration(clip, fallback);
    if (!std::isfinite(clip.start) || !std::isfinite(clip.sourceStart) ||
@@ -69,15 +68,21 @@ void Windows(const Clip &clip, double origin, double scale, double from, double 
 {
    const auto begin = origin + clip.start * scale, end = origin + clip.End() * scale;
    const auto left = std::clamp(from, begin, end), right = std::clamp(to, begin, end);
+   std::set<std::string> childGroups;
+   if (clip.content) for (const auto &part : clip.content->parts) Groups(part, childGroups);
+   // A link assigned after joining belongs to the whole content timeline.
+   // Join's ordinary parent alias must not duplicate a child's soundtrack.
+   if (!clip.linkGroup.empty() && !childGroups.count(clip.linkGroup)) {
+      const auto duration = clip.content ? clip.content->duration : clip.media.duration;
+      out.push_back({clip.linkGroup, left, right, begin - clip.sourceStart * scale / clip.playbackRate,
+         begin + (duration - clip.sourceStart) * scale / clip.playbackRate,
+         clip.playbackRate / scale, clip.content != nullptr});
+   }
    if (clip.content) {
       for (const auto &part : clip.content->parts)
          Windows(part, begin - clip.sourceStart * scale / clip.playbackRate,
             scale / clip.playbackRate, left, right, out);
    }
-   else if (!clip.linkGroup.empty())
-      out.push_back({clip.linkGroup, left, right, begin - clip.sourceStart * scale / clip.playbackRate,
-         begin + (clip.media.duration - clip.sourceStart) * scale / clip.playbackRate,
-         clip.playbackRate / scale});
 }
 }
 double VideoContentDuration(const Clip &clip, const MediaSource &fallback)
@@ -91,7 +96,7 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
    if (!std::isfinite(time) || time < 0 || time >= VideoContentDuration(clip, fallback)) return {};
    const Clip *current = &clip;
    double playbackRate = clip.playbackRate;
-   for (size_t depth{}; depth <= MaxDepth; ++depth) {
+   for (size_t depth{}; depth <= MaximumVideoContentDepth; ++depth) {
       if (!current->content) return {current, Source(*current, current == &clip ? fallback : MediaSource{}), time, playbackRate};
       const auto &parts = current->content->parts;
       const auto found = std::upper_bound(parts.begin(), parts.end(), time,
