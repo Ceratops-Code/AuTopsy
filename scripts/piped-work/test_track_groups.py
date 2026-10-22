@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import time
+from typing import TypedDict
 
 from run_fork_test_harness import (
     assert_owned_test_display,
@@ -15,6 +16,11 @@ from run_fork_test_harness import (
     save_reopen,
     select_audio_project_tracks,
 )
+
+
+class OwnedWindowText(TypedDict):
+    title: str
+    controls: list[str]
 
 
 def read_group(client, group_id):
@@ -42,7 +48,7 @@ def history_command(client, command):
         user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
                                            w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
         user.SendMessageTimeoutW.restype = ctypes.c_size_t
-        rows = []
+        rows: list[OwnedWindowText] = []
 
         def owner(handle):
             pid = w.DWORD()
@@ -55,7 +61,7 @@ def history_command(client, command):
                 return True
             text = ctypes.create_unicode_buffer(256)
             user.GetWindowTextW(handle, text, len(text))
-            row = {"title": text.value, "controls": []}
+            row: OwnedWindowText = {"title": text.value, "controls": []}
 
             @callback
             def child(control, _):
