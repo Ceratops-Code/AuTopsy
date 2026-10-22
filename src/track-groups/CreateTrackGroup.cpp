@@ -101,7 +101,7 @@ public:
       changes = TrackList::Get(project).Subscribe([this](const TrackListEvent &event) {
          if (event.mType == TrackListEvent::SELECTION_CHANGE || event.mType == TrackListEvent::RESIZING) return;
          ++revision;
-         if (event.mType == TrackListEvent::ADDITION) if (auto track = event.mpTrack.lock()) {
+         if (event.mType == TrackListEvent::ADDITION && !ProjectHistory::Get(project).IsRestoringState()) if (auto track = event.mpTrack.lock()) {
             auto &member = Member(*track);
             // Fresh duplicates can copy a member identity, while Undo restores
             // the original identity. Distinguish them from the current owned
