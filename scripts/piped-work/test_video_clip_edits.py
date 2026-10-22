@@ -39,8 +39,10 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
     The bundled FFmpeg GDI input reads the decoder's GPU output without adding
     packages to the persistent plain-Python test runtime. The owned window is
     temporarily raised without activation and its prior topmost state is
-    restored. Successful observations create no screenshot artifact.
+    restored. A worker watchdog bounds foreign API calls as well as the pixel
+    polling loop. Successful observations create no screenshot artifact.
     """
+    import faulthandler
     from ctypes import wintypes as w
 
     info = ready_video_preview(client)
@@ -61,9 +63,10 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
         operation.argtypes, operation.restype = arguments, result
     window = user.GetAncestor(surface, 2)
     assert native.owner(window) == pid
-    assert_owned_test_display(pid, surface)
+    assert_owned_test_display(pid, window)
     previous_dpi = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
     was_topmost = bool(user.GetWindowLongW(window, -20) & 8)
+    faulthandler.dump_traceback_later(60, exit=True)
     try:
         assert user.SetWindowPos(window, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x13)
         deadline = time.monotonic() + 8
@@ -100,6 +103,7 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
             user.SetWindowPos(window, ctypes.c_void_p(-2), 0, 0, 0, 0, 0x13)
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
+        faulthandler.cancel_dump_traceback_later()
 
 
 def crop_dialog_roundtrip(client, commit, reset=False):
@@ -112,6 +116,9 @@ def crop_dialog_roundtrip(client, commit, reset=False):
     user.EnumWindows.argtypes = [callback_type, ctypes.c_ssize_t]
     user.EnumChildWindows.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_ssize_t]
     user.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    user.GetClassNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    user.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+    user.GetForegroundWindow.restype = ctypes.c_void_p
     errors = []
 
     def open_menu():
@@ -152,6 +159,20 @@ def crop_dialog_roundtrip(client, commit, reset=False):
         assert len(matches) == 1, (caption, matches)
         return matches[0]
 
+    def reset_fields_are_zero():
+        values = []
+
+        @callback_type
+        def visit(handle, _):
+            kind = ctypes.create_unicode_buffer(64)
+            user.GetClassNameW(handle, kind, len(kind))
+            if kind.value == "Edit":
+                values.append(native.caption(handle))
+            return 1
+
+        user.EnumChildWindows(dialog, visit, 0)
+        return len(values) == 4 and all(float(value.replace(",", ".")) == 0 for value in values)
+
     try:
         deadline = time.monotonic() + 10
         while not (dialog := find_dialog()):
@@ -160,8 +181,17 @@ def crop_dialog_roundtrip(client, commit, reset=False):
             assert time.monotonic() < deadline, "The owned crop dialog did not appear."
             time.sleep(0.025)
         assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
+        # Opening the menu also restores its prior focus. Finish that gesture
+        # before button input; BM_CLICK can be ignored on an inactive dialog.
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "The owned menu gesture did not finish."
+        if errors:
+            raise errors[0]
+        user.SetForegroundWindow(dialog)
+        wait_for_native_state(lambda: user.GetForegroundWindow() == dialog, "owned crop dialog active")
         if reset:
             native.click(button("Reset Crop"))
+            wait_for_native_state(reset_fields_are_zero, "crop reset shown in all four fields")
         native.click(button("OK" if commit else "Cancel"))
         wait_for_native_state(lambda: not native.visible(dialog), "crop dialog closed")
     finally:

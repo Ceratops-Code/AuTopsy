@@ -846,7 +846,7 @@ def operate_owned_video_track(
     """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
 
     Coordinates come from the painted native row, including its actual data
-    origin. Menu choices use visible labels and keyboard navigation in the owned window;
+    origin. Menu choices use caption-resolved native rectangles in the owned window;
     cancellation always releases held input before restoring the previous focus.
     """
     if end_time is None:
@@ -1113,18 +1113,33 @@ def operate_owned_video_track(
             menu, index, popup = matches[0]
             if user.GetMenuState(menu, index, 0x400) & 3:
                 raise RuntimeError("The requested popup item is disabled: " + label)
-            # Let Windows navigate its own popup. Confirm the highlighted
-            # caption before Enter/Right; no item coordinates cross DPI contexts.
-            keyboard(0x24)
-            count = user.GetMenuItemCount(menu)
-            for _ in range(count + 1):
-                if user.GetMenuState(menu, index, 0x400) & 0x80:
-                    break
-                keyboard(0x28)
-            else:
-                raise RuntimeError(f"Native popup navigation did not highlight {label!r}.")
+            # Menu item rectangles retain their owner's logical scale. Map
+            # within current logical/physical popup bounds, including its origin.
+            user.GetMenuItemRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long * 4)]
+            user.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
+            bounds, logical, physical = ((ctypes.c_long * 4)() for _ in range(3))
+            prior = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(root))
+            try:
+                readable = user.GetMenuItemRect(None, menu, index, ctypes.byref(bounds)) and user.GetWindowRect(popup, ctypes.byref(logical))
+            finally:
+                user.SetThreadDpiAwarenessContext(prior)
+            if not readable or not user.GetWindowRect(popup, ctypes.byref(physical)) or logical[2] <= logical[0] or logical[3] <= logical[1] or bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
+                raise RuntimeError("The owned popup item has no current screen rectangle: " + label)
+            point.x = round(physical[0] + ((bounds[0] + bounds[2]) / 2 - logical[0]) * (physical[2] - physical[0]) / (logical[2] - logical[0]))
+            point.y = round(physical[1] + ((bounds[1] + bounds[3]) / 2 - logical[1]) * (physical[3] - physical[1]) / (logical[3] - logical[1]))
+            if user.WindowFromPoint(point) != popup or user.GetForegroundWindow() != root:
+                raise RuntimeError("The owned popup item is obstructed or lost foreground: " + label)
+            user.SetCursorPos(point.x, point.y)
+            try:
+                button(2)
+            finally:
+                button(4)
             submenu = bool(user.GetSubMenu(menu, index))
-            keyboard(0x27 if submenu else 0x0D)
+            deadline = time.monotonic() + 3
+            while not submenu and user.IsWindowVisible(popup):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("The owned popup did not acknowledge its item click: " + label)
+                time.sleep(0.01)
         if not menu_path or submenu:
             for _ in range(len(menu_path) + 1):
                 keyboard(0x1B)
