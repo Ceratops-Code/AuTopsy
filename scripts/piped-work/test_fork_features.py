@@ -51,8 +51,8 @@ from run_fork_test_harness import (
     write_tone,
 )
 from test_video_clip_edits import (
-    check_split_video_edges,
     check_preview_navigation,
+    check_split_video_edges,
     check_transport_toolbar,
     check_video_clip_structure,
     check_video_compound_render,

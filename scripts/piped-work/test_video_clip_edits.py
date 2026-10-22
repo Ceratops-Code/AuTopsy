@@ -526,7 +526,7 @@ def check_transport_toolbar(client, root):
             time.sleep(0.15)
             assert abs(preview_project_seconds(status) - position) < 0.05
         else:
-            wait_for_native_state(lambda: preview_project_seconds(status) > position + 0.08,
+            wait_for_native_state(lambda position=position: preview_project_seconds(status) > position + 0.08,
                                   "cursor navigation preserves playback")
         press(buttons["Stop"])
         wait_for_native_state(lambda: not native.enabled(preview_buttons["stop"]),
@@ -688,14 +688,14 @@ def check_preview_navigation(client, root):
     for value in (500000, 500000, 250000):
         seek(value)
         expected = 16 * value / 1000000
-        wait_for_native_state(lambda: abs(preview_project_seconds(status) - expected) < 0.015,
+        wait_for_native_state(lambda expected=expected: abs(preview_project_seconds(status) - expected) < 0.015,
                               f"preview seek to {expected}")
         assert abs(client.data("GetInfo: Type=Selection Format=JSON")["Start"] - expected) < 0.0001
 
     for direction, virtual_key in ((1, 0x27), (-1, 0x25)):
         before = preview_project_seconds(status)
         key(virtual_key)
-        wait_for_native_state(lambda: abs(preview_project_seconds(status) - before - direction / 30) < 0.01,
+        wait_for_native_state(lambda before=before, direction=direction: abs(preview_project_seconds(status) - before - direction / 30) < 0.01,
                               "stopped preview frame key")
     volume = client.data("GetVideoPreviewInfo")["playbackVolume"]
     for _ in range(2):
