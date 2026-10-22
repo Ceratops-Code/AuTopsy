@@ -1391,7 +1391,7 @@ def main():
                 ],
                 timeout=30,
             )
-        if args.case == "preview":
+        if args.case in ("preview", "transport-toolbar"):
             write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
         version_numbers = executable_version(executable)
         profile = executable.parent / "Portable Settings"

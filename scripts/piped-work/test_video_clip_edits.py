@@ -481,6 +481,10 @@ def check_transport_toolbar(client, root):
     assert client.data("GetInfo: Type=View Format=JSON") == empty_view
     assert not client.data("GetInfo: Type=Tracks Format=JSON")
 
+    client.file("ImportVideo", root / "source.mp4")
+    initial_content = client.data("GetInfo: Type=Clips Format=JSON")
+    preview, preview_buttons = owned_preview_controls(client)
+    status = int(preview["previewStatusHandle"])
     source = root / "_toolbar-tone.wav"
     with wave.open(str(root / "tone-a.wav"), "rb") as original:
         parameters, audio = original.getparams(), original.readframes(original.getnframes())
@@ -512,34 +516,37 @@ def check_transport_toolbar(client, root):
             assert client.data("GetInfo: Type=Selection Format=JSON") == selection
             assert client.data("GetInfo: Type=Clips Format=JSON") == content
 
-    # Playback and pause use the actual compact toolbar controls. A different
-    # edit cursor makes the playhead destination distinguishable from selection.
-    client.send("SelectTime: Start=1 End=19")
-    press(buttons["Play"])
-    wait_for_native_state(lambda: client.data("GetVideoPreviewInfo")["audioPosition"] > 1.05,
-                          "native toolbar playback clock")
+    # Scripted data commands stop transport before their handler runs. Read the
+    # live preview label during playback, and query project data only after Stop.
     for paused in (False, True):
-        if paused:
-            press(buttons["Pause"])
         client.send("SelectTime: Start=18 End=18.5")
         client.send("ZoomSel")
         before = viewport()
-        position = client.data("GetVideoPreviewInfo")["audioPosition"]
+        client.send("SelectTime: Start=1 End=19")
+        press(buttons["Play"])
+        wait_for_native_state(lambda: preview_project_seconds(status) > 1.15,
+                              "native toolbar playback clock")
+        if paused:
+            press(buttons["Pause"])
+            wait_for_native_state(lambda: native.enabled(preview_buttons["play"]),
+                                  "native toolbar paused")
+        position = preview_project_seconds(status)
         press(cursor_button)
+        if paused:
+            time.sleep(0.15)
+            assert abs(preview_project_seconds(status) - position) < 0.05
+        else:
+            wait_for_native_state(lambda: preview_project_seconds(status) > position + 0.08,
+                                  "cursor navigation preserves playback")
+        press(buttons["Stop"])
+        wait_for_native_state(lambda: not native.enabled(preview_buttons["stop"]),
+                              "native toolbar stopped")
         view = viewport()
         assert view["horizontalStart"] - 0.2 <= position <= view["horizontalEnd"] + 0.2, (position, view)
         assert view["pixelsPerSecond"] == before["pixelsPerSecond"]
-        clock = client.data("GetVideoPreviewInfo")["audioPosition"]
-        assert clock < 18, "Cursor navigation stopped playback or used the edit cursor."
-        if paused:
-            time.sleep(0.15)
-            assert abs(client.data("GetVideoPreviewInfo")["audioPosition"] - clock) < 0.05
-        assert client.data("GetInfo: Type=Selection Format=JSON")["Start"] == 18
-    press(buttons["Stop"])
-    wait_for_native_state(lambda: client.data("GetVideoPreviewInfo")["audioPosition"] == 18,
-                          "native toolbar stopped at the edit cursor")
+        assert client.data("GetInfo: Type=Selection Format=JSON") == {"Start": 1, "End": 19}
     client.send("Undo")
-    assert not client.data("GetInfo: Type=Tracks Format=JSON"), "Cursor navigation added an audio history entry."
+    assert client.data("GetInfo: Type=Clips Format=JSON") == initial_content, "Cursor navigation added a history entry."
     client.send("Redo")
     assert client.data("GetInfo: Type=Clips Format=JSON") == content
     client.file("SaveProject2", root / "_transport-toolbar.aup3")
