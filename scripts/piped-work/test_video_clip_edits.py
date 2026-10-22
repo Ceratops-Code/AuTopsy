@@ -1,6 +1,7 @@
 """Focused native video editing, transport and visibility cases with neutral media."""
 import ctypes
 import json
+import math
 import os
 import re
 import shutil
@@ -737,6 +738,11 @@ def check_preview_navigation(client, root):
         if release:
             message(frame, 0x114, 4, slider)  # SB_THUMBPOSITION
 
+    def settled_seconds():
+        wait_for_native_state(lambda: math.isfinite(preview_project_seconds(status)),
+                              lambda: "preview source ready: " + windows.control_text(status))
+        return preview_project_seconds(status)
+
     for _ in range(2):
         seek(500000, release=False)
         time.sleep(0.08)
@@ -751,7 +757,7 @@ def check_preview_navigation(client, root):
         assert abs(client.data("GetInfo: Type=Selection Format=JSON")["Start"] - expected) < 0.0001
 
     for direction, virtual_key in ((1, 0x27), (-1, 0x25)):
-        before = preview_project_seconds(status)
+        before = settled_seconds()
         key(virtual_key)
         wait_for_native_state(lambda before=before, direction=direction: abs(preview_project_seconds(status) - before - direction / 30) < 0.01,
                               "stopped preview frame key")
@@ -768,7 +774,7 @@ def check_preview_navigation(client, root):
 
     press_preview_button(buttons["play"])
     wait_for_native_state(lambda: windows.enabled(buttons["pause"]), "preview navigation playback")
-    before = preview_project_seconds(status)
+    before = settled_seconds()
     key(0x27)
     wait_for_native_state(lambda: preview_project_seconds(status) > before + 4.8, "live five-second preview seek")
     assert windows.enabled(buttons["pause"])
@@ -776,16 +782,18 @@ def check_preview_navigation(client, root):
     wait_for_native_state(lambda: 1.9 <= preview_project_seconds(status) < 3.5, "live preview timeline seek")
     press_preview_button(buttons["pause"])
     wait_for_native_state(lambda: windows.enabled(buttons["play"]), "preview paused before navigation")
-    time.sleep(0.1)
-    before = preview_project_seconds(status)
-    key(0x27)
-    wait_for_native_state(lambda: abs(preview_project_seconds(status) - before - 1 / 30) < 0.02,
-                          "paused preview frame key")
-    assert windows.enabled(buttons["play"]) and not windows.enabled(buttons["pause"])
     seek(750000)
-    wait_for_native_state(lambda: abs(preview_project_seconds(status) - 12) < 0.015, "paused preview timeline seek")
+    wait_for_native_state(lambda: abs(preview_project_seconds(status) - 12) < 0.015,
+                          lambda: "paused preview timeline seek: " + windows.control_text(status))
     time.sleep(0.15)
     assert abs(preview_project_seconds(status) - 12) < 0.015
+    # Start at a known frame boundary. A paused live clock can fall between
+    # source frames, where a next-frame step is shorter than one full frame.
+    for target, virtual_key in ((12 + 1 / 30, 0x27), (12, 0x25)):
+        key(virtual_key)
+        wait_for_native_state(lambda target=target: abs(preview_project_seconds(status) - target) < 0.003,
+                              lambda: "paused preview frame key: " + windows.control_text(status))
+        assert windows.enabled(buttons["play"]) and not windows.enabled(buttons["pause"])
     press_preview_button(buttons["play"])
     wait_for_native_state(lambda: preview_project_seconds(status) > 12.15, "resume at the paused destination")
     press_preview_button(buttons["stop"])
