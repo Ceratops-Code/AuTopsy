@@ -465,7 +465,7 @@ public:
 };
 GroupPopupHandler sPopupHandler;
 PopupMenuTable::AttachedItem sGroupContext{GetCommonTrackMenu(), Registry::Placement{},
-   std::make_shared<PopupMenuTableEntry>("GroupSelectedTracks", PopupMenuTableEntry::Item,
+   std::make_unique<PopupMenuTableEntry>("GroupSelectedTracks", PopupMenuTableEntry::Item,
       wxWindow::NewControlId(), XXO("Group Selected Tracks..."),
       static_cast<wxCommandEventFunction>(&GroupPopupHandler::OnGroup), sPopupHandler,
       [](PopupMenuHandler &handler, wxMenu &menu, int id) {
@@ -473,7 +473,7 @@ PopupMenuTable::AttachedItem sGroupContext{GetCommonTrackMenu(), Registry::Place
          menu.Enable(id, data && !ProjectAudioIO::Get(data->project).IsAudioActive() && SelectedMembers(data->project).size() >= 2);
       })};
 PopupMenuTable::AttachedItem sUngroupContext{GetCommonTrackMenu(), Registry::Placement{},
-   std::make_shared<PopupMenuTableEntry>("UngroupTracks", PopupMenuTableEntry::Item,
+   std::make_unique<PopupMenuTableEntry>("UngroupTracks", PopupMenuTableEntry::Item,
       wxWindow::NewControlId(), XXO("Ungroup Tracks"),
       static_cast<wxCommandEventFunction>(&GroupPopupHandler::OnUngroup), sPopupHandler,
       [](PopupMenuHandler &handler, wxMenu &menu, int id) {
