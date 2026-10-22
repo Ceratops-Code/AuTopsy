@@ -567,6 +567,10 @@ def press_preview_button(handle):
 
 def preview_project_seconds(status):
     caption = PreviewNativeWindows().control_text(status)
+    # Frame inspection may switch from a proxy to the original source. Its
+    # transient loading label is an unavailable observation, never time zero.
+    if caption == "Loading video...":
+        return float("nan")
     match = re.search(r"\|\s+(-?\d+(?:\.\d+)?) s", caption)
     assert match, caption
     return float(match[1])
