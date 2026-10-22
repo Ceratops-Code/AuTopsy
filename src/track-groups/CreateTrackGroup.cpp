@@ -68,7 +68,7 @@ std::vector<TrackGroups::GroupRow> ReadRows(AudacityProject &project)
    }
    return rows;
 }
-void SetTrackOrder(AudacityProject &project, const std::vector<std::string> &order)
+bool SetTrackOrder(AudacityProject &project, const std::vector<std::string> &order)
 {
    auto &tracks = TrackList::Get(project);
    std::unordered_map<std::string, Track*> lookup;
@@ -78,7 +78,7 @@ void SetTrackOrder(AudacityProject &project, const std::vector<std::string> &ord
       if (!lookup.emplace(id, track).second) throw std::runtime_error("Track identities are ambiguous.");
       existing.push_back(id);
    }
-   if (existing == order) return;
+   if (existing == order) return false;
    if (order.size() != lookup.size()) throw std::runtime_error("Track group layout changed before application.");
    std::vector<Track*> changed;
    std::unordered_set<std::string> seen;
@@ -88,6 +88,7 @@ void SetTrackOrder(AudacityProject &project, const std::vector<std::string> &ord
       changed.push_back(found->second);
    }
    tracks.Permute(changed);
+   return true;
 }
 class ProjectGroupPresentation final : public ClientData::Base {
 public:
@@ -95,7 +96,7 @@ public:
    Observer::Subscription changes;
    Observer::Subscription history;
    uint64_t revision{};
-   bool refreshing{};
+   bool refreshing{}, refreshQueued{};
    explicit ProjectGroupPresentation(AudacityProject &owner) : project(owner) {
       history = UndoManager::Get(project).Subscribe([this](const UndoRedoMessage &) { ++revision; Refresh(); });
       changes = TrackList::Get(project).Subscribe([this](const TrackListEvent &event) {
@@ -111,11 +112,28 @@ public:
                   member.id = NewIdentity(); break;
                }
          }
-         Refresh();
+          ScheduleRefresh();
       });
    }
-   void Refresh() {
-      if (refreshing) return;
+    void ScheduleRefresh() {
+       if (refreshQueued) return;
+       refreshQueued = true;
+       // Native additions can run inside a TrackList iterator (Duplicate is one
+       // example). Never erase/reinsert list nodes inside their notifications.
+       // The weak project bounds this one queued callback to its owning lifetime.
+       project.CallAfter([this, weak = project.weak_from_this()] {
+          if (const auto owner = weak.lock()) {
+             refreshQueued = false;
+             const bool reordered = Refresh();
+             if (reordered && !ProjectHistory::Get(*owner).IsRestoringState() &&
+                 UndoManager::Get(*owner).GetNumStates() > 0)
+                ProjectHistory::Get(*owner).ModifyState(false);
+             Viewport::Get(*owner).HandleResize(); Viewport::Get(*owner).Redraw();
+          }
+       });
+    }
+    bool Refresh() {
+       if (refreshing) return false;
       refreshing = true;
       struct Reset { bool &flag; ~Reset() { flag = false; } } reset{refreshing};
       auto &tracks = TrackList::Get(project);
@@ -139,9 +157,10 @@ public:
       // Failed/unknown optional metadata must leave the audio accessible.
       // Ordinary Undo can temporarily expose an incomplete list; do not reorder
       // until restoration has finished adding its saved tracks.
-      if (coherent && !ProjectHistory::Get(project).IsRestoringState())
-         SetTrackOrder(project, TrackGroups::ArrangeGroupRows(rows));
+       const bool reordered = coherent && !ProjectHistory::Get(project).IsRestoringState() &&
+          SetTrackOrder(project, TrackGroups::ArrangeGroupRows(rows));
       if (changed && !tracks.empty()) (*tracks.begin())->AdjustPositions();
+       return reordered;
    }
 };
 const AudacityProject::AttachedObjects::RegisteredFactory sPresentationKey{

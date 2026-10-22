@@ -961,7 +961,7 @@ def worker(args, root):
     elif args.case == "transport-toolbar":
         check_transport_toolbar(client, root)
     elif args.case == "preview-navigation":
-        check_preview_navigation(client, root)
+        check_preview_navigation(client, root, args.ffmpeg)
     elif args.case == "track-groups":
         check_track_groups(client, root)
     elif args.case == "project-compatibility":

@@ -194,7 +194,7 @@ class VideoPreviewFrame final : public wxFrame {
          const auto state = transport.ReadNavigation();
          const auto target = std::clamp(position, 0.0, state.duration);
          VideoPreview::ApplyPreviewSeek(transport, {target, state.transport.playing, state.transport.paused});
-         if (!state.transport.playing) InspectOriginalFrames();
+          if (!state.transport.playing || state.transport.paused) InspectOriginalFrames();
          UpdateTransportControls(*project);
       }
    }
@@ -296,7 +296,7 @@ class VideoPreviewFrame final : public wxFrame {
           }
           // Playback keeps its low-cost proxy. Frame inspection reads the source
           // so a 30 fps proxy cannot hide frames from a 60 fps original.
-          if (transport.playing) mPreciseFrames = false;
+           if (transport.playing && !transport.paused) mPreciseFrames = false;
           const bool original = mPreciseFrames && mMedia && mMedia->lightweight;
           if (original != mUsingOriginalFrames) {
              mPlayer->OpenVideoFile(original ? mPath : mMedia->playbackPath);

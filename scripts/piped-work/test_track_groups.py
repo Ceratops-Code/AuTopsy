@@ -177,6 +177,23 @@ def check_track_groups(client, root):
     client.send("TrackMoveTop")
     assert read_group(client, group_id)[1]["index"] == 0
 
+    # Native Duplicate appends while iterating the selected TrackList. Group
+    # projection must wait until that operation ends, then preserve its history.
+    for _ in range(2):
+        client.send("SelectTracks: Track=1 TrackCount=2 Mode=Set")
+        client.send("SelectTime: Start=0 End=5")
+        client.send("Duplicate")
+        duplicated, group = read_group(client, group_id)
+        assert len(duplicated["tracks"]) == 6 and group["members"] == [1, 2, 3, 4], duplicated
+        assert len({row["id"] for row in duplicated["tracks"]}) == 6, duplicated
+        history_command(client, "Undo")
+        restored, group = read_group(client, group_id)
+        assert len(restored["tracks"]) == 4 and group["members"] == [1, 2], restored
+        assert {row["id"] for row in restored["tracks"] if row["group"] == group_id} == members, restored
+        history_command(client, "Redo")
+        assert read_group(client, group_id)[1]["members"] == [1, 2, 3, 4]
+        history_command(client, "Undo")
+
     def collapse(value):
         client.send(f'SetTrackGroup: Id="{group_id}" Collapsed={int(value)}')
         info, group = read_group(client, group_id)

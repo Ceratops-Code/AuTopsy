@@ -34,7 +34,7 @@ def crop_pixel_counts(rgb):
     return counts
 
 
-def expect_preview_crop_pixels(client, root, ffmpeg, expected):
+def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=None):
     """Read only the owned preview surface on its required display.
 
     The bundled FFmpeg GDI input reads the decoder's GPU output without adding
@@ -44,7 +44,9 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
     """
     from ctypes import wintypes as w
 
-    info = ready_video_preview(client)
+    # A caller observing a live/paused transport supplies its previously read
+    # handles: a fresh configured script command would stop that transport.
+    info = ready_video_preview(client) if preview_info is None else preview_info
     surface = int(info["previewSurfaceHandle"])
     native = PreviewNativeWindows()
     pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
@@ -645,7 +647,7 @@ def check_video_transport(client, root):
     client.file("SaveProject2", root / "_transport-second.aup3")
 
 
-def check_preview_navigation(client, root):
+def check_preview_navigation(client, root, ffmpeg):
     """Exercise focused preview keys and the real slider without live script queries.
 
     The preview's status is the clock observer. Scripted commands would stop the
@@ -654,10 +656,21 @@ def check_preview_navigation(client, root):
     """
     from ctypes import wintypes as w
 
-    client.file("ImportVideo", root / "source.mp4")
+    # The 120-fps source forces a 30-fps lightweight proxy. One blue source frame
+    # among each four red frames makes a missed paused frame step observable in
+    # actual displayed pixels, independently of its timecode label.
+    source = root / "_frame-navigation.mp4"
+    run_process([
+        ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+        "color=c=red:s=320x180:r=120:d=16,drawbox=color=blue:t=fill:enable='eq(mod(n,4),1)'",
+        "-i", root / "source.mp4", "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "0", "-c:a", "copy", source,
+    ], timeout=60)
+    client.file("ImportVideo", source)
     client.send("FitInWindow")
     original = client.data("GetLinkedMediaClips")
     info, buttons = owned_preview_controls(client)
+    assert info["lightweight"], info
     frame, slider, status = (int(info[key]) for key in
                              ("previewFrameHandle", "previewTimelineHandle", "previewStatusHandle"))
     windows = PreviewNativeWindows()
@@ -759,7 +772,7 @@ def check_preview_navigation(client, root):
     for direction, virtual_key in ((1, 0x27), (-1, 0x25)):
         before = settled_seconds()
         key(virtual_key)
-        wait_for_native_state(lambda before=before, direction=direction: abs(preview_project_seconds(status) - before - direction / 30) < 0.01,
+        wait_for_native_state(lambda before=before, direction=direction: abs(preview_project_seconds(status) - before - direction / 120) < 0.003,
                               "stopped preview frame key")
     volume = client.data("GetVideoPreviewInfo")["playbackVolume"]
     for _ in range(2):
@@ -789,11 +802,12 @@ def check_preview_navigation(client, root):
     assert abs(preview_project_seconds(status) - 12) < 0.015
     # Start at a known frame boundary. A paused live clock can fall between
     # source frames, where a next-frame step is shorter than one full frame.
-    for target, virtual_key in ((12 + 1 / 30, 0x27), (12, 0x25)):
+    for target, virtual_key, colour in ((12 + 1 / 120, 0x27, "blue"), (12, 0x25, "red")):
         key(virtual_key)
         wait_for_native_state(lambda target=target: abs(preview_project_seconds(status) - target) < 0.003,
                               lambda: "paused preview frame key: " + windows.control_text(status))
         assert windows.enabled(buttons["play"]) and not windows.enabled(buttons["pause"])
+        expect_preview_crop_pixels(client, root, ffmpeg, {colour}, preview_info=info)
     press_preview_button(buttons["play"])
     wait_for_native_state(lambda: preview_project_seconds(status) > 12.15, "resume at the paused destination")
     press_preview_button(buttons["stop"])
