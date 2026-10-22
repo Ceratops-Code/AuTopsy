@@ -931,8 +931,8 @@ def worker(args, root):
         check_project_compatibility(client, root)
     elif args.case == "video":
         check_video(client, root, args.ffmpeg, args.ffprobe)
-    elif args.case == "video-interactions":
-        check_video_interactions(client, root)
+    elif args.case in ("video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu"):
+        check_video_interactions(client, root, args.case)
     elif args.case == "media":
         check_media(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "branding":
@@ -1041,7 +1041,7 @@ def main():
             "history-view",
             "project-compatibility",
             "video",
-            "video-interactions",
+            "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
             "media",
             "preview",
             "branding",
@@ -1145,7 +1145,7 @@ def main():
         ("tone-stereo.wav", 2),
     ):
         write_tone(root / name, channels)
-    if args.case in ("video", "video-interactions", "media", "project-compatibility"):
+    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,

@@ -120,10 +120,13 @@ inherited scripting examples retain their upstream conventions.
 The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` dispatches the feature scenarios and owns result records.
-The focused `fork-video-interactions` case exercises real clip clicks,
+The focused `fork-video-selection`, `fork-video-edges`, `fork-video-clipboard`
+and `fork-video-track-menu` cases exercise real clip clicks,
 double-click selection, Delete/Backspace, reversible edge drags, canceled edits,
 right-click clipboard actions in clips and gaps, and the common **Add track...**
-submenu. It uses only generated media and the owned test process.
+submenu. `fork-video-linked-edges` separately checks both trim directions
+with the default linked video/audio import. These cases use only generated
+media and the owned test process.
 Preview tests generate their own neutral 16-second colour-pattern video and
 tone; personal video inputs are not accepted. `fork-fixtures` checks that media
 without opening AuTopsy.
