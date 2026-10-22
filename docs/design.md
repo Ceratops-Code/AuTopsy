@@ -233,7 +233,8 @@ FFmpeg uses matching source intervals and presentation timestamps. No rewritten
 media, proxy or recovery output is produced by this operation. Optional
 `videoRate` XML retains the rate; omitted attributes read as ordinary speed,
 and stock Audacity continues to skip the video extension. The named
-`fork-video-speed` and retimed `fork-project-compatibility` cases cover these
+`fork-video-speed`, `fork-video-speed-storage` and retimed
+`fork-project-compatibility` cases cover these
 native boundaries; host-free cases cover nested maps and atomic plans.
 
 The first planner uses transient `VideoProjectSnapshot` / `VideoTrackSnapshot`

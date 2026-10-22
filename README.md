@@ -125,7 +125,9 @@ transport-button, video Mute/Solo and multi-source rendering/relinking cases. Na
 module when those cases run. `fork-video-speed` covers linked retiming, repeat
 requests, Undo/Redo, canceled edge gestures, source handles, flags, joins, native
 audio pitch and decoded preview/export timing. Project interoperability includes
-a retimed joined clip and its stretched native audio.
+a retimed joined clip and its stretched native audio. `fork-video-speed-storage`
+separately covers native save/reopen so a window-lifecycle failure cannot hide
+editing or rendering results.
 `fork-video-transport` covers the actual preview buttons, pause/resume, live
 picture mute, video-only playback and ownership between projects.
 `fork-video-visibility` covers track buttons and cancellation, Undo/Redo,

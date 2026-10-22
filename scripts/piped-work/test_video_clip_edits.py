@@ -170,7 +170,7 @@ def check_video_transport(client, root):
     client.file("SaveProject2", root / "_transport-second.aup3")
 
 
-def check_video_speed(client, root, ffmpeg, ffprobe):
+def check_video_speed(client, root, ffmpeg, ffprobe, storage_only=False):
     """Retiming is one native edit across linked media, storage and rendering."""
     client.file("ImportVideo", root / "source.mp4")
     video = clip_rows(client)[0]
@@ -194,6 +194,15 @@ def check_video_speed(client, root, ffmpeg, ffprobe):
         assert audio and all(abs(row["start"]) < 0.001 and abs(row["end"] - 4 / speed) < 0.05 for row in audio), audio
         flag = next(row for row in client.data("GetClipMarkers") if row["id"] == "a" * 32)
         assert abs(flag["time"] - 1.5 / speed) < 1e-8 and flag["visible"], flag
+
+    if storage_only:
+        for speed in (0.5, 2):
+            change(speed)
+            check_speed(speed)
+            saved = media(), clip_rows(client), client.data("GetClipMarkers")
+            save_reopen(client, root / f"_speed-{speed}.aup3")
+            assert (media(), clip_rows(client), client.data("GetClipMarkers")) == saved
+        return
 
     for _ in range(2):
         change(2)
@@ -234,9 +243,6 @@ def check_video_speed(client, root, ffmpeg, ffprobe):
 
     change(0.5)
     check_speed(0.5)
-    saved = media(), clip_rows(client), client.data("GetClipMarkers")
-    save_reopen(client, root / "_speed.aup3")
-    assert (media(), clip_rows(client), client.data("GetClipMarkers")) == saved
     output = root / "_half-speed.mp4"
     client.file("ExportVideoMix", output, 'Preset="h264" Width=160 Height=90 FrameRate=30 Quality=18')
     metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-of", "json", str(output)], timeout=30))
@@ -275,7 +281,7 @@ def check_video_speed(client, root, ffmpeg, ffprobe):
     client.send("HealVideoSplit")
     client.send("SeparateVideoClips")
     assert all(row["playbackRate"] == 2 for row in clip_rows(client))
-    save_reopen(client, root / "_retimed-split.aup3")
+    client.file("SaveProject2", root / "_retimed-split.aup3")
 
 
 def check_video_visibility(client, root, ffmpeg, ffprobe):
