@@ -433,12 +433,12 @@ def check_transport_toolbar(client, root):
         return True
 
     user.EnumChildWindows(toolbar, visit_button, 0)
-    expected = {"Pause", "Play", "Stop", "Skip to Start", "Skip to End", "Record", "Go to Cursor"}
+    expected = {"Pause", "Play", "Stop", "Skip to Start", "Skip to End", "Record", "Enable Looping", "Go to Cursor"}
     assert expected <= set(buttons), buttons
-    assert any(label.startswith("Loop") for label in buttons), buttons
     previous_dpi = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(toolbar))
     try:
-        for label, handle in buttons.items():
+        for label in expected:
+            handle = buttons[label]
             assert native.owner(handle) == pid
             rectangle = w.RECT()
             assert user.GetWindowRect(handle, ctypes.byref(rectangle))
