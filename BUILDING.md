@@ -422,8 +422,15 @@ the owned child. Its temporary fixtures are removed after each check.
 The runner owns its marked case directories and shared preview cache under
 the selected test work root. Fresh runs replace case scratch data. Completed
 result records retain their original run, executable and check identities in
-_accepted, with at most three records per case/input and 36 records overall;
-playback observations are included. Receipts do not resume or skip test work.
+_accepted, including playback observations. At startup/completion the native
+owner keeps three passes per case, their latest matching blocking outcomes,
+and two other attempts (three when there is no pass). Reuse requires exact
+app/DLL, check-module, generated-media-tool, Python/OS and display inputs;
+a newer matching failure or incomplete attempt prevents reuse of an older pass.
+Each reuse names the original result and check version without launching the app.
+Interrupted attempts start afresh; completed publication survives interruption.
+Older records lacking execution scope remain historical acceptance, without
+invented scope or forced retesting of an unchanged installer.
 Portable Settings is removed when the owned app exits.
 
 The SDK remains at the caller-selected path and is read during the build.

@@ -36,7 +36,7 @@ class CheckGroup:
 
 
 COMMON_INPUTS = (
-    "src/video/CMakeLists.txt", "scripts/run_affected_tests.py", "sdlc/sdlc.yml",
+    "src/video/CMakeLists.txt", "sdlc/sdlc.yml",
     "scripts/pyproject.toml", "scripts/uv.lock", "tests/Catch2Main.cpp",
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
@@ -59,7 +59,11 @@ GROUPS = (
     CheckGroup("fork-worker-lifecycle", (
         "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
         "scripts/piped-work/pipeclient.py")),
-    CheckGroup("affected-test-selection", ("scripts/test_run_affected_tests.py",)),
+    CheckGroup("affected-test-selection", (
+        "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
+        "scripts/piped-work/test_fork_features.py",
+        "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
+        "scripts/piped-work/test_video_clip_edits.py")),
     CheckGroup("fork-audacity-consumer-cache", (
         "scripts/piped-work/prepare_audacity_consumer.py",
         "scripts/piped-work/test_prepare_audacity_consumer.py",

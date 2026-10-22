@@ -198,7 +198,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/TestVideoEdits.cpp` | Dedicated edit-plan and publication cases | Stale-state, rejected-batch, repeated/interrupted and bound-movement contracts |
 | `src/video/TestVideoComposition.cpp` | Dedicated layer/crop/embedded-geometry cases | Picture eligibility and placement without native objects or codecs |
 | `scripts/run_affected_tests.py` and `test_run_affected_tests.py` | One portable input/check map, named execution and bounded receipts | Local/CI affected selection; separate native-acceptance impact |
-| `scripts/piped-work/test_fork_features.py` | Native feature dispatch and accepted result records | Adapter contracts through public commands |
+| `scripts/piped-work/test_fork_features.py` | Native feature dispatch, exact-input result reuse and bounded attempt outcomes | Adapter contracts through public commands |
 | `scripts/piped-work/test_video_clip_edits.py` | Dedicated split edges, structural edits and compound rendering cases | Reused public-command/gesture cases with generated media |
 
 The small native transport facade currently lives in `ShowVideoPreview.cpp`;

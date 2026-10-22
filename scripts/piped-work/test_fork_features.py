@@ -15,6 +15,7 @@ import ctypes
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -1022,10 +1023,11 @@ def worker(args, root):
 
 
 def retain_behavior_result(work_root, record=None, metrics=None):
-    """Keep immutable result identities across fresh test runs; bound each scope to three.
+    """Own immutable native outcomes, their atomic writes and bounded retention.
 
-    The owner marker confines cleanup to this runner's receipts. Receipts describe
-    accepted work only: they never skip execution or resume an interrupted test.
+    At startup/completion retain three passes per case, their latest matching
+    blocking outcomes, and two other attempts (three when there is no pass).
+    Unrelated files are untouched. The app/profile mutex excludes live writers.
     """
     archive = work_root / "_accepted"
     owner = archive / "_owner"
@@ -1039,31 +1041,182 @@ def retain_behavior_result(work_root, record=None, metrics=None):
     if record is not None:
         if not re.fullmatch(r"[0-9a-f]{32}", record["run"]):
             raise RuntimeError("The result identity is malformed.")
-        target = archive / ("_" + record["run"] + ".json")
-        if not target.exists():
-            payload = dict(record)
-            if metrics is not None:
-                payload["observations"] = metrics
-            # The exclusive name is never reused; interrupted writes are discarded
-            # rather than accepted as a successful record.
-            staging = archive / ("_" + record["run"] + ".tmp")
-            staging.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            staging.replace(target)
-    rows = []
-    for path in archive.glob("_*.json"):
-        value = json.loads(path.read_text(encoding="utf-8"))
-        scope = (value["case"], json.dumps(value.get("input"), sort_keys=True))
-        rows.append((path.stat().st_mtime_ns, path, scope))
-    counts: dict[tuple[str, str], int] = {}
-    retained = 0
-    for _, path, scope in sorted(rows, reverse=True):
-        counts[scope] = counts.get(scope, 0) + 1
-        if counts[scope] > 3 or retained >= 36:
-            path.unlink()
-        else:
-            retained += 1
+        payload = dict(record)
+        if metrics is not None:
+            payload["observations"] = metrics
+        write_behavior_record(archive / ("_" + record["run"] + ".json"), payload)
+    rows = read_behavior_results(work_root)
+    for case in {row[2]["case"] for row in rows}:
+        scoped = [row for row in rows if row[2]["case"] == case]
+        passes = [row for row in scoped if row[2]["result"] == "passed"][:3]
+        other = [row for row in scoped if row[2]["result"] != "passed"][:2 if passes else 3]
+        keep = {row[1] for row in passes + other}
+        for _, _, passed in passes:
+            identity = passed.get("input_identity")
+            matching = [row for row in scoped if identity and row[2].get("input_identity") == identity]
+            if matching:
+                keep.add(matching[0][1])
+        for _, path, _ in scoped:
+            if path not in keep:
+                path.unlink()
     for path in archive.glob("_*.tmp"):
         path.unlink()
+
+
+
+def native_test_inputs(args, executable, module, display):
+    """Read affecting files and scope; Git HEAD and unrelated docs are not inputs.
+
+    The media recipe is owned by these check modules and the exact FFmpeg
+    tools. Runtime DLLs are read too: an unchanged EXE alone is insufficient.
+    No recorded scope is inferred for historical acceptance records.
+    """
+    def sha(path):
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+
+    here = Path(__file__).parent
+    inputs = {
+        "executable_sha256": sha(executable),
+        "script_module_sha256": sha(module),
+        "check_sha256": sha(Path(__file__)),
+        "harness_sha256": sha(here / "run_fork_test_harness.py"),
+        "pipe_client_sha256": sha(here / "pipeclient.py"),
+        "payload_dependencies": {p.name: sha(p) for p in sorted(executable.parent.glob("*.dll"))},
+        "execution_scope": {
+            "platform": platform.platform(), "machine": platform.machine(),
+            "python": sys.version, "python_executable_sha256": sha(Path(sys.executable)),
+            "test_display": display,
+            "tools": {name: sha(Path(shutil.which(value) or value).resolve(strict=True))
+                      for name in ("ffmpeg", "ffprobe") if (value := getattr(args, name))},
+        },
+    }
+    if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
+                     "video-linked-clip-edits", "video-compound-render", "video-transport",
+                     "video-visibility", "video-speed", "video-speed-storage",
+                     "video-clip-storage", "video-parent-links"):
+        inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
+    if args.case == "project-compatibility":
+        inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
+    return inputs
+
+
+def write_behavior_record(target, payload):
+    """Publish one immutable result or attempt intent while the runner owns the mutex."""
+    if target.exists():
+        if json.loads(target.read_text(encoding="utf-8")) != payload:
+            raise RuntimeError("A behavior result identity already has different contents.")
+        return
+    staging = target.with_suffix(".tmp")
+    try:
+        with staging.open("x", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(staging, target)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def read_behavior_results(work_root):
+    archive = work_root / "_accepted"
+    rows = []
+    for path in archive.glob("_*.json"):
+        if re.fullmatch(r"_[0-9a-f]{32}\.json", path.name):
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if path.name != "_" + record["run"] + ".json":
+                raise RuntimeError("Behavior result path and identity disagree.")
+            rows.append((record.get("finished_ns", path.stat().st_mtime_ns), path, record))
+    return sorted(rows, key=lambda row: (row[0], row[1].name), reverse=True)
+
+
+def plan_native_check(work_root, case, inputs):
+    """Return original evidence, never a newly invented pass or execution."""
+    identity = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+    rows = [row for row in read_behavior_results(work_root) if row[2]["case"] == case]
+    matching = [row for row in rows if row[2].get("input_identity") == identity]
+    latest = matching[0] if matching else None
+    if latest and latest[2]["result"] == "passed":
+        return {"case": case, "decision": "reused", "input_identity": identity,
+                "receipt": str(latest[1]), "original_run": latest[2]["run"]}
+    reason = ("previous failure or incomplete attempt" if latest else
+              "changed artifact, check or execution scope" if rows else "missing receipt")
+    return {"case": case, "decision": "execute", "input_identity": identity, "reason": reason}
+
+
+def finish_interrupted_native_checks(work_root):
+    """A newly acquired native mutex proves the previous writer is gone.
+
+    Pending files record only a check attempt, never resumable execution steps.
+    A complete immutable outcome wins over its leftover intent. Otherwise the
+    attempt is incomplete and a fresh normal call must execute the check.
+    """
+    archive = work_root / "_accepted"
+    for path in archive.glob("_pending-*.json"):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if path.name != "_pending-" + record["run"] + ".json":
+            raise RuntimeError("Behavior attempt path and identity disagree.")
+        target = archive / ("_" + record["run"] + ".json")
+        if not target.exists():
+            record.update(result="incomplete", finished_ns=time.time_ns(), duration_seconds=None,
+                          failure={"message": "The writer stopped before publishing a completed result."})
+            retain_behavior_result(work_root, record)
+        path.unlink()
+    retain_behavior_result(work_root)
+
+
+def run_native_check(work_root, case, read_inputs, execute):
+    """Qualify one requested case under the existing app/profile mutex.
+
+    The archive is the sole result owner. Reuse has no app/fixture callback and
+    retains the original result identity/check version. A failed or interrupted
+    matching attempt blocks older acceptance only for current qualification.
+    Legacy records remain historical evidence, without invented missing scope.
+    """
+    retain_behavior_result(work_root)
+    finish_interrupted_native_checks(work_root)
+    inputs = json.loads(json.dumps(read_inputs()))
+    plan = plan_native_check(work_root, case, inputs)
+    print(json.dumps({"native_check_plan": plan}), flush=True)
+    if plan["decision"] == "reused":
+        return {"case": case, "result": "reused", "receipt": plan["receipt"],
+                "original_run": plan["original_run"]}
+    run_id = uuid.uuid4().hex
+    started = time.time_ns()
+    record = {"schema": "autopsy-native-result.v2", "run": run_id, "case": case,
+              "input_identity": plan["input_identity"], "started_ns": started,
+              "check_inputs": inputs, "result": "incomplete", **inputs}
+    archive = work_root / "_accepted"
+    pending = archive / ("_pending-" + run_id + ".json")
+    target = archive / ("_" + run_id + ".json")
+    write_behavior_record(pending, record)
+    try:
+        observed = execute(run_id, json.loads(json.dumps(inputs)))
+        if read_inputs() != inputs:
+            raise RuntimeError("Native check inputs changed while the case ran; no pass was recorded.")
+        if not observed or observed.get("result") != "passed":
+            raise RuntimeError("The native case did not return its required passing observations.")
+        record = {**observed, **inputs, "schema": "autopsy-native-result.v2",
+                  "run": run_id, "case": case, "result": "passed", "started_ns": started,
+                  "input_identity": plan["input_identity"], "check_inputs": inputs,
+                  "finished_ns": time.time_ns()}
+        record["duration_seconds"] = max(0, record["finished_ns"] - started) / 1e9
+        retain_behavior_result(work_root, record)
+    except BaseException as error:
+        # A publication interrupted after its atomic effect has already earned
+        # acceptance. Preserve that outcome, including its original identity.
+        if not target.exists():
+            record.update(result="failed", finished_ns=time.time_ns(),
+                          duration_seconds=max(0, time.time_ns() - started) / 1e9,
+                          failure={"type": type(error).__name__, "message": str(error),
+                                   "invocation": [sys.executable, *sys.argv]})
+            retain_behavior_result(work_root, record)
+        raise
+    finally:
+        if target.exists():
+            pending.unlink(missing_ok=True)
+    return {"case": case, "result": "passed", "receipt": str(target), "original_run": run_id}
+
 
 
 def main():
@@ -1141,355 +1294,330 @@ def main():
     if kernel.WaitNamedPipeW(pipe, 1) or ctypes.get_last_error() not in (2,):
         raise RuntimeError("An AuTopsy scripting session is already active.")
     root.parent.mkdir(parents=True, exist_ok=True)
-    retain_behavior_result(root.parent)
-    marker = root / "_owner"
-    signature = "AuTopsy behavior tests 1"
-    shared_cache = root.parent / "_preview_media"
-    cache_owner = shared_cache / "_test_owner"
-    cache_signature = "AuTopsy preview behavior cache 1"
-    if shared_cache.exists() and (
-        not cache_owner.is_file() or cache_owner.read_text() != cache_signature
-    ):
-        raise RuntimeError(
-            "The preview test cache has another owner: " + str(shared_cache)
-        )
-    if root.exists():
-        if not marker.is_file() or marker.read_text() != signature:
-            raise RuntimeError(
-                "The test output directory has another owner: " + str(root)
-            )
-        previous_cache = root / "_preview-cache"
-        if (
-            args.case == "preview"
-            and previous_cache.is_dir()
-            and not shared_cache.exists()
-        ):
-            shutil.copytree(previous_cache, shared_cache)
-            cache_owner.write_text(cache_signature)
-        for result_path in root.glob("_result-*.json"):
-            observations = root / "_playback.json"
-            retain_behavior_result(
-                root.parent,
-                json.loads(result_path.read_text()),
-                json.loads(observations.read_text())
-                if observations.is_file()
-                else None,
-            )
-        shutil.rmtree(root)
-    root.mkdir()
-    marker.write_text(signature)
-    for name, channels in (
-        ("tone-a.wav", 1),
-        ("tone-b.wav", 1),
-        ("tone-stereo.wav", 2),
-    ):
-        write_tone(root / name, channels)
-    if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
-        run_process(
-            [
-                args.ffmpeg,
-                "-v",
-                "error",
-                "-nostdin",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=red:s=160x90:r=30:d=2",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=blue:s=160x90:r=30:d=2",
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=frequency=440:sample_rate=48000:duration=4",
-                "-filter_complex",
-                "[0:v][1:v]concat=n=2:v=1:a=0[v]",
-                "-map",
-                "[v]",
-                "-map",
-                "2:a",
-                "-c:v",
-                "mpeg4",
-                "-q:v",
-                "2",
-                "-c:a",
-                "aac",
-                "-shortest",
-                str(root / "source.mp4"),
-            ],
-            timeout=60,
-        )
-        run_process(
-            [
-                args.ffmpeg,
-                "-v",
-                "error",
-                "-nostdin",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=yellow:s=90x160:r=25:d=2",
-                "-an",
-                "-c:v",
-                "mpeg4",
-                "-q:v",
-                "2",
-                str(root / "other-source.mp4"),
-            ],
-            timeout=30,
-        )
-    if args.case == "preview":
-        write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
-    version_numbers = executable_version(executable)
-    profile = executable.parent / "Portable Settings"
-    profile_owner = profile / "_autopsy_tests"
-    if profile.exists():
-        if not profile_owner.is_file() or profile_owner.read_text() != str(
-            args.work_root.resolve()
+    def execute(run_id, identities):
+        marker = root / "_owner"
+        signature = "AuTopsy behavior tests 1"
+        shared_cache = root.parent / "_preview_media"
+        cache_owner = shared_cache / "_test_owner"
+        cache_signature = "AuTopsy preview behavior cache 1"
+        if shared_cache.exists() and (
+            not cache_owner.is_file() or cache_owner.read_text() != cache_signature
         ):
             raise RuntimeError(
-                "An unrelated Portable Settings profile exists: " + str(profile)
+                "The preview test cache has another owner: " + str(shared_cache)
             )
-        shutil.rmtree(profile)
-    profile.mkdir()
-    profile_owner.write_text(str(args.work_root.resolve()))
-    if args.case == "preview" and shared_cache.is_dir():
-        shutil.copytree(shared_cache, profile / "_video-previews")
-    audio = root / "_audio_temp"
-    audio.mkdir()
-    gui = root / "_gui_temp"
-    gui.mkdir()
-    version = ".".join(str(x) for x in version_numbers)
-    stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: DTZ006 -- matches the upstream module preference in local time
-    left, top, right, bottom = display["work"]
-    width, height = min(1100, right - left - 32), min(650, bottom - top - 32)
-    placement = (
-        f"[Window]\nX={left + 16}\nY={top + 16}\nWidth={width}\nHeight={height}\n"
-        f"Normal_X={left + 16}\nNormal_Y={top + 16}\nNormal_Width={width}\nNormal_Height={height}\n"
-        "Maximized=0\nIconized=0\n"
-    )
-    (profile / "autopsy.cfg").write_text(
-        f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
-        f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
-        "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
-        f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement,
-        encoding="utf-8",
-    )
-    environment = dict(
-        os.environ,
-        TEMP=str(gui),
-        TMP=str(gui),
-        PYTHONDONTWRITEBYTECODE="1",
-        AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
-        AUTOPSY_TEST_DISPLAY=display["device"]
-        if not args.reject_display
-        else "missing-test-display",
-    )
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    run_id = uuid.uuid4().hex
-    identities = {
-        "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-        "script_module_sha256": hashlib.sha256(module.read_bytes()).hexdigest(),
-        "check_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "harness_sha256": hashlib.sha256(
-            Path(__file__).with_name("run_fork_test_harness.py").read_bytes()
-        ).hexdigest(),
-        "clip_edits_sha256": hashlib.sha256(
-            Path(__file__).with_name("test_video_clip_edits.py").read_bytes()
-        ).hexdigest() if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links") else None,
-        "pipe_client_sha256": hashlib.sha256(
-            Path(__file__).with_name("pipeclient.py").read_bytes()
-        ).hexdigest(),
-        "consumer_preparation_sha256": hashlib.sha256(
-            Path(__file__).with_name("prepare_audacity_consumer.py").read_bytes()
-        ).hexdigest() if args.case == "project-compatibility" else None,
-    }
-    with (root / "_app.log").open("w") as log:
-        app = subprocess.Popen(
-            [str(executable)],
-            cwd=executable.parent,
-            env=environment,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-        )
-        try:
-            if args.reject_display:
-                status = app.wait(timeout=30)
-                log.flush()
-                report = (root / "_app.log").read_text(
-                    encoding="utf-8", errors="replace"
-                )
-                if (
-                    status != 197
-                    or "AUTOPSY_TEST_WINDOW show" in report
-                    or "test display guard:" not in report
-                ):
-                    raise RuntimeError(
-                        f"Unsafe-display rejection: owned app exit {status}; {report[-4000:]}"
-                    )
-                print(
-                    "display-rejection: PASS (missing screen stopped before the first window)"
-                )
-                return
-            startup = user.WaitForInputIdle(int(app._handle), 30000)  # type: ignore[attr-defined]  # CPython's Windows process handle.
-            if startup != 0:
+        if root.exists():
+            if not marker.is_file() or marker.read_text() != signature:
                 raise RuntimeError(
-                    f"Owned app startup status {startup}; PID {app.pid}; "
-                    + startup_window_messages(app.pid)
+                    "The test output directory has another owner: " + str(root)
                 )
-            deadline = time.monotonic() + 30
-            while not kernel.WaitNamedPipeW(pipe, 100):
-                if app.poll() is not None or time.monotonic() > deadline:
-                    raise RuntimeError(
-                        "The owned test app did not expose its scripting pipe."
-                    )
-                time.sleep(0.05)
-            if app.poll() is not None:
-                raise RuntimeError("The owned test app exited during startup.")
-            environment["AUTOPSY_OWNED_APP_PID"] = str(app.pid)
-            previous_display = os.environ.get("AUTOPSY_TEST_DISPLAY")
-            os.environ["AUTOPSY_TEST_DISPLAY"] = display["device"]
-            try:
-                windows = assert_owned_test_display(app.pid)
-            finally:
-                if previous_display is None:
-                    os.environ.pop("AUTOPSY_TEST_DISPLAY", None)
-                else:
-                    os.environ["AUTOPSY_TEST_DISPLAY"] = previous_display
-            (root / "_display.json").write_text(
-                json.dumps({"display": display, "startup_windows": windows}, indent=2)
+            previous_cache = root / "_preview-cache"
+            if (
+                args.case == "preview"
+                and previous_cache.is_dir()
+                and not shared_cache.exists()
+            ):
+                shutil.copytree(previous_cache, shared_cache)
+                cache_owner.write_text(cache_signature)
+            shutil.rmtree(root)
+        root.mkdir()
+        marker.write_text(signature)
+        for name, channels in (
+            ("tone-a.wav", 1),
+            ("tone-b.wav", 1),
+            ("tone-stereo.wav", 2),
+        ):
+            write_tone(root / name, channels)
+        if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+            run_process(
+                [
+                    args.ffmpeg,
+                    "-v",
+                    "error",
+                    "-nostdin",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=160x90:r=30:d=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=blue:s=160x90:r=30:d=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=48000:duration=4",
+                    "-filter_complex",
+                    "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+                    "-map",
+                    "[v]",
+                    "-map",
+                    "2:a",
+                    "-c:v",
+                    "mpeg4",
+                    "-q:v",
+                    "2",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                    str(root / "source.mp4"),
+                ],
+                timeout=60,
             )
-            worker_command = [
-                sys.executable,
-                str(Path(__file__)),
-                *sys.argv[1:],
-                "--worker",
-            ]
-            if args.interrupt_cache:
-                cache = profile / "_video-previews"
-                baseline = set(cache.rglob("_complete")) if cache.exists() else set()
-                operation = subprocess.Popen(
-                    worker_command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    env=environment,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-                try:
-                    deadline = time.monotonic() + 45
-                    observed = None
-                    while (
-                        time.monotonic() < deadline
-                        and app.poll() is None
-                        and operation.poll() is None
-                    ):
-                        candidates = (
-                            list(cache.rglob("_building.mp4"))
-                            if args.interrupt_cache == "before-publish"
-                            else [
-                                path
-                                for path in cache.rglob("_complete")
-                                if path not in baseline
-                            ]
-                        )
-                        if candidates:
-                            observed = candidates[0]
-                            break
-                        time.sleep(0.005)
-                    if observed is None:
-                        raise RuntimeError(
-                            "The preview did not reach the requested interruption boundary."
-                        )
-                    app.terminate()
-                    app.wait(timeout=20)
-                    print("Observed cache interruption: " + args.interrupt_cache)
-                    return
-                finally:
-                    if operation.poll() is None:
-                        operation.terminate()
-                    output, errors = operation.communicate(timeout=10)
-                    (root / "_commands.log").write_text(output, encoding="utf-8")
-                    (root / "_errors.log").write_text(errors, encoding="utf-8")
-            result = run_behavior_worker(worker_command, environment, app, root)
-            if result.returncode:
-                raise RuntimeError(
-                    f"Command: {subprocess.list2cmdline(worker_command)}\n"
-                    f"Behavior worker exit {result.returncode}\n"
-                    f"stdout:\n{result.stdout[-14000:] or '<absent>'}\n"
-                    f"stderr:\n{result.stderr or '<absent>'}"
-                )
-            try:
-                status = app.wait(timeout=20)
-            except subprocess.TimeoutExpired as error:
-                raise RuntimeError(
-                    "Owned app did not exit; " + startup_window_messages(app.pid)
-                ) from error
-            if status:
-                raise RuntimeError(f"The owned app exited with status {status}.")
-            stock_result = None
-            if args.case == "project-compatibility":
-                stock_result = check_portable_audacity_projects(root, display, args.ffmpeg)
-            log.flush()
-            shows = re.findall(
-                r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
-                (root / "_app.log").read_text(encoding="utf-8", errors="replace"),
-                re.MULTILINE,
+            run_process(
+                [
+                    args.ffmpeg,
+                    "-v",
+                    "error",
+                    "-nostdin",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=yellow:s=90x160:r=25:d=2",
+                    "-an",
+                    "-c:v",
+                    "mpeg4",
+                    "-q:v",
+                    "2",
+                    str(root / "other-source.mp4"),
+                ],
+                timeout=30,
             )
-            assert shows, "No pre-show placement observations were recorded."
-            for _, x, y, w, h in shows:
-                x, y, w, h = map(int, (x, y, w, h))
-                assert left <= x and top <= y and x + w <= right and y + h <= bottom, (
-                    shows
-                )
-            source = root / "source.mp4"
-            source_identity = None
-            if source.is_file():
-                info = source.stat()
-                source_identity = {
-                    "source": "generated:" + args.case,
-                    "bytes": info.st_size,
-                    "modified_ns": None,
-                }
-            record = {
-                "run": run_id,
-                "case": args.case,
-                "result": "passed",
-                "version": version.strip(),
-                "test_display": display,
-                "pre_show_count": len(shows),
-                "input": source_identity,
-                "stock_audacity": stock_result,
-                **identities,
-            }
-            (root / ("_result-" + run_id + ".json")).write_text(
-                json.dumps(record, indent=2), encoding="utf-8"
-            )
-            observations = root / "_playback.json"
-            retain_behavior_result(
-                root.parent,
-                record,
-                json.loads(observations.read_text())
-                if observations.is_file()
-                else None,
-            )
-            print(args.case + ": PASS (native command, project and media checks)")
-        finally:
-            if app.poll() is None:
-                app.terminate()
-                app.wait(timeout=20)
-            if profile_owner.is_file() and profile_owner.read_text() == str(
+        if args.case == "preview":
+            write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
+        version_numbers = executable_version(executable)
+        profile = executable.parent / "Portable Settings"
+        profile_owner = profile / "_autopsy_tests"
+        if profile.exists():
+            if not profile_owner.is_file() or profile_owner.read_text() != str(
                 args.work_root.resolve()
             ):
-                cache = profile / "_video-previews"
-                if args.case == "preview" and cache.is_dir():
-                    if shared_cache.exists():
-                        shutil.rmtree(shared_cache)
-                    shutil.copytree(cache, shared_cache)
-                    cache_owner.write_text(cache_signature)
-                shutil.rmtree(profile)
+                raise RuntimeError(
+                    "An unrelated Portable Settings profile exists: " + str(profile)
+                )
+            shutil.rmtree(profile)
+        profile.mkdir()
+        profile_owner.write_text(str(args.work_root.resolve()))
+        if args.case == "preview" and shared_cache.is_dir():
+            shutil.copytree(shared_cache, profile / "_video-previews")
+        audio = root / "_audio_temp"
+        audio.mkdir()
+        gui = root / "_gui_temp"
+        gui.mkdir()
+        version = ".".join(str(x) for x in version_numbers)
+        stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: DTZ006 -- matches the upstream module preference in local time
+        left, top, right, bottom = display["work"]
+        width, height = min(1100, right - left - 32), min(650, bottom - top - 32)
+        placement = (
+            f"[Window]\nX={left + 16}\nY={top + 16}\nWidth={width}\nHeight={height}\n"
+            f"Normal_X={left + 16}\nNormal_Y={top + 16}\nNormal_Width={width}\nNormal_Height={height}\n"
+            "Maximized=0\nIconized=0\n"
+        )
+        (profile / "autopsy.cfg").write_text(
+            f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
+            f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
+            "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
+            f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement,
+            encoding="utf-8",
+        )
+        environment = dict(
+            os.environ,
+            TEMP=str(gui),
+            TMP=str(gui),
+            PYTHONDONTWRITEBYTECODE="1",
+            AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
+            AUTOPSY_TEST_DISPLAY=display["device"]
+            if not args.reject_display
+            else "missing-test-display",
+        )
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        with (root / "_app.log").open("w") as log:
+            app = subprocess.Popen(
+                [str(executable)],
+                cwd=executable.parent,
+                env=environment,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+            try:
+                if args.reject_display:
+                    status = app.wait(timeout=30)
+                    log.flush()
+                    report = (root / "_app.log").read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                    if (
+                        status != 197
+                        or "AUTOPSY_TEST_WINDOW show" in report
+                        or "test display guard:" not in report
+                    ):
+                        raise RuntimeError(
+                            f"Unsafe-display rejection: owned app exit {status}; {report[-4000:]}"
+                        )
+                    print(
+                        "display-rejection: PASS (missing screen stopped before the first window)"
+                    )
+                    return
+                startup = user.WaitForInputIdle(int(app._handle), 30000)  # type: ignore[attr-defined]  # CPython's Windows process handle.
+                if startup != 0:
+                    raise RuntimeError(
+                        f"Owned app startup status {startup}; PID {app.pid}; "
+                        + startup_window_messages(app.pid)
+                    )
+                deadline = time.monotonic() + 30
+                while not kernel.WaitNamedPipeW(pipe, 100):
+                    if app.poll() is not None or time.monotonic() > deadline:
+                        raise RuntimeError(
+                            "The owned test app did not expose its scripting pipe."
+                        )
+                    time.sleep(0.05)
+                if app.poll() is not None:
+                    raise RuntimeError("The owned test app exited during startup.")
+                environment["AUTOPSY_OWNED_APP_PID"] = str(app.pid)
+                previous_display = os.environ.get("AUTOPSY_TEST_DISPLAY")
+                os.environ["AUTOPSY_TEST_DISPLAY"] = display["device"]
+                try:
+                    windows = assert_owned_test_display(app.pid)
+                finally:
+                    if previous_display is None:
+                        os.environ.pop("AUTOPSY_TEST_DISPLAY", None)
+                    else:
+                        os.environ["AUTOPSY_TEST_DISPLAY"] = previous_display
+                (root / "_display.json").write_text(
+                    json.dumps({"display": display, "startup_windows": windows}, indent=2)
+                )
+                worker_command = [
+                    sys.executable,
+                    str(Path(__file__)),
+                    *sys.argv[1:],
+                    "--worker",
+                ]
+                if args.interrupt_cache:
+                    cache = profile / "_video-previews"
+                    baseline = set(cache.rglob("_complete")) if cache.exists() else set()
+                    operation = subprocess.Popen(
+                        worker_command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=environment,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    try:
+                        deadline = time.monotonic() + 45
+                        observed = None
+                        while (
+                            time.monotonic() < deadline
+                            and app.poll() is None
+                            and operation.poll() is None
+                        ):
+                            candidates = (
+                                list(cache.rglob("_building.mp4"))
+                                if args.interrupt_cache == "before-publish"
+                                else [
+                                    path
+                                    for path in cache.rglob("_complete")
+                                    if path not in baseline
+                                ]
+                            )
+                            if candidates:
+                                observed = candidates[0]
+                                break
+                            time.sleep(0.005)
+                        if observed is None:
+                            raise RuntimeError(
+                                "The preview did not reach the requested interruption boundary."
+                            )
+                        app.terminate()
+                        app.wait(timeout=20)
+                        print("Observed cache interruption: " + args.interrupt_cache)
+                        return
+                    finally:
+                        if operation.poll() is None:
+                            operation.terminate()
+                        output, errors = operation.communicate(timeout=10)
+                        (root / "_commands.log").write_text(output, encoding="utf-8")
+                        (root / "_errors.log").write_text(errors, encoding="utf-8")
+                result = run_behavior_worker(worker_command, environment, app, root)
+                if result.returncode:
+                    raise RuntimeError(
+                        f"Command: {subprocess.list2cmdline(worker_command)}\n"
+                        f"Behavior worker exit {result.returncode}\n"
+                        f"stdout:\n{result.stdout[-14000:] or '<absent>'}\n"
+                        f"stderr:\n{result.stderr or '<absent>'}"
+                    )
+                try:
+                    status = app.wait(timeout=20)
+                except subprocess.TimeoutExpired as error:
+                    raise RuntimeError(
+                        "Owned app did not exit; " + startup_window_messages(app.pid)
+                    ) from error
+                if status:
+                    raise RuntimeError(f"The owned app exited with status {status}.")
+                stock_result = None
+                if args.case == "project-compatibility":
+                    stock_result = check_portable_audacity_projects(root, display, args.ffmpeg)
+                log.flush()
+                shows = re.findall(
+                    r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
+                    (root / "_app.log").read_text(encoding="utf-8", errors="replace"),
+                    re.MULTILINE,
+                )
+                assert shows, "No pre-show placement observations were recorded."
+                for _, x, y, w, h in shows:
+                    x, y, w, h = map(int, (x, y, w, h))
+                    assert left <= x and top <= y and x + w <= right and y + h <= bottom, (
+                        shows
+                    )
+                source = root / "source.mp4"
+                source_identity = None
+                if source.is_file():
+                    info = source.stat()
+                    source_identity = {
+                        "source": "generated:" + args.case,
+                        "bytes": info.st_size,
+                        "modified_ns": None,
+                    }
+                record = {
+                    "run": run_id,
+                    "case": args.case,
+                    "result": "passed",
+                    "version": version.strip(),
+                    "test_display": display,
+                    "pre_show_count": len(shows),
+                    "input": source_identity,
+                    "stock_audacity": stock_result,
+                    **identities,
+                }
+                observations = root / "_playback.json"
+                if observations.is_file():
+                    record["observations"] = json.loads(observations.read_text())
+                return record
+            finally:
+                if app.poll() is None:
+                    app.terminate()
+                    app.wait(timeout=20)
+                if profile_owner.is_file() and profile_owner.read_text() == str(
+                    args.work_root.resolve()
+                ):
+                    cache = profile / "_video-previews"
+                    if args.case == "preview" and cache.is_dir():
+                        if shared_cache.exists():
+                            shutil.rmtree(shared_cache)
+                        shutil.copytree(cache, shared_cache)
+                        cache_owner.write_text(cache_signature)
+                    shutil.rmtree(profile)
+
+
+    if args.reject_display or args.interrupt_cache:
+        retain_behavior_result(root.parent)
+        execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display))
+        return
+    result = run_native_check(
+        root.parent, args.case,
+        lambda: native_test_inputs(args, executable, module, display), execute)
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":
