@@ -98,7 +98,7 @@ public:
    uint64_t revision{};
    bool refreshing{}, refreshQueued{};
    explicit ProjectGroupPresentation(AudacityProject &owner) : project(owner) {
-      history = UndoManager::Get(project).Subscribe([this](const UndoRedoMessage &) { ++revision; Refresh(); });
+       history = UndoManager::Get(project).Subscribe([this](const UndoRedoMessage &) { ++revision; ScheduleRefresh(); });
       changes = TrackList::Get(project).Subscribe([this](const TrackListEvent &event) {
          if (event.mType == TrackListEvent::SELECTION_CHANGE || event.mType == TrackListEvent::RESIZING) return;
          ++revision;
@@ -132,7 +132,7 @@ public:
           }
        });
     }
-    bool Refresh() {
+    bool Refresh(bool arrange = true) {
        if (refreshing) return false;
       refreshing = true;
       struct Reset { bool &flag; ~Reset() { flag = false; } } reset{refreshing};
@@ -157,7 +157,7 @@ public:
       // Failed/unknown optional metadata must leave the audio accessible.
       // Ordinary Undo can temporarily expose an incomplete list; do not reorder
       // until restoration has finished adding its saved tracks.
-       const bool reordered = coherent && !ProjectHistory::Get(project).IsRestoringState() &&
+       const bool reordered = arrange && coherent && !ProjectHistory::Get(project).IsRestoringState() &&
           SetTrackOrder(project, TrackGroups::ArrangeGroupRows(rows));
       if (changed && !tracks.empty()) (*tracks.begin())->AdjustPositions();
        return reordered;
@@ -246,7 +246,7 @@ std::string TrackIdentity(const Track &track)
 }
 const std::string &MemberGroup(const Track &track) { return Member(const_cast<Track&>(track)).group; }
 bool IsTrackHidden(const Track &track) { return Member(const_cast<Track&>(track)).hidden; }
-void RefreshTrackGroupProjection(AudacityProject &project) { Presentation(project).Refresh(); }
+void RefreshTrackGroupProjection(AudacityProject &project) { Presentation(project).Refresh(false); }
 uint64_t TrackGroupRevision(AudacityProject &project) { return Presentation(project).revision; }
 AuTopsyTrackGroup *FindTrackGroup(AudacityProject &project, const std::string &id)
 {

@@ -657,7 +657,7 @@ def check_preview_navigation(client, root, ffmpeg):
     from ctypes import wintypes as w
 
     # The 120-fps source forces a 30-fps lightweight proxy. One blue source frame
-    # among each four red frames makes a missed paused frame step observable in
+    # in each four-frame block makes a missed paused frame step observable in
     # actual displayed pixels, independently of its timecode label.
     source = root / "_frame-navigation.mp4"
     run_process([
