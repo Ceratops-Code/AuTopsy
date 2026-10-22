@@ -335,8 +335,18 @@ public:
       const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(FindTrack());
       if (!track || !project) return {};
       const auto &view = ViewInfo::Get(*project);
-      const auto time = view.PositionToTime(state.state.GetX(),state.rect.x);
-      const auto *clip = ClipAt(track->Timeline(),time);
+      const auto pointer = state.state.GetX();
+      const Clip *clip{};
+      // Painting rounds each boundary to a pixel. Converting that pixel back
+      // to time can fall before a split and select the other clip's edge.
+      // Use the same half-open pixel ranges as Draw, so the shared seam
+      // belongs to the right clip even at fractional zoom and scroll offsets.
+      for (const auto &candidate : track->Timeline().clips)
+         if (view.TimeToPosition(candidate.start, state.rect.x) <= pointer &&
+             pointer < view.TimeToPosition(candidate.End(), state.rect.x)) {
+            clip = &candidate;
+            break;
+         }
       if (state.state.RightIsDown())
          return {AssignUIHandlePtr(mClipHandle, std::make_shared<VideoClipHandle>(
             track, std::static_pointer_cast<VideoTrackView>(shared_from_this()),

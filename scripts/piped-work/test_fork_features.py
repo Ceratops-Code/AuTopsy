@@ -51,6 +51,44 @@ from run_fork_test_harness import (
 )
 
 
+def check_split_video_edges(client, root, linked):
+    """A split seam must trim the right clip, including its linked soundtrack."""
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    client.file("ImportVideo", root / "source.mp4")
+    if not linked:
+        client.send('UnlinkMediaClips: Clips="0:0"')
+    client.send("FitInWindow")
+    view = client.data("GetInfo: Type=View Format=JSON")
+    # Prefer a seam whose painted pixel falls before its exact source time.
+    at = next((frame / 30 for frame in range(30, 90)
+               if 0.02 < ((frame / 30 - view["horizontalStart"]) * view["pixelsPerSecond"]) % 1 < 0.48), 2)
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send(f"SelectTime: Start={at} End={at}")
+    client.send("Split")
+    original = client.data("GetLinkedMediaClips")
+    video = client.data("GetVideoClips")
+    for _ in range(2):
+        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True)
+        assert client.data("GetLinkedMediaClips") == original
+        operate_owned_video_track(client, at, at + 0.5, track=0)
+        trimmed = client.data("GetLinkedMediaClips")
+        assert len(trimmed) == len(original), trimmed
+        for before, after in zip(original, trimmed):
+            start = before["start"] + (0.5 if before["clip"] == 1 and (linked or before["kind"] == "video") else 0)
+            assert abs(after["start"] - start) < 0.04 and after["end"] == before["end"], trimmed
+        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True)
+        assert client.data("GetLinkedMediaClips") == trimmed
+        operate_owned_video_track(client, at + 0.5, at, track=0)
+        assert client.data("GetLinkedMediaClips") == original
+        assert client.data("GetVideoClips") == video
+        client.send("Undo")
+        assert client.data("GetLinkedMediaClips") == trimmed
+        client.send("Redo")
+        assert client.data("GetLinkedMediaClips") == original
+    client.file("SaveProject2", root / "_split-video-edges.aup3")
+
+
 def check_groups(client, root):
     for name in ("tone-a.wav", "tone-b.wav"):
         client.file("Import2", root / name)
@@ -933,6 +971,8 @@ def worker(args, root):
         check_video(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in ("video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu"):
         check_video_interactions(client, root, args.case)
+        if args.case in ("video-edges", "video-linked-edges"):
+            check_split_video_edges(client, root, args.case == "video-linked-edges")
     elif args.case == "media":
         check_media(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "branding":
