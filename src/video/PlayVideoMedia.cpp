@@ -53,6 +53,7 @@ public:
    decltype(&mpv_set_option) typedOption{};
    decltype(&mpv_get_property) get{};
    decltype(&mpv_set_property) set{};
+   decltype(&mpv_set_property_string) setPropertyString{};
    decltype(&mpv_command) command{};
    decltype(&mpv_wait_event) wait{};
    decltype(&mpv_error_string) error{};
@@ -76,6 +77,7 @@ public:
       typedOption = Symbol<decltype(typedOption)>("mpv_set_option");
       get = Symbol<decltype(get)>("mpv_get_property");
       set = Symbol<decltype(set)>("mpv_set_property");
+      setPropertyString = Symbol<decltype(setPropertyString)>("mpv_set_property_string");
       command = Symbol<decltype(command)>("mpv_command");
       wait = Symbol<decltype(wait)>("mpv_wait_event");
       error = Symbol<decltype(error)>("mpv_error_string");
@@ -122,7 +124,9 @@ class VideoMediaPlayer::Impl final {
             "+" + std::to_string(rect.x) + "+" + std::to_string(rect.y);
       }
       if (geometry == mAppliedCrop) return true;
-      mApi.Check(mApi.set(mHandle.get(), "video-crop", MPV_FORMAT_STRING, geometry.data()),
+      // The typed string API expects a pointer to a string pointer. Use the
+      // dedicated setter so crop geometry always crosses the DLL as a C string.
+      mApi.Check(mApi.setPropertyString(mHandle.get(), "video-crop", geometry.c_str()),
          "Applying picture crop");
       mAppliedCrop = geometry;
       return true;
@@ -212,8 +216,7 @@ public:
       ReadEvents();
       SetPaused(true);
       if (!mAppliedCrop.empty() && mAppliedCrop != "0x0") {
-         char full[] = "0x0";
-         mApi.Check(mApi.set(mHandle.get(), "video-crop", MPV_FORMAT_STRING, full),
+         mApi.Check(mApi.setPropertyString(mHandle.get(), "video-crop", "0x0"),
             "Clearing the previous picture crop");
       }
       mAppliedCrop.clear();

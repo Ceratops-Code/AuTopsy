@@ -184,6 +184,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe):
     run_process([ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i", recipe,
                  "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=4",
                  "-c:v", "mpeg4", "-q:v", "2", "-c:a", "aac", "-shortest", str(source)], timeout=30)
+    print("crop: importing generated neutral media", flush=True)
     client.file("ImportVideo", source)
     clip_id = client.data("GetVideoClips")["clips"][0]["id"]
     original_audio = client.data("GetInfo: Type=Clips Format=JSON")
@@ -195,6 +196,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe):
         client.send(f'SetVideoClipCrop: Id="{clip_id}" Track=0 Left={left} Top={top} Right={right} Bottom={bottom}')
 
     set_crop(left=0.123456789)
+    print("crop: native dialog, reset and history", flush=True)
     for commit, reset in ((False, True), (True, False)):
         before = margins()
         crop_dialog_roundtrip(client, commit, reset)
@@ -217,6 +219,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe):
     client.send(f'SetVideoClipCrop: Id="{clip_id}" Track=0 Left=0.5 Right=0.5', success=False)
     assert margins() == before
     client.send("ShowVideoPreview")
+    print("crop: rendered preview and export pixels", flush=True)
     expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
 
     def export_pixels(name, expected):
@@ -235,6 +238,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe):
         export_pixels("cropped.mp4", {"green", "white"})
     assert client.data("GetInfo: Type=Clips Format=JSON") == original_audio
     set_crop(top=0.5)
+    print("crop: saved projects and compound clips", flush=True)
     saved = root / "cropped.aup3"
     save_reopen(client, saved)
     assert margins()["top"] == 0.5
@@ -256,6 +260,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe):
     assert len(rows) == 2 and all(row["crop"]["left"] == 0.5 and row["crop"]["top"] == 0.5 for row in rows), rows
 
     rotated = root / "rotated.mp4"
+    print("crop: rotated source preview and export", flush=True)
     run_process([ffmpeg, "-v", "error", "-display_rotation:v:0", "90", "-i", str(source),
                  "-map", "0", "-c", "copy", str(rotated)], timeout=30)
     client.send("SelectAll")
