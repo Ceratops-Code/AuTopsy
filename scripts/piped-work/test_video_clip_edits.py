@@ -116,7 +116,7 @@ def crop_dialog_roundtrip(client, commit, reset=False):
     user.SetForegroundWindow.argtypes = [ctypes.c_void_p]
     user.GetForegroundWindow.restype = ctypes.c_void_p
     errors = []
-    reset_fields = []
+    reset_fields: list[str] = []
 
     def open_menu():
         try:
