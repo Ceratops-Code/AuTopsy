@@ -489,7 +489,7 @@ Signing is a separate service approval and is not claimed by this job.
 
 The `deliverables.packages.windows-installer.actions.publish` operation consumes
 the existing accepted installer and `_build-manifest.json` from
-`AUTOPSY_VIDEO_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
+`AUTOPSY_INSTALLER_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
 to select the preview tag and a local UTF-8 notes file. The tag names the original
 build revision, including when later test/documentation commits have advanced
 main. The operation creates a draft only when needed, uploads just those two
@@ -497,6 +497,8 @@ accepted files, checks GitHub's asset digests, then makes the preview public.
 Repeated calls inspect live release state and perform only missing effects;
 conflicting tags/assets stop publication. It preserves the original build
 acceptance and does not compile or install an application.
+The installer directory setting is independent of the native test-session
+settings; selecting a package for publication does not schedule desktop tests.
 
 Every new installer build runs `fork-fixtures` after compilation and before
 packaging, without opening AuTopsy. The build manifest records its passing result
