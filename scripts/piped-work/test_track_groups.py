@@ -250,7 +250,7 @@ def check_track_groups(client, root):
     saved = root / "_group-roundtrip.aup3"
     save_reopen(client, saved)
     info, group = read_group(client, group_id)
-    assert group["collapsed"] and {row["id"] for row in info["tracks"] if row["group"] == group_id} == members
+    assert group["collapsed"] and {row["id"] for row in info["tracks"] if row["group"] == group_id} == members, info
     assert all(row["height"] == 0 for row in info["tracks"] if row["group"] == group_id)
     _, group = settled_summary(client, group_id)
     assert group["maximum"] > 0.4, group

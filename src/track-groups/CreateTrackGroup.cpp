@@ -34,10 +34,10 @@ struct GroupMemberAttachment final : TrackAttachment {
       copy.id = id; copy.group = group; copy.hidden = false;
    }
    void WriteXMLAttributes(XMLWriter &writer) const override {
-      const auto parent = track.lock();
-      const auto owner = parent ? parent->GetOwner() : nullptr;
-      auto *project = owner ? owner->GetOwner() : nullptr;
-      if (group.empty() || !project || !TrackGroups::FindTrackGroup(*project, group)) return;
+       // Saved history snapshots have no live project owner. Persist the owned
+       // values without consulting live tracks; projection already leaves any
+       // orphaned membership visible when its optional header is absent.
+       if (group.empty()) return;
       writer.WriteAttr("autopsyTrackIdentity", wxString::FromUTF8(id));
       writer.WriteAttr("autopsyTrackGroup", wxString::FromUTF8(group));
    }
