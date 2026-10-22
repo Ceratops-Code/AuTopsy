@@ -76,11 +76,32 @@ def check_video_clip_structure(client, root, linked):
             assert len(audio) == 2, audio
             assert abs(audio[0]["end"] - audio[0]["start"]) < 1e-6, audio
             assert abs(audio[1]["start"] - 5) < 0.04, audio
+            track = client.data("GetInfo: Type=Tracks Format=JSON")[1]
+            assert abs(track["start"] - 5) < 0.04, track
         save_reopen(client, root / f"_hidden-joined-{repeat}.aup3")
         assert client.data("GetLinkedMediaClips") == trimmed
         operate_owned_video_track(client, 5, 2, track=0, cancel=True)
         assert client.data("GetLinkedMediaClips") == trimmed
         operate_owned_video_track(client, 5, 2, track=0)
+        assert client.data("GetLinkedMediaClips") == moved
+        client.send("Undo")
+        assert client.data("GetLinkedMediaClips") == trimmed
+        client.send("Redo")
+        assert client.data("GetLinkedMediaClips") == moved
+    for repeat in range(2):
+        operate_owned_video_track(client, 6, 3, track=0, cancel=True)
+        assert client.data("GetLinkedMediaClips") == moved
+        operate_owned_video_track(client, 6, 3, track=0)
+        trimmed = client.data("GetLinkedMediaClips")
+        assert abs(clip_rows(client)[0]["end"] - 3) < 0.04, trimmed
+        if linked:
+            track = client.data("GetInfo: Type=Tracks Format=JSON")[1]
+            assert abs(track["end"] - 3) < 0.04, track
+        save_reopen(client, root / f"_hidden-right-joined-{repeat}.aup3")
+        assert client.data("GetLinkedMediaClips") == trimmed
+        operate_owned_video_track(client, 3, 6, track=0, cancel=True)
+        assert client.data("GetLinkedMediaClips") == trimmed
+        operate_owned_video_track(client, 3, 6, track=0)
         assert client.data("GetLinkedMediaClips") == moved
         client.send("Undo")
         assert client.data("GetLinkedMediaClips") == trimmed

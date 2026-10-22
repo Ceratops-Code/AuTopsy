@@ -352,7 +352,9 @@ internal seam by an outer-edge delta. Fully hidden soundtrack pieces retain
 empty native play windows and their samples for untrim. The native WaveTrack
 discard policy now distinguishes an empty play window from empty sample storage
 during load cleanup, insertion and copy. This small audio-level change lets
-native history retain those samples without a parallel audio store.
+native history retain those samples without a parallel audio store. Empty play
+windows do not contribute to audio track start/end times, so retained samples
+cannot extend playback or move its beginning after a trim.
 Physical source edges
 retain encoder padding; internal cuts do not gain padding. Repeated occurrences
 of one soundtrack group are ambiguous for a trim and reject before publication.

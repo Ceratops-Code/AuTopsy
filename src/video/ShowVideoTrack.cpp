@@ -490,12 +490,18 @@ UIHandle::Result VideoClipHandle::Cancel(AudacityProject *)
    if (const auto view = mView.lock()) view->SetGhost({});
    mCandidate.reset(); return RefreshCode::RefreshAll;
 }
-UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &,AudacityProject *project,wxWindow *parent)
+UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,AudacityProject *project,wxWindow *parent)
 {
    const auto track = mTrack.lock();
    if (const auto view = mView.lock()) view->SetGhost({});
    if (!project || !track || track->GetOwner().get() != &TrackList::Get(*project)) return RefreshCode::RefreshAll;
    try {
+      if (!mContext && mEdge) {
+         // Windows can coalesce the last motion before mouse-up. Commit the
+         // released pointer position, rather than the last painted ghost.
+         Drag(event, project);
+         if (const auto view = mView.lock()) view->SetGhost({});
+      }
       if (mContext) {
          wxMenu menu;
          menu.Append(1,_("Cut")); menu.Append(2,_("Copy")); menu.Append(3,_("Paste"));
