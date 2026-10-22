@@ -1028,7 +1028,12 @@ def operate_owned_video_track(
         raise RuntimeError(f"Cannot reach owned native point {(x,y)}; actual={(native.x,native.y)}.")
 
     def button(flags):
-        packet = Input(0, Union(mouse=Mouse(0, 0, 0, flags, 0, 0)))
+        # Position and button transition share one OS event, so another mouse
+        # movement cannot turn a narrow edge press into a clip-header press.
+        left, top, width, height = (user.GetSystemMetrics(index) for index in (76, 77, 78, 79))
+        x = round((point.x - left) * 65535 / max(1, width - 1))
+        y = round((point.y - top) * 65535 / max(1, height - 1))
+        packet = Input(0, Union(mouse=Mouse(x, y, 0, flags | 0xC001, 0, 0)))
         if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
             raise RuntimeError("Windows rejected the owned test's mouse-button event.")
 
