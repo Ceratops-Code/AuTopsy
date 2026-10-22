@@ -170,6 +170,114 @@ def check_video_transport(client, root):
     client.file("SaveProject2", root / "_transport-second.aup3")
 
 
+def check_video_speed(client, root, ffmpeg, ffprobe):
+    """Retiming is one native edit across linked media, storage and rendering."""
+    client.file("ImportVideo", root / "source.mp4")
+    video = clip_rows(client)[0]
+    track, clip_id = video["track"], video["id"]
+    client.send(f'AddClipMarker: Track={track} At=1.5 Text="Speed flag" Id="' + "a" * 32 + '"')
+
+    def change(speed, success=True):
+        zoom = client.data("GetInfo: Type=View Format=JSON")["pixelsPerSecond"]
+        reply = client.send(f'SetVideoClipSpeed: Track={track} Id="{clip_id}" Speed={speed}', success=success)
+        assert client.data("GetInfo: Type=View Format=JSON")["pixelsPerSecond"] == zoom
+        return reply
+
+    def media():
+        return client.data("GetLinkedMediaClips")
+
+    def check_speed(speed):
+        row = next(row for row in clip_rows(client) if row["id"] == clip_id and row["track"] == track)
+        assert abs(row["playbackRate"] - speed) < 1e-9, row
+        assert abs(row["end"] - 4 / speed) < 0.001, row
+        audio = [row for row in media() if row["kind"] == "audio"]
+        assert audio and all(abs(row["start"]) < 0.001 and abs(row["end"] - 4 / speed) < 0.05 for row in audio), audio
+        flag = next(row for row in client.data("GetClipMarkers") if row["id"] == "a" * 32)
+        assert abs(flag["time"] - 1.5 / speed) < 1e-8 and flag["visible"], flag
+
+    for _ in range(2):
+        change(2)
+        check_speed(2)
+        accepted = media(), clip_rows(client)
+        change(2)
+        assert (media(), clip_rows(client)) == accepted
+        client.send("Undo")
+        check_speed(1)
+        client.send("Redo")
+        check_speed(2)
+        client.send("SelectTime: Start=0 End=0")
+        info, buttons = owned_preview_controls(client)
+        press_preview_button(buttons["play"])
+        wait_for_native_state(lambda info=info: preview_project_seconds(int(info["previewStatusHandle"])) > 0.65,
+                              "retimed preview advancing on the project clock")
+        press_preview_button(buttons["stop"])
+        samples = [row for row in client.data("GetVideoPreviewInfo")["samples"] if row["audioPosition"] > 0.2]
+        assert len(samples) >= 3, samples
+        assert all(abs(row["speed"] - 2) < 0.001 for row in samples), samples
+        assert max(abs(row["position"] - row["expectedPosition"]) for row in samples) < 0.15, samples
+        change(1)
+        check_speed(1)
+
+    # A separately copied soundtrack piece blocks expansion. Rejection must
+    # leave both media types untouched and must not create an Undo entry.
+    before = media(), clip_rows(client)
+    audio_track = next(row["track"] for row in before[0] if row["kind"] == "audio")
+    select_clip_range(client, 0, 4, audio_track)
+    client.send("Copy")
+    client.send("SelectTime: Start=5 End=5")
+    client.send("Paste")
+    blocked = media(), clip_rows(client)
+    change(0.5, success=False)
+    assert (media(), clip_rows(client)) == blocked
+    client.send("Undo")
+    assert (media(), clip_rows(client)) == before
+
+    change(0.5)
+    check_speed(0.5)
+    saved = media(), clip_rows(client), client.data("GetClipMarkers")
+    save_reopen(client, root / "_speed.aup3")
+    assert (media(), clip_rows(client), client.data("GetClipMarkers")) == saved
+    output = root / "_half-speed.mp4"
+    client.file("ExportVideoMix", output, 'Preset="h264" Width=160 Height=90 FrameRate=30 Quality=18')
+    metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-of", "json", str(output)], timeout=30))
+    assert abs(float(metadata["format"]["duration"]) - 8) < 0.1, metadata
+    for when, color in ((1, "red"), (5, "blue")):
+        pixel = run_process([ffmpeg, "-v", "error", "-ss", str(when), "-i", str(output), "-frames:v", "1",
+                             "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
+        assert len(pixel) == 3, pixel
+        red, green, blue = pixel
+        assert red > 180 and green < 30 and blue < 30 if color == "red" else blue > 180 and red < 30 and green < 30, (color, pixel)
+    import array
+
+    pcm_samples = array.array("h", run_process([ffmpeg, "-v", "error", "-ss", "1", "-i", str(output), "-t", "1",
+                                          "-map", "0:a:0", "-f", "s16le", "-ac", "1", "-ar", "8000", "pipe:1"], timeout=30))
+    assert pcm_samples and max(abs(value) for value in pcm_samples) > 100
+    crossings = sum(left <= 0 < right for left, right in zip(pcm_samples, pcm_samples[1:], strict=False))
+    assert abs(crossings * 8000 / len(pcm_samples) - 440) < 20, crossings
+
+    change(2)
+    client.send("FitInWindow")
+    view = client.data("GetInfo: Type=View Format=JSON")
+    seam = next((frame / 60 for frame in range(30, 90)
+                 if 0.02 < ((frame / 60 - view["horizontalStart"]) * view["pixelsPerSecond"]) % 1 < 0.48), 1)
+    select_clip_range(client, seam, seam, track)
+    client.send("Split")
+    split = media(), clip_rows(client)
+    for _ in range(2):
+        operate_owned_video_track(client, seam, seam + 0.25, track=track, cancel=True)
+        assert (media(), clip_rows(client)) == split
+        operate_owned_video_track(client, seam, seam + 0.25, track=track)
+        right = next(row for row in clip_rows(client) if row["start"] > seam)
+        assert abs(right["start"] - seam - 0.25) < 0.025 and right["playbackRate"] == 2, right
+        operate_owned_video_track(client, seam + 0.25, seam, track=track)
+        assert (media(), clip_rows(client)) == split
+    select_clip_range(client, 0, 2, track)
+    client.send("HealVideoSplit")
+    client.send("SeparateVideoClips")
+    assert all(row["playbackRate"] == 2 for row in clip_rows(client))
+    save_reopen(client, root / "_retimed-split.aup3")
+
+
 def check_video_visibility(client, root, ffmpeg, ffprobe):
     """Track buttons, native history/storage and decoded export share visibility."""
     source, other = root / "source.mp4", root / "other-source.mp4"

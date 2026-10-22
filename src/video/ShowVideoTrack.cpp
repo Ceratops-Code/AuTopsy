@@ -40,6 +40,7 @@
 #include <wx/filename.h>
 #include <wx/image.h>
 #include <wx/menu.h>
+#include <wx/textdlg.h>
 #include <wx/msgdlg.h>
 #include <algorithm>
 #include <cmath>
@@ -417,7 +418,7 @@ public:
             for (; cell < right; cell += FrameWidth) {
                const auto time = std::clamp(view.PositionToTime(cell+FrameWidth/2,rect.x),
                   clip.start, std::nextafter(clip.End(), clip.start));
-               const auto sample = SampleVideoContent(clip, source, clip.sourceStart + time - clip.start);
+               const auto sample = SampleVideoContent(clip, source, clip.ContentTimeAtProjectTime(time));
                if (sample) {
                   auto &frames = Frames(sample.source,&ProjectWindow::Get(*project)).frames;
                   if (!frames.empty()) {
@@ -436,12 +437,14 @@ public:
          dc.SetPen(wxPen(selected ? wxColour(252,211,90) : wxColour(111,155,187),selected ? 2 : 1));
          dc.SetBrush(*wxTRANSPARENT_BRUSH); dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
          dc.SetTextForeground(*wxWHITE);
-         dc.DrawText(clip.content ? wxString::Format(_("Joined video (%zu pieces)"), clip.content->parts.size())
-            : wxFileName(wxString::FromUTF8(source.path)).GetFullName(),left+5,rect.y+5);
+         auto title = clip.content ? wxString::Format(_("Joined video (%zu pieces)"), clip.content->parts.size())
+             : wxFileName(wxString::FromUTF8(source.path)).GetFullName();
+         if (clip.playbackRate != 1) title = wxString::Format("%.8g%%  ", clip.playbackRate * 100) + title;
+         dc.DrawText(title,left+5,rect.y+5);
          {
             wxDCClipper clipFlags{dc, wxRect{left, rect.y, right-left, 24}};
             ClipMarkers::DrawClipMarkerFlags(dc, rect, view, clip.markers,
-               clip.start - clip.sourceStart, 1, clip.start, clip.End());
+               clip.ProjectTimeAtContentTime(0), 1 / clip.playbackRate, clip.start, clip.End());
          }
          dc.DestroyClippingRegion();
       }
@@ -513,6 +516,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(6,_("Trim to Selection"));
          menu.AppendSeparator(); menu.Append(7,_("Heal Split")); menu.Append(8,_("Join"));
          menu.Append(9,_("Separate Joined Clip"));
+         menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, mId != 0);
          for (int id : {7, 8, 9}) menu.Enable(id, mId != 0);
          for (int id : {1, 2, 4, 5, 6})
             menu.Enable(id, !ViewInfo::Get(*project).selectedRegion.isPoint());
@@ -530,6 +534,18 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
                [&](const auto &clip) { return clip.id == mId; });
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],mId,found->start);
+         }
+         else if (choice == 10) {
+            const auto found = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
+               [&](const auto &clip) { return clip.id == mId; });
+            if (found == track->Timeline().clips.end()) throw std::runtime_error("The video clip was removed.");
+            wxTextEntryDialog dialog{parent, _("Speed (%; 100 is normal). Linked media changes together."),
+               _("Video Clip Speed"), wxString::Format("%.8g", found->playbackRate * 100)};
+            if (dialog.ShowModal() == wxID_OK) {
+               double percent{};
+               if (!dialog.GetValue().ToDouble(&percent)) throw std::runtime_error("Enter a numeric speed percentage.");
+               ClipGroups::ChangeLinkedVideoClipSpeed(*project, *track, mId, percent / 100);
+            }
          }
          else if (choice >= 7 && choice <= 9) {
             const VideoEditing::VideoEditKind kinds[]{VideoEditing::VideoEditKind::HealClips,

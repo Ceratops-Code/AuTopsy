@@ -372,7 +372,7 @@ class VideoPreviewFrame final : public wxFrame {
    bool mSourceHasAudio{}, mDurationChecked{};
    struct PlaybackSample {
       double audio, video, dropped, decoderDropped; bool paused;
-      double expected{}; std::string source;
+      double expected{}; std::string source; double speed{1};
    };
    std::deque<PlaybackSample> mPlaybackSamples;
    long mLastSampleTime{};
@@ -453,6 +453,7 @@ class VideoPreviewFrame final : public wxFrame {
          }
          if (picturePosition.visible) {
             auto picture = transport; picture.position = picturePosition.sourceTime;
+            picture.speed *= picturePosition.playbackRate;
              VideoPreview::SynchronizeVideoPlayback(*mPlayer,picture,mPreciseFrames);
          }
          else if (!mPlayer->ReadState().paused) mPlayer->SetPaused(true);
@@ -460,7 +461,7 @@ class VideoPreviewFrame final : public wxFrame {
           if (transport.playing && video.ready && mPlaybackSampleClock.Time() - mLastSampleTime >= 100) {
             mPlaybackSamples.push_back({transport.position, video.position,
                mPlayer->Property("frame-drop-count"), mPlayer->Property("decoder-frame-drop-count"),
-               video.paused, picturePosition.sourceTime, picturePosition.source.path});
+               video.paused, picturePosition.sourceTime, picturePosition.source.path, video.speed});
             if (mPlaybackSamples.size() > 256) mPlaybackSamples.pop_front();
              mLastSampleTime = mPlaybackSampleClock.Time();
          }
@@ -718,7 +719,8 @@ void StepProjectVideoFrame(AudacityProject &project, int direction)
    if (!clip && direction < 0) clip = VideoTimeline::ClipAt(timeline, std::max(0.0, time - 1e-7));
    const auto rate = clip ? VideoTimeline::SourceFor(timeline, *clip).frameRate : timeline.frameRate;
    SetProjectVideoCursor(project, VideoPreview::AdjacentSourceFrame(time,
-      clip ? clip->start : 0, clip ? clip->sourceStart : 0, rate, direction));
+       clip ? clip->start : 0, clip ? clip->sourceStart : 0, rate, direction,
+       clip ? clip->playbackRate : 1));
 }
 
 void GoToProjectVideoTimecode(AudacityProject &project)
@@ -855,6 +857,7 @@ public:
          out.Key("audioPosition"); out.Double(sample.audio);
          out.Key("position"); out.Double(sample.video);
          out.Key("expectedPosition"); out.Double(sample.expected);
+         out.Key("speed"); out.Double(sample.speed);
          out.Key("source"); out.String(sample.source.c_str());
          out.Key("paused"); out.Bool(sample.paused);
          out.Key("droppedFrames"); out.Double(sample.dropped);

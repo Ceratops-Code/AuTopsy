@@ -381,7 +381,7 @@ bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    const auto &clips = track.Timeline().clips;
    const auto found = std::find_if(clips.begin(), clips.end(), [id](const auto &clip) { return clip.id == id; });
    if (found == clips.end()) throw std::runtime_error("Unknown video clip.");
-   const auto rate = VideoTimeline::VideoContentFrameRate(*found, VideoTimeline::SourceFor(track.Timeline(), *found));
+   const auto rate = VideoTimeline::VideoContentFrameRate(*found, VideoTimeline::SourceFor(track.Timeline(), *found)) * found->playbackRate;
    const auto desired = std::round(start * rate) / rate - found->start;
    if (std::abs(desired) < 1e-10) return false;
    auto shifter = MakeTrackShifter::Call(track, project);
@@ -398,6 +398,98 @@ bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    try {
       state.DoSlideHorizontal(desired);
       if (recordHistory) ProjectHistory::Get(project).PushState(XO("Moved linked media clips"), XO("Move Linked Clips"));
+   }
+   catch (...) { ProjectHistory::Get(project).RollbackState(); throw; }
+   return true;
+}
+bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &track,
+   unsigned long long id, double playbackRate)
+{
+   if (track.GetOwner().get() != &TrackList::Get(project))
+      throw std::runtime_error("The video track was removed while the speed dialog was open.");
+   if (ProjectAudioIO::Get(project).IsAudioActive())
+      throw std::runtime_error("Stop playback or recording before changing video speed.");
+   const auto &clips = track.Timeline().clips;
+   const auto anchor = std::find_if(clips.begin(), clips.end(), [id](const auto &clip) { return clip.id == id; });
+   if (anchor == clips.end()) throw std::runtime_error("The video clip was removed.");
+   const auto timing = VideoTimeline::PrepareVideoClipRetiming(*anchor, playbackRate);
+   if (std::abs(timing.timeScale - 1) < 1e-12) return false;
+   const auto selectedStart = anchor->start, selectedEnd = anchor->start + anchor->duration * timing.timeScale;
+   const auto choices = MediaChoices(project);
+   std::vector<bool> included(choices.size());
+   std::vector<std::vector<std::string>> ownGroups;
+   std::map<std::string, std::vector<size_t>> linked;
+   std::vector<size_t> pending;
+   for (size_t i{}; i < choices.size(); ++i) {
+      ownGroups.push_back(ChoiceGroups(choices[i]));
+      for (const auto &group : ownGroups.back()) linked[group].push_back(i);
+      if (choices[i].video == &track && choices[i].id == id) {
+         included[i] = true; pending.push_back(i);
+      }
+   }
+   // A joined clip may connect several soundtrack groups. Resolve that closure
+   // before making candidates so no linked member is left at its old speed.
+   std::set<std::string> expandedGroups;
+   for (size_t cursor{}; cursor < pending.size(); ++cursor)
+      for (const auto &group : ownGroups[pending[cursor]]) if (expandedGroups.insert(group).second)
+         for (const auto member : linked.at(group)) if (!included[member]) {
+            included[member] = true; pending.push_back(member);
+         }
+   std::map<AuTopsyVideoTrack*, VideoTimeline::Timeline> video;
+   std::map<WaveClip*, std::pair<double, double>> audio;
+   for (size_t i{}; i < choices.size(); ++i) if (included[i]) {
+      const auto &choice = choices[i];
+      if (choice.audio) {
+         const auto start = timing.ProjectTimeAfterRetiming(choice.start);
+         const auto end = timing.ProjectTimeAfterRetiming(choice.end);
+         const auto ratio = choice.audio->GetStretchRatio() * timing.timeScale;
+         if (!std::isfinite(start) || !std::isfinite(end) || start < 0 || end > 100000000 ||
+             !std::isfinite(ratio) || ratio < 0.01 || ratio > 100)
+            throw std::runtime_error("A linked audio clip cannot fit the requested speed.");
+         audio.emplace(choice.audio, std::make_pair(start, end));
+      }
+      else {
+         auto entry = video.find(choice.video);
+         if (entry == video.end()) entry = video.emplace(choice.video, choice.video->Timeline()).first;
+         auto &candidate = entry->second;
+         const auto part = std::find_if(candidate.clips.begin(), candidate.clips.end(),
+            [&](const auto &clip) { return clip.id == choice.id; });
+         if (part == candidate.clips.end()) throw std::runtime_error("A linked video clip was removed.");
+         *part = VideoTimeline::RetimeVideoClip(*part, VideoTimeline::SourceFor(candidate, *part), timing);
+      }
+   }
+   for (auto &entry : video) {
+      std::sort(entry.second.clips.begin(), entry.second.clips.end(),
+         [](const auto &a, const auto &b) { return a.start < b.start; });
+      VideoTimeline::RequireWellFormedTimeline(entry.second);
+   }
+   for (auto *audioTrack : TrackList::Get(project).Any<WaveTrack>()) {
+      std::vector<std::pair<double, double>> ranges;
+      for (const auto &clip : audioTrack->SortedIntervalArray()) {
+         const auto changed = audio.find(clip.get());
+         ranges.push_back(changed == audio.end()
+            ? std::make_pair(clip->GetPlayStartTime(), clip->GetPlayEndTime()) : changed->second);
+      }
+      std::sort(ranges.begin(), ranges.end());
+      double end = -1;
+      for (const auto &range : ranges) if (range.second > range.first) {
+         if (range.first < end - 1e-7)
+            throw std::runtime_error("The speed change would overlap another audio clip.");
+         end = range.second;
+      }
+   }
+   // All allocations, link closure and overlap checks precede the effects.
+   // The host owns stretching, pitch handling and rollback; media bytes and
+   // retained source windows are never copied into a second audio engine.
+   try {
+      for (auto &entry : video) entry.first->SetTimeline(std::move(entry.second));
+      for (const auto &entry : audio) {
+         entry.first->StretchBy(timing.timeScale);
+         entry.first->SetPlayStartTime(entry.second.first);
+      }
+      ViewInfo::Get(project).selectedRegion.setTimes(selectedStart, selectedEnd);
+      Viewport::Get(project).HandleResize();
+      ProjectHistory::Get(project).PushState(XO("Changed linked media speed"), XO("Change Clip Speed"));
    }
    catch (...) { ProjectHistory::Get(project).RollbackState(); throw; }
    return true;

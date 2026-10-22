@@ -78,6 +78,7 @@ struct ProjectPicture {
    MediaSource source;
    double sourceTime{};
    uint64_t clipId{};
+   double playbackRate{1};
 };
 ProjectPicture FindProjectPicture(AudacityProject &project, double time);
 bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &source,

@@ -24,7 +24,10 @@ struct Clip {
    // sourceStart is a window into content, or into media for a simple clip.
    // Snapshots share immutable content; editing a window never edits a sibling.
    std::shared_ptr<const VideoClipContent> content;
+   double playbackRate{1}; // Content seconds per second in the containing timeline.
    double End() const { return start + duration; }
+   double ContentTimeAtProjectTime(double at) const { return sourceStart + (at - start) * playbackRate; }
+   double ProjectTimeAtContentTime(double at) const { return start + (at - sourceStart) / playbackRate; }
 };
 struct VideoClipContent {
    double duration{}, frameRate{30.0};
@@ -36,6 +39,7 @@ struct VideoContentSample {
    const Clip *leaf{};
    MediaSource source;
    double sourceTime{};
+   double playbackRate{1}; // Product of the rates along the retained-content path.
    explicit operator bool() const { return leaf != nullptr; }
 };
 double VideoContentDuration(const Clip &clip, const MediaSource &fallback);
@@ -46,10 +50,19 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
 // nested source cuts. Used once per export plan, never rebuilt per video frame.
 std::vector<double> VideoContentEdges(const Clip &clip);
 std::vector<MediaSource> VideoContentSources(const Clip &clip, const MediaSource &fallback);
+struct VideoClipRetiming {
+   double anchor{}, timeScale{1};
+   double ProjectTimeAfterRetiming(double at) const { return anchor + (at - anchor) * timeScale; }
+};
+// Prepare one affine timing change for the complete linked group. Retained
+// content and flags stay in content coordinates; no media is rewritten.
+VideoClipRetiming PrepareVideoClipRetiming(const Clip &anchor, double playbackRate);
+Clip RetimeVideoClip(const Clip &clip, const MediaSource &fallback, const VideoClipRetiming &change);
 std::vector<std::string> VideoContentLinkGroups(const Clip &clip);
 struct VideoLinkWindow {
    std::string group;
    double start{}, end{}, sourceOrigin{}, sourceEnd{};
+   double playbackRate{1};
 };
 // Empty windows retain a fully trimmed linked soundtrack piece for untrim.
 std::vector<VideoLinkWindow> VideoContentLinkWindows(const Clip &clip);

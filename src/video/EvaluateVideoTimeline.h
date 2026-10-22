@@ -29,6 +29,7 @@ struct VideoFrameSample {
    double sourceTime{};
    VideoFrameCrop crop; // Fractions of oriented ORIGINAL source, before placement.
    VideoFrameRectangle rectangle; // Resolved canvas fractions; never proxy pixels.
+   double playbackRate{1};
 };
 struct VideoFramePlan {
    int canvasWidth{}, canvasHeight{};

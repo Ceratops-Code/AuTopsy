@@ -87,12 +87,12 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
          [&](const auto &value) { return value.clipId == clip->id; });
       if (appearance != style.clips.end() && appearance->muted) continue;
       const auto sample = VideoTimeline::SampleVideoContent(*clip, VideoTimeline::SourceFor(track.timeline, *clip),
-         clip->sourceStart + time - clip->start);
+         clip->ContentTimeAtProjectTime(time));
       if (!sample) continue;
       const auto rectangle = PlaceWithin(item.parent, style.rectangle);
       result.layers.push_back({track.id, clip->id, sample.source,
          sample.sourceTime,
-         appearance == style.clips.end() ? VideoFrameCrop{} : appearance->crop, rectangle});
+         appearance == style.clips.end() ? VideoFrameCrop{} : appearance->crop, rectangle, sample.playbackRate});
       // Lower roots are processed first. Children go above their own parent,
       // irrespective of where an upstream pane happens to display their rows.
       for (const auto child : children[item.index]) pending.push_back({child, rectangle});

@@ -13,6 +13,24 @@ VideoProjectSnapshot Project()
 VideoCompositionSettings Settings() { return {1920, 1080, 25}; }
 }
 
+TEST_CASE("Retimed picture plans and flat exports agree on source clocks", "[video-composition][video-speed]")
+{
+   auto project = Project();
+   auto &front = project.tracks[0].timeline;
+   VideoTimeline::MoveClipTo(front, 1, 2);
+   VideoTimeline::ChangeVideoClipSpeed(front, 1, 2);
+   const auto frame = EvaluateVideoTimeline(project, Settings(), 3.25);
+   REQUIRE(frame.layers.size() == 2);
+   REQUIRE(frame.layers.back().sourceTime == Approx(2.5));
+   REQUIRE(frame.layers.back().playbackRate == 2);
+   const auto flattened = VideoTimeline::ComposeVideoTracks({&front, &project.tracks[1].timeline});
+   const auto exported = VideoTimeline::EvaluateVideoLayers({&flattened}, 3.25);
+   REQUIRE(exported.source.path == frame.layers.back().source.path);
+   REQUIRE(exported.sourceTime == Approx(frame.layers.back().sourceTime));
+   REQUIRE(exported.playbackRate == frame.layers.back().playbackRate);
+   REQUIRE(EvaluateVideoTimeline(project, Settings(), 7.5).layers.size() == 1);
+}
+
 TEST_CASE("Composition retains lower layers and resolves source frames across gaps", "[video-composition]")
 {
    auto project = Project();

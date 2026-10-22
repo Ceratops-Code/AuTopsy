@@ -39,6 +39,8 @@ void LinkImportedMedia(AudacityProject &project, AuTopsyVideoTrack &picture,
    const std::vector<WaveTrack*> &audio);
 bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    unsigned long long id, double start, bool recordHistory);
+bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &track,
+   unsigned long long id, double playbackRate);
 void UpdateVideoGroupIds(AudacityProject &project,
    const std::vector<std::string> &oldGroups, const std::string &newGroup);
 // Called inside the native command's single Undo transaction. New right-hand

@@ -196,7 +196,8 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       VideoTimeline::Clip clip;
       if (!ReadAttribute(attributes, "id", clip.id) || !ReadAttribute(attributes, "start", clip.start) ||
           !ReadAttribute(attributes, "sourceStart", clip.sourceStart) ||
-          !ReadAttribute(attributes, "videoDuration", clip.duration)) return false;
+          !ReadAttribute(attributes, "videoDuration", clip.duration) ||
+          !ReadOptionalAttribute(attributes, "videoRate", clip.playbackRate)) return false;
       std::string_view markers;
       if (ReadAttribute(attributes, "clipMarkers", markers))
          clip.markers = ClipMarkers::DecodeMarkers(std::string(markers));
@@ -261,6 +262,7 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       if (!clip.markers.empty()) writer.WriteAttr("clipMarkers", wxString::FromUTF8(ClipMarkers::EncodeMarkers(clip.markers)));
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);
       writer.WriteAttr("videoDuration", clip.duration, 17);
+      if (clip.playbackRate != 1) writer.WriteAttr("videoRate", clip.playbackRate, 17);
       writer.WriteAttr("mediaSource", wxString::FromUTF8(source.path));
       writer.WriteAttr("mediaDuration", source.duration, 17); writer.WriteAttr("mediaFps", source.frameRate, 17);
       writer.WriteAttr("mediaWidth", source.width); writer.WriteAttr("mediaHeight", source.height);
@@ -324,7 +326,7 @@ ProjectPicture FindProjectPicture(AudacityProject &project, double time)
    const auto picture = EvaluateVideoLayers(GetProjectVisibleVideoLayers(project), time);
    if (!picture.clip) return {};
    return {true, picture.source,
-      picture.sourceTime, picture.clip->id};
+       picture.sourceTime, picture.clip->id, picture.playbackRate};
 }
 std::vector<const Timeline*> GetProjectVisibleVideoLayers(const AudacityProject &project)
 {

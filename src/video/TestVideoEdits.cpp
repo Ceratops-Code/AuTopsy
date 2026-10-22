@@ -15,6 +15,135 @@ VideoProjectSnapshot Project()
 }
 }
 
+TEST_CASE("Video speed retains source handles flags and split editability", "[video-edits][video-speed]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 12, 30);
+   MoveClipTo(timeline, 1, 3);
+   TrimVideoClip(timeline, 1, 5, 11);
+   timeline.clips[0].markers = {{std::string(32, 'a'), 6, "retained flag"}};
+   for (int repeat{}; repeat < 2; ++repeat) {
+      REQUIRE(ChangeVideoClipSpeed(timeline, 1, 2));
+      REQUIRE_FALSE(ChangeVideoClipSpeed(timeline, 1, 2));
+      REQUIRE(timeline.clips[0].duration == Approx(3));
+      REQUIRE(PictureAt(timeline, 5.5).sourceTime == Approx(3));
+      REQUIRE(timeline.clips[0].ProjectTimeAtContentTime(6) == Approx(7));
+      REQUIRE(SplitClipAt(timeline, 6));
+      REQUIRE(timeline.clips[1].sourceStart == Approx(4));
+      REQUIRE(timeline.clips[1].playbackRate == 2);
+      REQUIRE(HealVideoClips(timeline, 5, 8));
+      REQUIRE(timeline.clips[0].markers[0].position == 6);
+      REQUIRE(ChangeVideoClipSpeed(timeline, 1, 1));
+      REQUIRE(timeline.clips[0].start == 5);
+      REQUIRE(timeline.clips[0].sourceStart == 2);
+      REQUIRE(timeline.clips[0].duration == 6);
+   }
+   ChangeVideoClipSpeed(timeline, 1, 2);
+   REQUIRE(DragVideoClipEdge(timeline, 1, true, 4));
+   REQUIRE(timeline.clips[0].sourceStart == 0);
+   REQUIRE(DragVideoClipEdge(timeline, 1, false, 10));
+   REQUIRE(timeline.clips[0].duration == 6);
+   REQUIRE(timeline.clips[0].markers[0].position == 6);
+}
+
+TEST_CASE("Retimed clipboard and gap edits preserve content coordinates", "[video-edits][video-speed]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 8, 30);
+   ChangeVideoClipSpeed(timeline, 1, 2);
+   const auto copied = CopyVideoRange(timeline, 1, 3);
+   REQUIRE(copied.clips[0].sourceStart == 2);
+   REQUIRE(copied.clips[0].playbackRate == 2);
+   REQUIRE(PictureAt(copied, 0.5).sourceTime == Approx(3));
+   InsertVideoGap(timeline, 1, 1);
+   REQUIRE_FALSE(PictureAt(timeline, 1.5).visible);
+   REQUIRE(PictureAt(timeline, 2.25).sourceTime == Approx(2.5));
+   EraseVideoRange(timeline, 2, 2.5, true);
+   REQUIRE(PictureAt(timeline, 2.25).sourceTime == Approx(3.5));
+   Timeline pasted;
+   PasteVideoRange(pasted, 1, copied, 2);
+   REQUIRE(PictureAt(pasted, 1.5).sourceTime == Approx(3));
+}
+
+TEST_CASE("Retiming plans repeat across their single publication boundary", "[video-edits][video-speed]")
+{
+   using namespace VideoTimeline;
+   const VideoProjectSnapshot before{{{"rate", 4, CreateVideoTimeline("source.mp4", 8, 30)}}};
+   const std::vector<VideoEditRequest> request{{VideoEditKind::ChangeClipSpeed, "rate", 1, 0, 0, 2}};
+   for (bool after : {false, true}) {
+      auto current = before;
+      const auto plan = PlanVideoEdits(current, request);
+      try {
+         if (!after) throw std::runtime_error("interrupted before publication");
+         ApplyVideoEditPlan(current, plan);
+         throw std::runtime_error("interrupted after publication");
+      }
+      catch (const std::runtime_error &) {}
+      REQUIRE(ApplyVideoEditPlan(current, plan) ==
+         (after ? VideoEditApplication::AlreadyApplied : VideoEditApplication::Applied));
+      REQUIRE(ApplyVideoEditPlan(current, plan) == VideoEditApplication::AlreadyApplied);
+      REQUIRE(current.tracks[0].timeline.clips[0].duration == 4);
+      REQUIRE(current.tracks[0].revision == 5);
+      REQUIRE(PlanVideoEdits(current, request).ChangedTrackIds().empty());
+   }
+}
+
+TEST_CASE("Invalid rates and collisions cannot publish a partial retiming", "[video-edits][video-speed]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("source.mp4", 8, 30);
+   SplitClipAt(timeline, 4);
+   const VideoProjectSnapshot before{{{"rate", 1, timeline}}};
+   for (double rate : {0.0, -1.0, 0.001, 101.0, std::numeric_limits<double>::infinity(),
+         std::numeric_limits<double>::quiet_NaN(), 0.5}) {
+      REQUIRE_THROWS(ChangeVideoClipSpeed(timeline, 1, rate));
+      REQUIRE(SameVideoProject(before, {{{"rate", 1, timeline}}}));
+   }
+}
+
+TEST_CASE("Mixed-speed joins flatten and separate without changing source samples", "[video-edits][video-speed]")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("red.mp4", 8, 30);
+   SplitClipAt(timeline, 4);
+   timeline.clips[0].linkGroup = std::string(32, 'a');
+   timeline.clips[0].markers = {{std::string(32, 'c'), 2, "red flag"}};
+   timeline.clips[1].media = {"blue.mp4", 8, 25};
+   timeline.clips[1].linkGroup = std::string(32, 'b');
+   timeline.clips[1].markers = {{std::string(32, 'd'), 6, "blue flag"}};
+   ChangeVideoClipSpeed(timeline, 1, 2);
+   ChangeVideoClipSpeed(timeline, 2, 0.5);
+   JoinVideoClips(timeline, 0, 12);
+   ChangeVideoClipSpeed(timeline, 1, 2);
+   REQUIRE(timeline.End() == 6);
+   const auto windows = VideoContentLinkWindows(timeline.clips[0]);
+   REQUIRE(windows.size() == 2);
+   REQUIRE(windows[0].playbackRate == 4);
+   REQUIRE(windows[1].playbackRate == 1);
+   REQUIRE(windows[1].start == 2);
+   REQUIRE(windows[1].end == 6);
+   struct Expected { double at; bool visible; std::string source; double time, rate; };
+   std::vector<Expected> expected;
+   for (double at : {0.25, 0.5, 1.5, 2.5, 3.0, 5.5}) {
+      const auto picture = EvaluateVideoLayers({&timeline}, at);
+      expected.push_back({at, picture.clip != nullptr, picture.source.path, picture.sourceTime, picture.playbackRate});
+   }
+   const auto flattened = ComposeVideoTracks({&timeline});
+   REQUIRE(SeparateVideoClips(timeline, 0, 6));
+   REQUIRE_FALSE(SeparateVideoClips(timeline, 0, 6));
+   REQUIRE(timeline.clips[0].ProjectTimeAtContentTime(2) == Approx(0.5));
+   REQUIRE(timeline.clips[1].ProjectTimeAtContentTime(6) == Approx(4));
+   const Timeline *variants[]{&flattened, &timeline};
+   for (const auto *variant : variants) for (const auto &item : expected) {
+      const auto actual = EvaluateVideoLayers({variant}, item.at);
+      REQUIRE(bool(actual.clip) == item.visible);
+      if (!item.visible) continue;
+      REQUIRE(actual.source.path == item.source);
+      REQUIRE(actual.sourceTime == Approx(item.time));
+      REQUIRE(actual.playbackRate == Approx(item.rate));
+   }
+}
+
 TEST_CASE("Heal Split removes only continuous compatible seams and is repeatable", "[video-edits][video-join]")
 {
    using namespace VideoTimeline;

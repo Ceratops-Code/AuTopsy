@@ -1,8 +1,8 @@
 # AuTopsy software design
 
 Status: current implementation plus target architecture. Native clips,
-Heal/Join/Separate, preview transport controls and flat-track video Mute/Solo are
-implemented in this branch. Crop and embedded-layer geometry remain independent
+Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
+per-clip speed are implemented in this branch. Crop and embedded-layer geometry remain independent
 foundations awaiting native controls, saved properties and pixel rendering.
 Other later operations remain targets until their delivery status says otherwise.
 Owner: AuTopsy maintainers.
@@ -137,7 +137,7 @@ interface cannot promise immunity to every future product requirement.
 | Decision | Status and reason | Alternative and tradeoff |
 | --- | --- | --- |
 | Owned editing kernel, native adapters | Target. Upstream pointers, track classes, XML hooks and commands stay at boundaries. | Reusing native audio clips as fake picture containers couples video to sample storage and audio-only transformations. |
-| Content separate from placement | Implemented for joins: immutable retained content and an independent visible window. Retiming remains planned. | A single media tuple cannot represent an editable multi-source join or preserve deleted interior gaps. |
+| Content separate from placement | Implemented for joins and affine retiming: immutable retained content and an independent visible window. | A single media tuple cannot represent an editable multi-source join or preserve deleted interior gaps. |
 | One edit plan and one native history transaction | Target. All linked members are checked before any visible change. | Separate per-track commands expose half-edited picture/sound on failure. |
 | One evaluation policy for preview/export | Simple and joined clips share source sampling, internal picture boundaries and flat-track Mute/Solo selection. Spatial composition still awaits native adoption. | Two visibility implementations drift when mute, solo and compounds are added. |
 | In-process kernel, isolated media workers | Selected. Transactions and the native audio clock stay synchronous; expensive media work can be replaced separately. | Network microservices increase deployment and partial-failure work without improving local editing. |
@@ -212,17 +212,34 @@ do not create empty scaffolding or an all-purpose feature manager.
 ## 6. Owned data model and persistence
 
 Clips have a track-local integer ID, project start, content-window start,
-duration, optional source override, link group and content-relative flags. An
+duration, playback rate, optional source override, link group and content-relative flags. An
 optional immutable `VideoClipContent` stores ordered child clips, retained source
 handles and transparent gaps. Simple clips use source seconds directly; joined
 clips use content seconds. Tracks own placements, a default source and visibility.
-The model remains
-limited to ordered non-overlapping, non-negative picture ranges at ordinary speed.
+The model remains limited to ordered non-overlapping, non-negative picture
+ranges. Playback rate is content seconds per project second, defaults to 1 and
+supports 0.01–100 including the effective product through nested joined content.
+Named project/content conversions are shared by trim, split, copy, join, flags,
+frame stepping, preview and export. Retiming changes the visible placement map;
+retained media and hidden source handles are immutable.
+
+`ChangeLinkedVideoClipSpeed` expands the saved link graph before mutation. It
+prepares every video replacement and checks every linked audio stretch, final
+position and collision before publication. One native history entry owns the
+whole edit; failure rolls it back and an unchanged rate adds no history entry.
+The adapter uses native `WaveClip::StretchBy` / `SetPlayStartTime`, preserving the
+host's audio pitch/stretch behavior. mpv receives the effective picture rate;
+FFmpeg uses matching source intervals and presentation timestamps. No rewritten
+media, proxy or recovery output is produced by this operation. Optional
+`videoRate` XML retains the rate; omitted attributes read as ordinary speed,
+and stock Audacity continues to skip the video extension. The named
+`fork-video-speed` and retimed `fork-project-compatibility` cases cover these
+native boundaries; host-free cases cover nested maps and atomic plans.
 
 The first planner uses transient `VideoProjectSnapshot` / `VideoTrackSnapshot`
 values: opaque track identity, revision, current timeline and optional
 parent identity. `PlanVideoEdits` prepares move, trim, split, removal, Heal Split,
-Join, Separate and bound-group movement batches without publishing. `ApplyVideoEditPlan` compares the complete
+Join, Separate, speed and bound-group movement batches without publishing. `ApplyVideoEditPlan` compares the complete
 expected state, allocates the completed replacement before its one nonthrowing
 swap, and treats an already-applied exact plan as a no-op. Stale states, collisions,
 invalid ranges and exhausted revisions reject the whole plan. Bound movements use

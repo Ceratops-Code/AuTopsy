@@ -99,16 +99,17 @@ inline double ParseFrameTimecode(const std::string &text, double rate)
 }
 
 inline double AdjacentSourceFrame(double projectTime, double clipStart,
-   double sourceStart, double rate, int direction)
+   double sourceStart, double rate, int direction, double playbackRate = 1)
 {
    if (!std::isfinite(projectTime) || !std::isfinite(clipStart) ||
        !std::isfinite(sourceStart) || !std::isfinite(rate) || rate < 1 || rate > 1000 ||
+       !std::isfinite(playbackRate) || playbackRate < 0.01 || playbackRate > 100 ||
        (direction != -1 && direction != 1))
       throw std::runtime_error("Choose the previous or next video frame.");
-   const auto frame = (projectTime - clipStart + sourceStart) * rate;
+   const auto frame = ((projectTime - clipStart) * playbackRate + sourceStart) * rate;
    const auto target = direction > 0 ? std::floor(frame + 1e-7) + 1
                                     : std::ceil(frame - 1e-7) - 1;
-   return std::max(0.0, clipStart - sourceStart + target / rate);
+   return std::max(0.0, clipStart + (target / rate - sourceStart) / playbackRate);
 }
 
 struct TransportSnapshot {

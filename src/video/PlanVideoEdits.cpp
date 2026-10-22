@@ -109,6 +109,8 @@ VideoEditPlan PlanVideoEdits(const VideoProjectSnapshot &project,
          VideoTimeline::JoinVideoClips(timeline, request.start, request.end); break;
       case VideoEditKind::SeparateClips:
          VideoTimeline::SeparateVideoClips(timeline, request.start, request.end); break;
+      case VideoEditKind::ChangeClipSpeed:
+         VideoTimeline::ChangeVideoClipSpeed(timeline, request.clipId, request.playbackRate); break;
       default:
          throw std::runtime_error("Unknown video edit operation.");
       }

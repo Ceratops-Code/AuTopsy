@@ -122,7 +122,10 @@ child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` dispatches the feature scenarios and owns result records.
 `test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate,
 transport-button, video Mute/Solo and multi-source rendering/relinking cases. Native result identities include this
-module when those cases run.
+module when those cases run. `fork-video-speed` covers linked retiming, repeat
+requests, Undo/Redo, canceled edge gestures, source handles, flags, joins, native
+audio pitch and decoded preview/export timing. Project interoperability includes
+a retimed joined clip and its stretched native audio.
 `fork-video-transport` covers the actual preview buttons, pause/resume, live
 picture mute, video-only playback and ownership between projects.
 `fork-video-visibility` covers track buttons and cancellation, Undo/Redo,
@@ -237,6 +240,12 @@ Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
 Splits and video moves snap to source frames. Linked splits create separate
 left and right groups, so moving the right pair leaves the left pair in place.
 Each paste or duplication creates an independent linked set.
+Right-click a video clip and choose **Change Clip Speed...** to enter a playback
+percentage (1–10000%). Its start stays fixed; linked video and audio retime
+together with the host's pitch-preserving audio stretch. Flags, hidden trim
+handles and joined content are retained. The clip header shows its percentage.
+An overlapping linked result is rejected without changing any clip. Undo/Redo,
+preview, frame stepping, saved projects and exports use the same time mapping.
 Unlink clips when synchronizing picture and sound independently. Tracks can be resized, reordered,
 scrolled, selected, renamed, and removed with the native controls.
 

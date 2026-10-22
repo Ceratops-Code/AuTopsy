@@ -104,6 +104,9 @@ TEST_CASE("Frame steps use source boundaries after moves and trims")
    REQUIRE(AdjacentSourceFrame(start + 1.0 / 60, start, source, 60, -1) == Approx(start));
    REQUIRE(AdjacentSourceFrame(start + 0.001, start, source, 60, -1) == Approx(start));
    REQUIRE(AdjacentSourceFrame(0, 0, 0, 30, -1) == 0);
+   REQUIRE(AdjacentSourceFrame(start, start, source, 60, 1, 2) == Approx(start + 1.0 / 120));
+   REQUIRE(AdjacentSourceFrame(start + 1.0 / 120, start, source, 60, -1, 2) == Approx(start));
+   REQUIRE_THROWS(AdjacentSourceFrame(start, start, source, 60, 1, 0));
    REQUIRE_THROWS(AdjacentSourceFrame(0, 0, 0, 30, 0));
 }
 

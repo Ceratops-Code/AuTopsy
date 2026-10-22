@@ -48,7 +48,7 @@ bool HealVideoClips(Timeline &timeline, double from, double to)
       auto part = timeline.clips[selected[i]];
       const auto other = SourceFor(timeline, part);
       if (std::abs(result.End() - part.start) > 1e-7 ||
-          std::abs(result.sourceStart + result.duration - part.sourceStart) > 1e-7 ||
+          std::abs(result.ContentTimeAtProjectTime(result.End()) - part.sourceStart) > 1e-7 ||
           source.path != other.path || source.duration != other.duration || source.frameRate != other.frameRate ||
           source.width != other.width || source.height != other.height)
          throw std::runtime_error("Heal Split needs touching pieces of continuous footage with compatible links. Use Join otherwise.");
@@ -82,20 +82,21 @@ bool JoinVideoClips(Timeline &timeline, double from, double to)
    const auto &first = timeline.clips[selected.front()], &last = timeline.clips[selected.back()];
    auto content = std::make_shared<VideoClipContent>();
    content->frameRate = VideoContentFrameRate(first, SourceFor(timeline, first));
-   const auto handle = first.sourceStart;
+   const auto handle = first.sourceStart / first.playbackRate;
    content->duration = handle + last.End() - first.start +
-      VideoContentDuration(last, SourceFor(timeline, last)) - last.sourceStart - last.duration;
+      (VideoContentDuration(last, SourceFor(timeline, last)) - last.sourceStart) / last.playbackRate - last.duration;
    Clip joined{first.id, first.start, handle, last.End() - first.start};
    joined.linkGroup = first.linkGroup;
    for (const auto index : selected) {
       auto part = timeline.clips[index]; part.media = SourceFor(timeline, part);
       part.start = handle + part.start - first.start;
       if (index == selected.front()) {
-         part.start -= part.sourceStart; part.duration += part.sourceStart; part.sourceStart = 0;
+         part.start -= part.sourceStart / part.playbackRate;
+         part.duration += part.sourceStart / part.playbackRate; part.sourceStart = 0;
       }
-      if (index == selected.back()) part.duration = VideoContentDuration(part, part.media) - part.sourceStart;
+      if (index == selected.back()) part.duration = (VideoContentDuration(part, part.media) - part.sourceStart) / part.playbackRate;
       for (auto marker : part.markers) {
-         marker.position += part.start - part.sourceStart;
+         marker.position = part.ProjectTimeAtContentTime(marker.position);
          if (marker.position >= part.start - 1e-7 && marker.position <= part.End() + 1e-7)
             AddMarker(joined.markers, std::move(marker));
       }
@@ -121,17 +122,18 @@ static bool SeparateOneLevel(Timeline &timeline, double from, double to)
          changed.clips.push_back(clip); continue;
       }
       any = true;
+      const auto windowEnd = clip.ContentTimeAtProjectTime(clip.End());
       if (std::none_of(clip.content->parts.begin(), clip.content->parts.end(), [&](const auto &part) {
-            return part.start < clip.sourceStart + clip.duration - 1e-7 && part.End() > clip.sourceStart + 1e-7; }))
+            return part.start < windowEnd - 1e-7 && part.End() > clip.sourceStart + 1e-7; }))
          throw std::runtime_error("This window contains only a gap. Untrim it to visible footage before separating.");
       for (const auto &marker : clip.markers)
-         if (marker.position >= clip.sourceStart && marker.position < clip.sourceStart + clip.duration &&
+         if (marker.position >= clip.sourceStart && marker.position < windowEnd &&
              std::none_of(clip.content->parts.begin(), clip.content->parts.end(), [&](const auto &part) {
                 return marker.position >= part.start && marker.position < part.End(); }))
             throw std::runtime_error("Move or remove flags inside a joined gap before separating it.");
       for (const auto &original : clip.content->parts) {
          const auto begin = std::max(original.start, clip.sourceStart);
-         const auto end = std::min(original.End(), clip.sourceStart + clip.duration);
+         const auto end = std::min(original.End(), windowEnd);
          if (end <= begin + 1e-7) continue;
          auto part = original;
          if (used.count(part.id)) part.id = changed.nextId++;
@@ -139,15 +141,17 @@ static bool SeparateOneLevel(Timeline &timeline, double from, double to)
          // Keep flags hidden by this child's original cuts. Visible/outer-handle
          // flags come from the parent, including edits made while it was joined.
          part.markers.erase(std::remove_if(part.markers.begin(), part.markers.end(), [&](const auto &marker) {
-            const auto at = original.start + marker.position - original.sourceStart;
+            const auto at = original.ProjectTimeAtContentTime(marker.position);
             return at >= original.start - 1e-7 && at <= original.End() + 1e-7;
          }), part.markers.end());
          for (auto marker : clip.markers)
             if (marker.position >= original.start - 1e-7 && marker.position <= original.End() + 1e-7) {
-               marker.position += original.sourceStart - original.start; AddMarker(part.markers, std::move(marker));
+               marker.position = original.ContentTimeAtProjectTime(marker.position); AddMarker(part.markers, std::move(marker));
             }
-         part.start = clip.start + begin - clip.sourceStart;
-         part.sourceStart += begin - original.start; part.duration = end - begin;
+         part.start = clip.ProjectTimeAtContentTime(begin);
+         part.sourceStart = original.ContentTimeAtProjectTime(begin);
+         part.duration = (end - begin) / clip.playbackRate;
+         part.playbackRate *= clip.playbackRate;
          changed.clips.push_back(std::move(part));
       }
    }
