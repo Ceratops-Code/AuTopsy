@@ -490,7 +490,7 @@ emitting sound. Repeating an already satisfied destination has no effect.
 at rest or while paused, and seek five seconds during playback; Shift forces
 five seconds. Up/Down use the native playback-gain commands, never track gain.
 Core cases cover absolute mapping and interruption on both sides of every seek
-effect. `fork-preview-navigation` exercises the native slider and queued keys;
+effect. `fork-preview-navigation` exercises the native slider and focused keys;
 live observations use its status label because configured scripting stops audio.
 
 Video track Mute/Solo uses the host's semantic button-row layout and ordinary

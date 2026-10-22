@@ -450,7 +450,7 @@ left/right offscreen edit cursors, playback and pause, preserving zoom, selectio
 audio content and history. It does not move the shared pointer or press shared
 keyboard keys.
 
-`fork-preview-navigation` exercises the real timeline and queued preview arrow
+`fork-preview-navigation` exercises the real timeline and focused preview arrow
 keys, canceled/repeated drags, frame steps, playback-volume changes, live seeks
 and paused seeks/resume. Both transport cases read the live preview status while
 playing; Audacity's configured scripting dispatch stops audio before returning

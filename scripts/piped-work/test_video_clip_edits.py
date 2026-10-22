@@ -641,7 +641,7 @@ def check_video_transport(client, root):
 
 
 def check_preview_navigation(client, root):
-    """Exercise queued preview keys and the real slider without live script queries.
+    """Exercise focused preview keys and the real slider without live script queries.
 
     The preview's status is the clock observer. Scripted commands would stop the
     stream before returning their data, so content/volume are read only at rest.
@@ -658,9 +658,29 @@ def check_preview_navigation(client, root):
     windows = PreviewNativeWindows()
     assert windows.owner(slider) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
     user = windows.api
-    user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-    user.MapVirtualKeyW.argtypes = [w.UINT, w.UINT]
-    user.MapVirtualKeyW.restype = w.UINT
+    class Mouse(ctypes.Structure):
+        _fields_ = [("x", w.LONG), ("y", w.LONG), ("data", w.DWORD), ("flags", w.DWORD),
+                    ("time", w.DWORD), ("extra", ctypes.c_size_t)]
+
+    class Keyboard(ctypes.Structure):
+        _fields_ = [("code", w.WORD), ("scan", w.WORD), ("flags", w.DWORD),
+                    ("time", w.DWORD), ("extra", ctypes.c_size_t)]
+
+    class Payload(ctypes.Union):
+        _fields_ = [("mouse", Mouse), ("keyboard", Keyboard)]
+
+    class Input(ctypes.Structure):
+        _fields_ = [("kind", w.DWORD), ("payload", Payload)]
+
+    user.SendInput.argtypes = [w.UINT, ctypes.POINTER(Input), ctypes.c_int]
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetCursorPos.argtypes = [ctypes.POINTER(w.POINT)]
+    user.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user.GetForegroundWindow.restype = w.HWND
+    user.WindowFromPoint.argtypes, user.WindowFromPoint.restype = [w.POINT], w.HWND
+    user.GetAsyncKeyState.argtypes, user.GetAsyncKeyState.restype = [ctypes.c_int], ctypes.c_short
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
 
     def message(handle, code, first=0, second=0):
         assert windows.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
@@ -670,11 +690,42 @@ def check_preview_navigation(client, root):
         return reply.value
 
     def key(value):
-        scan = user.MapVirtualKeyW(value, 0)
-        down = 1 | (scan << 16) | (1 << 24)
-        for code, flags in ((0x100, down), (0x101, down | (3 << 30))):
-            if not user.PostMessageW(slider, code, value, flags):
-                raise RuntimeError(f"Preview key {value} failed: {ctypes.WinError()}")
+        # wx routes CharHook through the focused window before dispatching a
+        # keyboard message. Posting to an unfocused control does not reproduce
+        # that path. A real click on the owned status label focuses the preview
+        # without changing its timeline or project, then real input uses that path.
+        assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), include_window=frame)
+        held = [code for code in (1, 2, 4, 0x10, 0x11, 0x12, 0x5B, 0x5C, value)
+                if user.GetAsyncKeyState(code) & 0x8000]
+        if held:
+            raise RuntimeError(f"Release shared input before preview key input: {held}")
+        previous_dpi = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        previous, bounds = w.POINT(), w.RECT()
+        user.GetCursorPos(ctypes.byref(previous))
+
+        def send(kind, payload):
+            event = Input(kind=kind, payload=payload)
+            if user.SendInput(1, ctypes.byref(event), ctypes.sizeof(event)) != 1:
+                raise RuntimeError(f"Preview input {value} failed: {ctypes.WinError()}")
+
+        try:
+            assert user.GetWindowRect(status, ctypes.byref(bounds))
+            point = w.POINT((bounds.left + bounds.right) // 2, (bounds.top + bounds.bottom) // 2)
+            assert user.SetCursorPos(point.x, point.y)
+            hit = user.WindowFromPoint(point)
+            assert hit and windows.owner(hit) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+            send(0, Payload(mouse=Mouse(flags=2)))
+            send(0, Payload(mouse=Mouse(flags=4)))
+            wait_for_native_state(lambda: user.GetForegroundWindow() == frame, "owned preview focus")
+            send(1, Payload(keyboard=Keyboard(code=value, flags=1)))
+            send(1, Payload(keyboard=Keyboard(code=value, flags=3)))
+            time.sleep(0.1)
+        finally:
+            send(1, Payload(keyboard=Keyboard(code=value, flags=3)))
+            send(0, Payload(mouse=Mouse(flags=4)))
+            user.SetCursorPos(previous.x, previous.y)
+            if previous_dpi:
+                user.SetThreadDpiAwarenessContext(previous_dpi)
 
     def seek(value, release=True):
         message(slider, 0x405, 1, value)  # TBM_SETPOS, real native slider state
