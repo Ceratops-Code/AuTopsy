@@ -278,3 +278,6 @@ def check_clip_selection(client, root):
                     "tiny_header": check_short_header_selection(client, root),
                     "video_migration": check_video_migration_selection(client, root)}
     (root / "_selection-observations.json").write_text(json.dumps(observations, indent=2), encoding="utf-8")
+    # The mixed case opened our saved fixture. Keep its later scenes saved too,
+    # so the worker's normal Close cannot wait for a user save/discard decision.
+    client.send("Save")
