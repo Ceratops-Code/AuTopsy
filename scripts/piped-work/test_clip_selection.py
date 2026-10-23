@@ -128,11 +128,15 @@ def check_mixed_selection(client, root):
     client.send("SelectAll")
     client.send("RemoveTracks")
     client.file("ImportVideo", root / "source.mp4")
-    video = client.data("GetVideoClips")["clips"][0]
-    video_track = video["track"]
+    client.send("SelectAll")
+    client.send("SelectTime: Start=2 End=2")
+    client.send("Split")
+    videos = client.data("GetVideoClips")["clips"]
+    assert len(videos) == 2, videos
+    video_track = videos[0]["track"]
     client.file("Import2", root / "tone-a.wav")
     clips = audio_clips(client)
-    assert len(clips) == 2, clips
+    assert len(clips) == 3, clips
     independent = clips[-1]["track"]
     place_audio(client, independent, 0.25, 1)
     client.send("FitInWindow")
@@ -140,32 +144,37 @@ def check_mixed_selection(client, root):
     before = audio_clips(client)
     painted_video_tracks(client)
     operate_owned_video_track(client, 1, track=video_track, gesture="click")
+    operate_owned_video_track(client, 3, track=video_track, gesture="click", control=True)
     audio_gesture(client, independent, 1.5, control=True)
     operate_owned_video_track(client, 1, 2, track=video_track)
     after = audio_clips(client)
-    delta = moved_set(before, after, {0, 1}, 1)
+    delta = moved_set(before, after, {0, 1, 2}, 1)
     pictures = client.data("GetVideoClips")["clips"]
-    assert abs(pictures[0]["start"] - video["start"] - delta) < 0.0001, (pictures, delta)
+    assert len(pictures) == len(videos)
+    assert all(abs(picture["start"] - video["start"] - delta) < 0.0001
+               for picture, video in zip(pictures, videos)), (pictures, delta)
     # Import's existing picture/sound link remains effective; the temporary
-    # selection adds a third clip without creating a persistent group for it.
+    # selection adds independent sound without creating a persistent group for it.
     groups = client.data("GetAudioClipGroups")
     assert groups[-1]["group"] == "", groups
     client.send("Undo")
     same_starts(audio_clips(client), before)
-    assert abs(client.data("GetVideoClips")["clips"][0]["start"] - video["start"]) < 0.0001
+    same_starts(client.data("GetVideoClips")["clips"], videos)
     client.send("Redo")
     same_starts(audio_clips(client), after)
     client.send("Undo")
     operate_owned_video_track(client, 1, track=video_track, gesture="click")
+    operate_owned_video_track(client, 3, track=video_track, gesture="click", control=True)
     audio_gesture(client, independent, 1.5, control=True)
     audio_gesture(client, independent, 1.5, 2.5, cancel=True)
     same_starts(audio_clips(client), before)
     # Move from an audio anchor as well as from the picture anchor, repeated
     # after cancellation. Both routes must keep the linked soundtrack in step.
-    operate_owned_video_track(client, 1, track=video_track, gesture="click")
-    audio_gesture(client, independent, 1.5, control=True)
+    audio_gesture(client, independent, 1.5)
+    operate_owned_video_track(client, 1, track=video_track, gesture="click", control=True)
+    operate_owned_video_track(client, 3, track=video_track, gesture="click", control=True)
     audio_gesture(client, independent, 1.5, 2.5)
-    moved_set(before, audio_clips(client), {0, 1}, 1)
+    moved_set(before, audio_clips(client), {0, 1, 2}, 1)
     save_reopen(client, root / "_temporary-selection.aup3")
     assert client.data("GetAudioClipGroups")[-1]["group"] == ""
     return {"linked_picture_sound_delta": delta}
