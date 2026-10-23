@@ -946,6 +946,12 @@ def operate_owned_video_track(
                         position_pointer(round(x0 + (x1-x0)*step/5), round(y0 + (y1-y0)*step/5))
                         time.sleep(0.04)
                     if cancel:
+                        # Ctrl+Escape belongs to Windows, not the owned pane.
+                        # Release only our Ctrl transition before canceling a
+                        # held drag, so Start/Search cannot steal the gesture.
+                        if control_pressed:
+                            set_control(False)
+                            control_pressed = False
                         keyboard(0x1B)
                 button(4)
                 pressed = False
@@ -987,7 +993,9 @@ def operate_owned_video_track(
             user.SetWindowPos(root, ctypes.c_void_p(-2), 0, 0, 0, 0, 0x13)
         for window in hidden:
             user.ShowWindow(window, 4)
-        if user.GetForegroundWindow() == root and foreground:
+        # A selected menu command may be creating a modal window after its
+        # popup disappears. Leave focus with the owned app for that handoff.
+        if user.GetForegroundWindow() == root and foreground and not (gesture == "context" and menu_path):
             user.SetForegroundWindow(foreground)
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
