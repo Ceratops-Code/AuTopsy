@@ -1,6 +1,7 @@
 // Dedicated composition geometry/eligibility cases, independent of pixel codecs.
 #include "EvaluateVideoTimeline.h"
 #include "RenderVideoComposition.h"
+#include "PlanVideoExport.h"
 #include "JoinVideoClips.h"
 #include <catch2/catch.hpp>
 #include <limits>
@@ -261,4 +262,53 @@ TEST_CASE("Oriented picture crops map to original and proxy decoded pixels", "[v
    REQUIRE(other.width == 80); REQUIRE(other.height == 45);
    REQUIRE_THROWS(CalculateVideoCropRectangle(crop, 0, 50, 0));
    REQUIRE_THROWS(CalculateVideoCropRectangle(crop, 100, 50, 45));
+}
+
+TEST_CASE("Automatic export canvas removes cropped margins rather than restoring them", "[video-composition][video-crop]")
+{
+   using VideoExport::CalculateVideoExportCanvas;
+   REQUIRE((CalculateVideoExportCanvas(720, 1280, {0, 0.2, 0, 0}) == std::pair<int, int>{720, 1024}));
+   REQUIRE((CalculateVideoExportCanvas(1920, 1080, {0.25, 0, 0.25, 0}) == std::pair<int, int>{960, 1080}));
+   REQUIRE((CalculateVideoExportCanvas(100, 50, {0.1, 0.2, 0.3, 0.1}) == std::pair<int, int>{60, 34}));
+   REQUIRE((CalculateVideoExportCanvas(1, 1, {}) == std::pair<int, int>{2, 2}));
+   REQUIRE_THROWS(CalculateVideoExportCanvas(720, 1280, {0.5, 0, 0.5, 0}));
+}
+
+TEST_CASE("Export spans share a global frame clock across cuts gaps and rate changes", "[video-composition][video-export-timing]")
+{
+   using namespace VideoTimeline;
+   for (const auto outputRate : {24.0, 30000.0 / 1001, 30.0, 60.0}) {
+      auto timeline = CreateVideoTimeline("clock.mp4", 10, 24000.0 / 1001);
+      for (int frame = 6; frame < 216; frame += 6) SplitClipAt(timeline, frame * 1001.0 / 24000);
+      const auto original = timeline;
+      for (int repeat = 0; repeat < 3; ++repeat) {
+         const auto plan = VideoExport::PlanVideoExportFrames(timeline, 10, outputRate);
+         int64_t cursor{};
+         for (const auto &span : plan) {
+            REQUIRE(span.firstFrame == cursor);
+            REQUIRE(span.frameCount > 0);
+            cursor += span.frameCount;
+            const auto clip = std::find_if(timeline.clips.begin(), timeline.clips.end(),
+               [&](const auto &value) { return value.id == span.clipId; });
+            REQUIRE(clip != timeline.clips.end());
+            REQUIRE(span.sourceStart == Approx(clip->ContentTimeAtProjectTime(span.firstFrame / outputRate)));
+         }
+         REQUIRE(cursor == static_cast<int64_t>(std::ceil(10 * outputRate - 1e-7)));
+         REQUIRE(timeline.clips.size() == original.clips.size());
+         REQUIRE(timeline.clips.back().start == original.clips.back().start);
+      }
+   }
+   auto timeline = CreateVideoTimeline("gap.mp4", 2, 30);
+   // Saved/mixed-rate project positions need not lie on the output frame grid.
+   timeline.clips[0].start = 0.25;
+   ChangeVideoClipSpeed(timeline, 1, 2);
+   const auto plan = VideoExport::PlanVideoExportFrames(timeline, 2, 30);
+   REQUIRE(plan.size() == 3);
+   REQUIRE(plan[0].clipId == 0); REQUIRE(plan[0].frameCount == 8);
+   REQUIRE(plan[1].firstFrame == 8); REQUIRE(plan[1].frameCount == 30);
+   REQUIRE(plan[1].sourceStart == Approx((8.0 / 30 - 0.25) * 2));
+   REQUIRE(plan[2].clipId == 0); REQUIRE(plan[2].firstFrame == 38); REQUIRE(plan[2].frameCount == 22);
+   REQUIRE_THROWS(VideoExport::PlanVideoExportFrames(timeline, 2, 0));
+   REQUIRE_THROWS(VideoExport::PlanVideoExportFrames(timeline, 0.5, 30));
+   REQUIRE_THROWS(VideoExport::PlanVideoExportFrames(timeline, std::numeric_limits<double>::max(), 30));
 }

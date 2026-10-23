@@ -49,7 +49,11 @@ Download the Windows installer from [AuTopsy Releases](https://github.com/Cerato
 To remove picture edges, right-click a video clip and choose **Crop Picture...**.
 Set the left/top/right/bottom percentages, or use **Reset Crop**. The source
 footage stays available, and crop follows the clip through saved projects and
-ordinary editing.
+ordinary editing. Automatic export dimensions follow the cropped picture, so
+cropping does not restore the removed area as black borders. Explicit output
+dimensions still fit the picture inside the chosen frame. Export uses one frame
+clock across cuts and speed changes to keep the edited picture aligned with the
+project's audio mix.
 
 Right-click an audio clip for **Clip Volume...** to raise or lower that clip's
 level in dB using the native Amplify dialog, with normal Undo/Redo. **Export

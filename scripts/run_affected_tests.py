@@ -57,6 +57,7 @@ GROUPS = (
         "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp"), "video-edits-test"),
     CheckGroup("video-composition", TIMELINE_INPUTS + (
         "src/video/PlanVideoEdits.*", "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*",
+        "src/video/PlanVideoExport.*",
         "src/video/TestVideoComposition.cpp"), "video-composition-test"),
     CheckGroup("product-branding-core", (
         "libraries/lib-strings/ApplyProductBranding.*", "libraries/lib-strings/tests/TestProductBranding.cpp"),
@@ -97,6 +98,7 @@ NATIVE_INPUTS = (
     "src/TrackUtilities.cpp", "src/tracks/ui/CommonTrackControls.h",
     "libraries/lib-wave-track/WaveTrack.cpp",
     "scripts/piped-work/test_video_clip_edits.py",
+    "scripts/piped-work/test_video_export_timing.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
     "src/video/PlayVideoMedia.cpp", "src/video/PlayVideoMedia.h",
     "src/video/EditVideoComposition.cpp", "src/video/EditVideoComposition.h",

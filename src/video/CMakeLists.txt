@@ -2,7 +2,7 @@
 set(autopsy_video_playback_test_sources EditVideoContent.cpp JoinVideoClips.cpp TestVideoPlayback.cpp)
 set(autopsy_video_edits_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp)
 set(autopsy_video_composition_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp
-   EvaluateVideoTimeline.cpp RenderVideoComposition.cpp TestVideoComposition.cpp)
+   EvaluateVideoTimeline.cpp RenderVideoComposition.cpp PlanVideoExport.cpp TestVideoComposition.cpp)
 
 #[[
 AuTopsy video tracks and synchronized preview. The SDK is an external libmpv development
@@ -138,6 +138,7 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    ExportVideoMix.cpp ExportVideoMix.h EditVideoTimeline.cpp EditVideoTimeline.h
    PlanVideoEdits.cpp PlanVideoEdits.h EvaluateVideoTimeline.cpp EvaluateVideoTimeline.h
    RenderVideoComposition.cpp RenderVideoComposition.h EditVideoComposition.cpp EditVideoComposition.h
+   PlanVideoExport.cpp PlanVideoExport.h
    PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h
    CreateVideoTrack.cpp CreateVideoTrack.h ChooseVideoExport.cpp ChooseVideoExport.h RelinkVideoMedia.cpp RelinkVideoMedia.h
    ../clip-groups/LinkMediaClips.cpp ../clip-groups/LinkMediaClips.h
@@ -218,7 +219,7 @@ if(TARGET video-playback-test)
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-        foreach(_case clip-selection clip-actions video-clip-export edit-cursor-line groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-crop-controls video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view transport-toolbar preview-navigation project-compatibility)
+        foreach(_case clip-selection clip-actions video-clip-export edit-cursor-line groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-crop-controls video-export-timing video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view transport-toolbar preview-navigation project-compatibility)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"

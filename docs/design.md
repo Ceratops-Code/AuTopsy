@@ -198,6 +198,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/PlayVideoMedia.h/.cpp` | Owned decoder/window boundary | mpv loading, playback and picture crop; no native project objects |
 | `src/video/EditVideoComposition.h/.cpp` | Native picture crop controls and history | Numeric margins, reset and one native history transaction |
 | `src/video/RenderVideoComposition.h/.cpp` | Host-free source geometry and encoder expressions | Oriented crop projection and FFmpeg crop translation |
+| `src/video/PlanVideoExport.h/.cpp` | Host-free export frame clock and automatic canvas | Global frame windows, source sampling phase and cropped source dimensions |
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
 | `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan and explicit project audio range |
 | `src/clip-groups/OpenClipActions.h/.cpp` | Clicked-clip targeting, native dB effect and export dialogs | Selection scope and cancellation stay at the host boundary |
@@ -729,6 +730,21 @@ the installed feature set. All-muted output is black for the explicit project du
 still includes the edited audio. Project canvas/FPS are independent of whichever
 source happens to be visible at time zero. Output FPS conversion preserves
 duration; interpreting source FPS is a separate retiming edit.
+
+`PlanVideoExportFrames` assigns every picture and gap an integer window on one
+output frame clock. Source sampling retains the phase of that clock at each cut;
+rounding a piece's length independently would accumulate picture/audio drift.
+The FFmpeg adapter emits exactly each window's frame count and supplies final
+timestamps from the global clock. The native mixer remains the authority for
+audio timing and content. Planning is a pure value operation and produces no
+files or recovery state.
+
+With automatic export dimensions, the first rendered picture's oriented original
+size and retained crop choose the canvas. Encoder parity may remove at most one
+pixel per side length; that reference picture fills the canvas without padding.
+Explicit dimensions and other aspect ratios retain fit-with-padding behavior.
+The export workspace owner still removes filter scripts, intermediate audio and
+staged output after success or cancellation; this policy adds no retained cache.
 
 Native edit adapters are synchronous and do not have network retries. Decode,
 probe, proxy and export workers have bounded waits, cancellation and captured

@@ -256,20 +256,23 @@ def check_video_crop(client, root, ffmpeg, ffprobe, controls_only=False):
     print("crop: rendered preview and export pixels", flush=True)
     expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
 
-    def export_pixels(name, expected):
+    def export_pixels(name, expected, expected_size):
         output = root / name
         client.file("ExportVideoMix", output, "Overwrite=1")
-        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format",
+        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-show_streams",
                                           "-of", "json", str(output)]))
         assert abs(float(metadata["format"]["duration"]) - 4) < 0.1, metadata
+        video = next(stream for stream in metadata["streams"] if stream["codec_type"] == "video")
+        assert (video["width"], video["height"]) == expected_size, video
         rgb = run_process([ffmpeg, "-v", "error", "-ss", "1", "-i", str(output), "-frames:v", "1",
                            "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
         counts = crop_pixel_counts(rgb)
         assert all(counts[colour] > 50 for colour in expected), counts
         assert sum(value for colour, value in counts.items() if colour not in expected) < 30, counts
+        assert not any(max(rgb[index:index + 3]) < 20 for index in range(0, len(rgb), 3)), "Crop export added black bars."
 
     for _ in range(2):
-        export_pixels("cropped.mp4", {"green", "white"})
+        export_pixels("cropped.mp4", {"green", "white"}, (80, 90))
     assert client.data("GetInfo: Type=Clips Format=JSON") == original_audio
     set_crop(top=0.5)
     print("crop: saved projects and compound clips", flush=True)
@@ -284,7 +287,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe, controls_only=False):
     client.send("JoinVideoClips")
     clip_id = client.data("GetVideoClips")["clips"][0]["id"]
     set_crop(left=0.5)
-    export_pixels("joined-crop.mp4", {"white"})
+    export_pixels("joined-crop.mp4", {"white"}, (80, 44))
     save_reopen(client, root / "joined-crop.aup3")
     client.send("ShowVideoPreview")
     expect_preview_crop_pixels(client, root, ffmpeg, {"white"})
@@ -304,7 +307,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe, controls_only=False):
     set_crop(bottom=0.5)
     client.send("ShowVideoPreview")
     expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
-    export_pixels("rotated-crop.mp4", {"green", "white"})
+    export_pixels("rotated-crop.mp4", {"green", "white"}, (90, 80))
     # The worker's normal Close must never prompt for these owned test edits.
     client.file("SaveProject2", root / "_crop-state.aup3")
 

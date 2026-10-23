@@ -440,7 +440,14 @@ Repeated equal values add no history entry. `GetVideoClips` reports the saved
 margins in `crop`; setting all four to zero restores the picture.
 
 `fork-video-crop` checks rendered preview/export pixels, saved margins, joined
-content and quarter-turn sources. `fork-video-crop-controls` checks the real
+content and quarter-turn sources, including cropped output dimensions and the
+absence of added black borders. `fork-video-export-timing` generates independent
+NTSC-rate flashes and stationary 48-kHz clicks, splits the picture into many
+pieces and exports twice at 30 fps. Decoded cue positions must remain within one
+output frame without accumulated drift, while the original audio clips stay
+unchanged. Its generated media belongs to the native case's existing scratch
+directory and is removed by that owner.
+`fork-video-crop-controls` checks the real
 clip menu, Reset, Cancel and history with idle shared input. Each case saves its
 owned fixture project before the worker closes it, preventing a save prompt.
 
