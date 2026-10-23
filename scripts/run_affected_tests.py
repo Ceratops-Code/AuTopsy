@@ -251,7 +251,9 @@ class ReceiptStore:
         for group in self.root.iterdir():
             if not group.is_dir() or not re.fullmatch(r"[0-9a-f]{64}", group.name):
                 continue
-            records = sorted(group.glob("_result-*.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+            records = sorted(group.glob("_result-*.json"),
+                             key=lambda p: json.loads(p.read_text(encoding="utf-8"))["finished_ns"],
+                             reverse=True)
             for stale in records[3:]:
                 stale.unlink()
 
@@ -266,10 +268,14 @@ class ReceiptStore:
         return latest if latest and latest["result"] == "passed" else None
 
     def publish(self, name: str, identity: str, result: str, evidence: dict[str, Any]) -> dict[str, Any]:
-        record = {"id": uuid.uuid4().hex, "name": name, "input_identity": identity,
-                  "result": result, "finished_ns": time.time_ns(), "evidence": evidence}
         folder = self.root / digest(name)
         folder.mkdir(exist_ok=True)
+        # The exclusive owner orders results by publication, even when the wall
+        # clock stalls or goes backwards. File timestamps cannot supply that order.
+        previous = max((json.loads(path.read_text(encoding="utf-8"))["finished_ns"]
+                        for path in folder.glob("_result-*.json")), default=0)
+        record = {"id": uuid.uuid4().hex, "name": name, "input_identity": identity,
+                  "result": result, "finished_ns": max(time.time_ns(), previous + 1), "evidence": evidence}
         pending = self.root / f"_pending-{record['id']}.json"
         target = folder / f"_result-{record['id']}.json"
         try:

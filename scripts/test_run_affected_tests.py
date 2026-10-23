@@ -147,6 +147,25 @@ class ReceiptTests(unittest.TestCase):
         self.assertTrue(unrelated.exists())
         self.assertEqual((root / "_runner.lock").stat().st_size, 1)
 
+    def test_clock_ties_and_rollback_preserve_publication_order_across_reentry(self) -> None:
+        root = self.root / "_results"
+        finished = []
+        for result in ("passed", "failed", "passed", "failed", "passed"):
+            with runner.ReceiptStore(root) as store, patch.object(runner.time, "time_ns", return_value=10):
+                record = store.publish("one", "current", result, {})
+                finished.append(record["finished_ns"])
+                # Deliberately reverse filesystem age; retention and selection
+                # must both use the owner's publication order.
+                path = root / runner.digest("one") / f"_result-{record['id']}.json"
+                os.utime(path, ns=(1, 1))
+                self.assertEqual(store.accepted("one", "current"), record if result == "passed" else None)
+        with runner.ReceiptStore(root) as store, patch.object(runner.time, "time_ns", return_value=1):
+            newest = store.publish("one", "current", "passed", {})
+            self.assertGreater(newest["finished_ns"], finished[-1])
+            self.assertEqual(store.accepted("one", "current"), newest)
+            self.assertEqual(len(list((root / runner.digest("one")).glob("_result-*.json"))), 3)
+        self.assertEqual(finished, sorted(set(finished)))
+
     def test_interrupted_owner_leaves_a_reusable_lock_file_without_saved_progress(self) -> None:
         root = self.root / "_results"
         root.mkdir()

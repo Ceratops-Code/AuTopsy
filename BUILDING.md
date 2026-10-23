@@ -659,6 +659,8 @@ source changes during compilation or execution cannot earn a pass. At startup an
 after publication, receipts retain the current and at most two earlier records per
 named check. An OS lock protects active work; its one lock file persists, while
 pending files are removed under exclusive ownership. Other files are untouched.
+Publication order increases under that lock even if clock values tie or move
+backwards; selection and retention use that order rather than file timestamps.
 The standard-library test interpreter is bound to persistent `sys.base_prefix`,
 so a CMake cache never depends on a discarded temporary `uv --with` environment.
 Later test changes do not rebuild or revoke an unchanged accepted installer.

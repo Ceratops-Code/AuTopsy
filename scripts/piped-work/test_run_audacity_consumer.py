@@ -160,8 +160,17 @@ class ConsumerTest(unittest.TestCase):
 
                 with self.subTest(name=name, boundary=boundary), \
                         patch.object(consumer.shutil, name, side_effect=interrupt), \
-                        self.assertRaises((InterruptedError, RuntimeError)):
+                        self.assertRaises((OSError, RuntimeError)) as interrupted:
                     self.run_consumer()
+                # copytree aggregates nested OSErrors on some platforms. Keep
+                # checking the actual cause and cleanup rather than its wrapper.
+                self.assertIn(name, str(interrupted.exception))
+                self.assertEqual(consumer.read_compatibility_fixture_inputs(self.root), original)
+                self.assertFalse(self.live)
+                # A failure before deletion leaves owned scratch for the next
+                # normal entry; all other boundaries have already removed it.
+                self.assertEqual((self.root / "_stock-audacity").exists(),
+                                 name == "rmtree" and boundary == "before")
                 self.run_consumer()
                 self.assert_sources_and_cleanup(original)
 
