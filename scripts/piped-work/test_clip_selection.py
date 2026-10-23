@@ -13,7 +13,7 @@ from run_fork_test_harness import operate_owned_video_track, painted_video_track
 def audio_clips(client, track=None):
     clips = client.data("GetInfo: Type=Clips Format=JSON")
     return sorted((row for row in clips if track is None or row["track"] == track),
-                  key=lambda row: (row["track"], row["start"]))
+                  key=lambda row: (row["track"], row["name"], row["start"]))
 
 
 def audio_gesture(client, track, at, end=None, *, control=False, cancel=False, body=False):
@@ -42,6 +42,8 @@ def same_starts(actual, expected, tolerance=0.0001):
 def moved_set(before, after, selected, desired=None):
     """All selected clips share one movement; every omitted clip stays put."""
     assert len(before) == len(after), (before, after)
+    assert [(row["track"], row["name"]) for row in before] == [
+        (row["track"], row["name"]) for row in after], (before, after)
     deltas = [new["start"] - old["start"] for old, new in zip(before, after)]
     delta = deltas[next(iter(selected))]
     assert all(abs(value - (delta if index in selected else 0)) < 0.0001
@@ -51,9 +53,10 @@ def moved_set(before, after, selected, desired=None):
     return delta
 
 
-def place_audio(client, track, at, start):
+def place_audio(client, track, at, start, name=None):
     client.send(f"SelectTracks: Track={track} TrackCount=1 Mode=Set")
-    client.send(f"SetClipStatus: At={at} Start={start}")
+    label = "" if name is None else f' Name="{name}"'
+    client.send(f"SetClip: At={at} Start={start}{label}")
 
 
 def check_audio_selection(client, root):
@@ -69,6 +72,8 @@ def check_audio_selection(client, root):
     for index, start in ((2, 10), (1, 6), (0, 2)):
         clip = audio_clips(client, 0)[index]
         place_audio(client, 0, (clip["start"] + clip["end"]) / 2, start)
+    for at, name in ((2.5, "audio-a"), (6.5, "audio-middle"), (10.5, "audio-z")):
+        place_audio(client, 0, at, at - 0.5, name)
     client.file("Import2", root / "tone-b.wav")
     place_audio(client, 1, 0.25, 3)
     client.send("FitInWindow")
@@ -105,13 +110,14 @@ def check_audio_selection(client, root):
     client.send("Undo")
     same_starts(audio_clips(client), before)
 
-    # The first track's obstacle limits the common movement of the whole set.
+    # Put the requested destination inside an obstacle. Native audio permits
+    # jumping completely over clips, so crossing an edge alone is not a collision.
     audio_gesture(client, 0, first_at)
     audio_gesture(client, 1, other_at, control=True)
-    audio_gesture(client, 0, first_at, first_at + 6)
+    audio_gesture(client, 0, first_at, first_at + 4)
     collided = audio_clips(client)
     allowed = moved_set(before, collided, {0, 3})
-    assert 0 < allowed < 6, (allowed, collided)
+    assert 0 < allowed < 4, (allowed, collided)
     assert abs(collided[0]["end"] - collided[1]["start"]) < 0.001, collided
     client.send("Undo")
     same_starts(audio_clips(client), before)
