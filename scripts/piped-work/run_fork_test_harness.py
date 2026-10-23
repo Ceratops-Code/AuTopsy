@@ -504,7 +504,8 @@ def ready_video_preview(client):
 
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
-    gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False
+    gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False,
+    prior_click_time=None
 ):
     """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
 
@@ -512,13 +513,15 @@ def operate_owned_video_track(
     origin. Menu choices use caption-resolved native rectangles in the owned window;
     cancellation always releases held input before restoring the previous focus.
     Additive clicks own their Ctrl transition and release it even on failure.
+    An optional preceding click and Escape stay in the same pane, exercising
+    native hit-target continuity before the requested gesture.
     """
     if end_time is None:
         end_time = start_time
     if gesture not in ("drag", "click", "double-click", "context"):
         raise ValueError("Unknown native video gesture: " + gesture)
-    if control and gesture != "click":
-        raise ValueError("Ctrl is supported only for an additive clip click.")
+    if control and gesture not in ("click", "drag"):
+        raise ValueError("Ctrl is supported for clip clicks and time-locked drags.")
     user = ctypes.WinDLL("user32", use_last_error=True)
     # Wait before reading window/paint facts: project-open callbacks may replace
     # those controls while the native double-click interval expires.
@@ -887,6 +890,15 @@ def operate_owned_video_track(
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
         thread = user.GetWindowThreadProcessId(panel, None)
+        if prior_click_time is not None:
+            position_pointer(*position(prior_click_time, source))
+            button(2)
+            pressed = True
+            button(4)
+            pressed = False
+            time.sleep(0.06)
+            keyboard(0x1B)
+            position_pointer(x0, y0)
         if control:
             set_control(True)
             control_pressed = True
@@ -934,7 +946,15 @@ def operate_owned_video_track(
                         position_pointer(round(x0 + (x1-x0)*step/5), round(y0 + (y1-y0)*step/5))
                         time.sleep(0.04)
                     if cancel:
-                        keyboard(0x1B)
+                        # Ctrl+Escape belongs to Windows. Releasing Ctrl first
+                        # also completes native time-shift gestures, so deliver
+                        # Escape through the owned pane's normal key-message
+                        # route while the drag is still captured. Other drags
+                        # keep the physical keyboard route.
+                        if control_pressed:
+                            send(0x100, 0x1B, 0, 0)
+                        else:
+                            keyboard(0x1B)
                 button(4)
                 pressed = False
                 deadline = time.monotonic() + 3
@@ -975,7 +995,9 @@ def operate_owned_video_track(
             user.SetWindowPos(root, ctypes.c_void_p(-2), 0, 0, 0, 0, 0x13)
         for window in hidden:
             user.ShowWindow(window, 4)
-        if user.GetForegroundWindow() == root and foreground:
+        # A selected menu command may be creating a modal window after its
+        # popup disappears. Leave focus with the owned app for that handoff.
+        if user.GetForegroundWindow() == root and foreground and not (gesture == "context" and menu_path):
             user.SetForegroundWindow(foreground)
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
@@ -1088,8 +1110,15 @@ def check_video_interactions(client, root, case):
         for gesture in ("click", "double-click", "click"):
             operate_owned_video_track(client, 0.8, track=0, gesture=gesture, area="picture")
             selection = client.data("GetInfo: Type=Selection Format=JSON")
-            assert selection["Start"] == 0 and selection["End"] == 2, selection
+            if gesture == "double-click":
+                assert selection["Start"] == 0 and selection["End"] == 2, selection
+            else:
+                assert abs(selection["Start"] - 0.8) < 0.02 and selection["End"] == selection["Start"], selection
             assert clips() == original
+        operate_owned_video_track(client, 0.5, 1.5, track=0, area="picture")
+        selection = client.data("GetInfo: Type=Selection Format=JSON")
+        assert abs(selection["Start"] - 0.5) < 0.02 and abs(selection["End"] - 1.5) < 0.02, selection
+        assert clips() == original
         # The same single click must make Delete work through the keyboard command,
         # not a script that bypasses its selection preconditions.
         operate_owned_video_track(client, 0.8, track=0, gesture="click", area="picture", key=0x2E)

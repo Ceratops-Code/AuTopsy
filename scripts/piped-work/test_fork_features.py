@@ -72,6 +72,7 @@ from test_video_clip_edits import (
     check_video_transport,
     check_video_visibility,
 )
+from test_video_export_timing import check_video_export_timing
 
 
 def check_groups(client, root):
@@ -996,6 +997,8 @@ def worker(args, root):
         check_video_transport(client, root)
     elif args.case in ("video-crop", "video-crop-controls"):
         check_video_crop(client, root, args.ffmpeg, args.ffprobe, controls_only=args.case == "video-crop-controls")
+    elif args.case == "video-export-timing":
+        check_video_export_timing(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-visibility":
         check_video_visibility(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in ("video-speed", "video-speed-storage"):
@@ -1139,6 +1142,8 @@ def native_test_inputs(args, executable, module, display):
         inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
     if args.case == "clip-selection":
         inputs["clip_selection_sha256"] = sha(here / "test_clip_selection.py")
+    if args.case == "video-export-timing":
+        inputs["export_timing_sha256"] = sha(here / "test_video_export_timing.py")
     return inputs
 
 
@@ -1314,7 +1319,7 @@ def main():
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
             "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
-            "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls",
+            "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "video-export-timing",
             "media",
             "preview",
             "branding",

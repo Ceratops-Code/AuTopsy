@@ -57,6 +57,7 @@ GROUPS = (
         "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp"), "video-edits-test"),
     CheckGroup("video-composition", TIMELINE_INPUTS + (
         "src/video/PlanVideoEdits.*", "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*",
+        "src/video/PlanVideoExport.*",
         "src/video/TestVideoComposition.cpp"), "video-composition-test"),
     CheckGroup("product-branding-core", (
         "libraries/lib-strings/ApplyProductBranding.*", "libraries/lib-strings/tests/TestProductBranding.cpp"),
@@ -86,6 +87,7 @@ GROUPS = (
 NATIVE_INPUTS = (
     "src/clip-groups/SelectMediaClips.*", "scripts/piped-work/test_clip_selection.py",
     "src/tracks/ui/TimeShiftHandle.*", "src/tracks/ui/SelectHandle.cpp",
+    "src/tracks/ui/AffordanceHandle.*", "src/export/ExportAudioDialog.*",
     "src/tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp",
     "src/tracks/playabletrack/wavetrack/ui/WaveTrackShifter.cpp",
     "src/clip-groups/OpenClipActions.*", "src/ProjectAudioManager.cpp", "src/ProjectAudioManager.h",
@@ -96,6 +98,7 @@ NATIVE_INPUTS = (
     "src/TrackUtilities.cpp", "src/tracks/ui/CommonTrackControls.h",
     "libraries/lib-wave-track/WaveTrack.cpp",
     "scripts/piped-work/test_video_clip_edits.py",
+    "scripts/piped-work/test_video_export_timing.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
     "src/video/PlayVideoMedia.cpp", "src/video/PlayVideoMedia.h",
     "src/video/EditVideoComposition.cpp", "src/video/EditVideoComposition.h",
@@ -108,6 +111,7 @@ NATIVE_INPUTS = (
     "src/clip-groups/EditClipMarkers.cpp", "src/clip-groups/GroupAudioClips.h",
     "src/clip-groups/GroupAudioClips.cpp",
     "src/menus/*.cpp", "src/commands/GetInfoCommand.cpp",
+    "src/toolbars/ControlToolBar.*",
     "src/tracks/ui/CommonTrackControls.cpp",
     "libraries/lib-project-history/*", "libraries/lib-project-file-io/*", "libraries/lib-viewport/*",
     "CMakeLists.txt", "CMakePresets.json",

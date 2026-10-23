@@ -31,6 +31,18 @@ Paul Licameli split from TrackPanel.cpp
 
 #include <cassert>
 
+struct TimeShiftHandle::PendingClipClick {
+   wxMouseEvent event;
+   wxRect rect;
+   wxSize whole;
+   std::shared_ptr<TrackPanelCell> cell;
+   explicit PendingClipClick(const TrackPanelMouseEvent &input)
+      : event(input.event), rect(input.rect), whole(input.whole), cell(input.pCell) {}
+   TrackPanelMouseEvent Input() { return {event, rect, whole, cell}; }
+};
+
+TimeShiftHandle &TimeShiftHandle::operator=(TimeShiftHandle&&) = default;
+
 TimeShiftHandle::TimeShiftHandle(std::shared_ptr<Track> pTrack, bool gripHit)
    : mGripHit{ gripHit }
 {
@@ -465,6 +477,21 @@ SnapPointArray FindCandidates(
 UIHandle::Result TimeShiftHandle::Click(
    const TrackPanelMouseEvent &evt, AudacityProject *pProject)
 {
+   mPendingClipClick.reset();
+   mCompletedAdditiveClipClick = false;
+   mClipMoveState.clear();
+   mDidSlideVertically = false;
+   if (ProjectAudioIO::Get(*pProject).IsAudioActive()) return RefreshCode::Cancelled;
+   if (evt.event.CmdDown() && !evt.event.ShiftDown()) {
+      mPendingClipClick = std::make_unique<PendingClipClick>(evt);
+      return RefreshCode::RefreshNone;
+   }
+   return BeginClipShift(evt, pProject);
+}
+
+UIHandle::Result TimeShiftHandle::BeginClipShift(
+   const TrackPanelMouseEvent &evt, AudacityProject *pProject)
+{
    using namespace RefreshCode;
    const bool unsafe = ProjectAudioIO::Get( *pProject ).IsAudioActive();
    if ( unsafe )
@@ -501,9 +528,8 @@ UIHandle::Result TimeShiftHandle::Click(
       };
       hitTestResult = pShifter->HitTest( clickTime, viewInfo, &params );
       useTemporaryClipSelection = params.hitInterval && ClipGroups::ClickTemporaryMediaClip(
-         *pProject, *pTrack, *params.hitInterval, event.CmdDown());
+         *pProject, *pTrack, *params.hitInterval, false);
       if (!useTemporaryClipSelection) ClipGroups::ClearTemporaryClipSelection(*pProject);
-      if (useTemporaryClipSelection && event.CmdDown()) return RefreshAll | Cancelled;
       switch( hitTestResult ) {
       case TrackShifter::HitTestResult::Miss:
          return Cancelled;
@@ -825,6 +851,15 @@ UIHandle::Result TimeShiftHandle::Drag
 (const TrackPanelMouseEvent &evt, AudacityProject *pProject)
 {
    using namespace RefreshCode;
+   if (mPendingClipClick) {
+      if (std::abs(evt.event.GetX() - mPendingClipClick->event.GetX()) < 5 &&
+          std::abs(evt.event.GetY() - mPendingClipClick->event.GetY()) < 5)
+         return RefreshNone;
+      auto pending = std::move(mPendingClipClick);
+      auto initial = pending->Input();
+      const auto result = BeginClipShift(initial, pProject);
+      if (result & Cancelled) return result;
+   }
    const bool unsafe = ProjectAudioIO::Get( *pProject ).IsAudioActive();
    if (unsafe) {
       this->Cancel(pProject);
@@ -841,10 +876,13 @@ UIHandle::Result TimeShiftHandle::Drag
       ? dynamic_cast<Track *>(&pChannel->GetChannelGroup())
       : nullptr;
 
-   // Uncommenting this permits drag to continue to work even over the controls area
-   /*
-   track = static_cast<CommonTrackPanelCell*>(evt.pCell)->FindTrack().get();
-   */
+   // Audio clip headers are track cells rather than channel views. Resolve the
+   // destination through their shared track boundary, while retaining the
+   // existing exclusion of controls and rulers to the left of the data area.
+   if (!track && event.m_x >= mRect.GetX() &&
+       event.m_x < mRect.GetX() + mRect.GetWidth())
+      if (auto *cell = dynamic_cast<CommonTrackPanelCell*>(evt.pCell.get()))
+         track = cell->FindTrack().get();
 
    if (!track) {
       // Allow sliding if the pointer is not over any track, but only if x is
@@ -939,6 +977,16 @@ UIHandle::Result TimeShiftHandle::Release
    if (unsafe)
       return this->Cancel(pProject);
 
+   if (mPendingClipClick) {
+      auto pending = std::move(mPendingClipClick);
+      const auto cell = std::dynamic_pointer_cast<CommonTrackPanelCell>(pending->cell);
+      const auto track = cell ? cell->FindTrack() : nullptr;
+      if (track && track->GetOwner().get() == &TrackList::Get(*pProject))
+         mCompletedAdditiveClipClick = ClipGroups::ClickTemporaryMediaClipAtPointer(
+            *pProject, *track, pending->rect, pending->event.GetX(), pending->event.GetY(), true);
+      return RefreshAll;
+   }
+
    Result result = RefreshNone;
 
    // Do not draw yellow lines
@@ -976,6 +1024,8 @@ UIHandle::Result TimeShiftHandle::Release
 
 UIHandle::Result TimeShiftHandle::Cancel(AudacityProject *pProject)
 {
+   mPendingClipClick.reset();
+   mCompletedAdditiveClipClick = false;
    if(mClipMoveState.initialized)
    {
       ProjectHistory::Get( *pProject ).RollbackState();

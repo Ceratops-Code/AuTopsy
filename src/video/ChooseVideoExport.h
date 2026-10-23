@@ -22,7 +22,7 @@ inline void RequireUsableExportSettings(const ExportSettings &settings)
    if (settings.width < 0 || settings.height < 0 || settings.width > 16384 ||
        settings.height > 16384 || settings.width % 2 || settings.height % 2 ||
        ((settings.width == 0) != (settings.height == 0)))
-      throw std::runtime_error("Use even output dimensions, or zero for both to keep the source size.");
+      throw std::runtime_error("Use even output dimensions, or zero for both to use the cropped source size.");
    if (!std::isfinite(settings.frameRate) || settings.frameRate < 0 ||
        settings.frameRate > 1000 || (settings.frameRate > 0 && settings.frameRate < 1))
       throw std::runtime_error("Choose a frame rate from 1 to 1000, or zero to keep the source rate.");

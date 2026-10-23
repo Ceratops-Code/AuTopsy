@@ -12,7 +12,7 @@ std::optional<ExportSettings> ChooseVideoExport(wxWindow *parent, ExportSettings
    wxDialog dialog{parent, wxID_ANY, _("Video Export Settings")};
    auto *layout = new wxBoxSizer{wxVERTICAL};
    layout->Add(new wxStaticText{&dialog, wxID_ANY,
-      _("Zero dimensions or frame rate keep the source values.\nHardware presets require a supported NVIDIA GPU and driver.")},
+      _("Zero dimensions use the cropped source frame; zero frame rate keeps the source rate.\nHardware presets require a supported NVIDIA GPU and driver.")},
       0, wxALL, 10);
    auto *rows = new wxFlexGridSizer{2, 8, 8};
    rows->AddGrowableCol(1);

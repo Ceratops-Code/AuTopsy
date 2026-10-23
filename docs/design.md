@@ -5,7 +5,7 @@ Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
 per-clip speed and picture crop are implemented in this branch. Embedded-layer
 geometry remains an independent foundation awaiting native controls, saved
 parent identities and pixel rendering.
-Collapsible track groups, compact transport controls and the preview timeline
+Collapsible track groups, native-size transport controls and the preview timeline
 and keyboard controls are also implemented.
 Other later operations remain targets until their delivery status says otherwise.
 Owner: AuTopsy maintainers.
@@ -198,6 +198,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/PlayVideoMedia.h/.cpp` | Owned decoder/window boundary | mpv loading, playback and picture crop; no native project objects |
 | `src/video/EditVideoComposition.h/.cpp` | Native picture crop controls and history | Numeric margins, reset and one native history transaction |
 | `src/video/RenderVideoComposition.h/.cpp` | Host-free source geometry and encoder expressions | Oriented crop projection and FFmpeg crop translation |
+| `src/video/PlanVideoExport.h/.cpp` | Host-free export frame clock and automatic canvas | Global frame windows, source sampling phase and cropped source dimensions |
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
 | `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan and explicit project audio range |
 | `src/clip-groups/OpenClipActions.h/.cpp` | Clicked-clip targeting, native dB effect and export dialogs | Selection scope and cancellation stay at the host boundary |
@@ -214,9 +215,8 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 The small native transport facade currently lives in `ShowVideoPreview.cpp`;
 its desired-state policy lives in `SyncVideoPlayback.h`. It uses the existing
 `ProjectAudioManager` API and introduces no separate transport engine.
-The main transport adapter in `src/toolbars/ControlToolBar.cpp` uses local scaled
-theme images for its 35-pixel buttons; shared theme resources and other toolbars
-keep their own sizing. Go to Cursor reads this project's active stream time,
+The main transport adapter in `src/toolbars/ControlToolBar.cpp` uses the native
+52-pixel button sizing and theme frames. Go to Cursor reads this project's active stream time,
 including pause, or its edit cursor while stopped. It calls the native viewport
 scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into
@@ -280,6 +280,20 @@ Every selected interval must resolve once before any movement. One shared
 permissible offset prevents partial movement or overlap, Escape restores the
 native history snapshot, and each completed drag has one Undo entry. Ordinary
 time-range edits retain their existing scope; this is a move selection.
+
+Ctrl-header presses retain owned copies of the native event's borrowed values
+until release or the drag threshold. A release toggles the clip without creating
+a history entry; a drag enters the existing native time-locked migration path
+without toggling it first. Cancellation discards the pending click. Each fresh
+press resets the header's movement threshold state. No event reference survives
+its callback, and no selection checkpoint is written.
+
+Audio clip export selects and paints its exact track/range before constructing
+the native export dialog. Explicit SelectedOnly mode keeps Current Selection
+chosen even when mute/solo makes that audio inaudible; the export engine owns
+that error rather than silently exporting other tracks. Split controls follow
+the active radio choice rather than a saved preference. Cancellation restores
+the preceding selection through the clip-action scope guard.
 
 `media-clip-selection::` checks additive/repeated toggles, anchor changes and
 expired-key pruning without native objects. `fork-clip-selection` separately
@@ -716,6 +730,25 @@ the installed feature set. All-muted output is black for the explicit project du
 still includes the edited audio. Project canvas/FPS are independent of whichever
 source happens to be visible at time zero. Output FPS conversion preserves
 duration; interpreting source FPS is a separate retiming edit.
+
+`PlanVideoExportFrames` assigns every picture and gap an integer window on one
+output frame clock. Source sampling retains the phase of that clock at each cut;
+rounding a piece's length independently would accumulate picture/audio drift.
+The FFmpeg adapter emits exactly each window's frame count and supplies final
+timestamps from the global clock. The native mixer remains the authority for
+audio timing and content. Planning is a pure value operation and produces no
+files or recovery state.
+Automatic output accepts every supported positive source frame rate. Sources
+below 1 fps use elapsed-second preview timecode with a zero frame field, while
+frame stepping retains their actual source rate; a valid source must not open an
+error dialog from the preview timer during an export.
+
+With automatic export dimensions, the first rendered picture's oriented original
+size and retained crop choose the canvas. Encoder parity may remove at most one
+pixel per side length; that reference picture fills the canvas without padding.
+Explicit dimensions and other aspect ratios retain fit-with-padding behavior.
+The export workspace owner still removes filter scripts, intermediate audio and
+staged output after success or cancellation; this policy adds no retained cache.
 
 Native edit adapters are synchronous and do not have network retries. Decode,
 probe, proxy and export workers have bounded waits, cancellation and captured

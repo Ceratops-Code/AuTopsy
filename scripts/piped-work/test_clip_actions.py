@@ -105,8 +105,11 @@ class ClipDialogWindows(PreviewNativeWindows):
 
     def activate(self, dialog):
         assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
+        wait_for_native_state(lambda: self.visible(dialog) and self.enabled(dialog), "owned clip dialog ready")
         self.api.SetForegroundWindow(dialog)
-        wait_for_native_state(lambda: self.api.GetForegroundWindow() == dialog, "owned clip dialog active")
+        wait_for_native_state(lambda: self.api.GetForegroundWindow() == dialog,
+                              lambda: f"owned clip dialog {dialog} active; foreground="
+                              f"{self.api.GetForegroundWindow()} ({self.caption(self.api.GetForegroundWindow())!r})")
 
 
 def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False):
@@ -217,11 +220,16 @@ def check_audio_clip_actions(client, root, ffmpeg):
 
     # The menu must replace the older, broader selection with exactly its clip.
     for repeat in range(2):
-        client.send("SelectAll")
-        client.send(f"SelectTime: Start=0 End={end}")
+        if repeat:
+            client.send("SelectAll")
+            client.send(f"SelectTime: Start=0 End={end}")
+        else:
+            client.send("SelectTracks: Track=0 TrackCount=0 Mode=Set")
+            client.send("SelectTime: Start=0.25 End=0.25")
 
         def export_dialog(windows, dialog):
-            assert windows.message(windows.button(dialog, "Current Selection"), 0xF0) == 1
+            radio = windows.button(dialog, "Current Selection")
+            assert windows.enabled(radio) and windows.message(radio, 0xF0) == 1
             if repeat:
                 windows.text(windows.field(dialog, "File Name:"), "_audio-clip.wav")
                 windows.text(windows.field(dialog, "Folder:"), root)
@@ -234,6 +242,23 @@ def check_audio_clip_actions(client, root, ffmpeg):
     expected = baseline[4000:]
     assert abs(len(exported) - len(expected)) < 8
     assert max(abs(a - b) for a, b in zip(exported[32:-32], expected[32:-32], strict=True)) < 0.002
+    # Explicit clip scope remains selected when mute/solo excludes its sound.
+    # The native exporter can report inaudibility; it must never select another
+    # track or silently offer the entire project instead of this clip's range.
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SetTrackAudio: Mute=1")
+    client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
+    client.send("SetTrackAudio: Solo=1")
+    client.send("SelectTracks: Track=0 TrackCount=0 Mode=Set")
+    client.send("SelectTime: Start=0.25 End=0.25")
+
+    def muted_export(windows, dialog):
+        radio = windows.button(dialog, "Current Selection")
+        assert windows.enabled(radio) and windows.message(radio, 0xF0) == 1
+        windows.click(windows.button(dialog, "Cancel"))
+
+    with_native_dialog(lambda: audio_context(client, 0.75, 0, "Export Clip..."),
+                       "Export Audio", muted_export, menu_gesture=True)
     client.file("SaveProject2", root / "_audio-clip-actions.aup3")
 
 
@@ -340,15 +365,18 @@ def check_edit_cursor_line(client, root, ffmpeg):
         for handle in hidden:
             user.ShowWindow(handle, 0)
         assert user.SetWindowPos(main, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x13)
-        for repeat in range(2):
+        for area in ("picture", "header"):
             client.send("SelectTime: Start=0.5 End=0.5")
             time.sleep(0.15)
             before, width, height = capture()
-            # A range selection must still show its start line across the pane.
-            client.send("SelectTime: Start=1.25 End=1.75")
+            # A real clip click must keep its exact time and paint the full line.
+            operate_owned_video_track(client, 1.25, track=0, gesture="click", area=area)
+            selection = client.data("GetInfo: Type=Selection Format=JSON")
+            at = selection["Start"]
+            assert abs(at - 1.25) < 0.02 and selection["End"] == at, (area, selection)
             time.sleep(0.15)
             after, _, _ = capture()
-            x = round((info["videoTrackLeftOffset"] + (1.25 - info["viewStart"])
+            x = round((info["videoTrackLeftOffset"] + (at - info["viewStart"])
                        / (info["viewEnd"] - info["viewStart"]) * info["videoTrackDataWidth"])
                       * width / info["videoTrackPanelWidth"])
             changed = 0
@@ -357,7 +385,7 @@ def check_edit_cursor_line(client, root, ffmpeg):
                                - before[(y * width + column) * 3 + channel]) for channel in range(3))
                        for column in range(x - 2, x + 3)) > 20:
                     changed += 1
-            assert changed > (height - 19) * 0.9, (repeat, changed, height)
+            assert changed > (height - 19) * 0.9, (area, changed, height)
     finally:
         user.SetWindowPos(main, ctypes.c_void_p(-1 if pinned else -2), 0, 0, 0, 0, 0x13)
         for handle in hidden:

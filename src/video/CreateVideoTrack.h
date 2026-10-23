@@ -87,6 +87,10 @@ bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &sou
 void SplitSelectedVideoTracks(AudacityProject &project, double from, double to, Track *only = nullptr);
 void TrimSelectedVideoTracks(AudacityProject &project, double from, double to);
 const ReservedCommandFlag &AudioOrVideoTracksSelectedFlag();
+// A point in one selected video clip can delete that clip without moving the
+// edit cursor on the preceding click. Ordinary audio/range commands stay native.
+const ReservedCommandFlag &TimeOrVideoClipSelectedFlag();
+void SelectVideoClipForDeletion(AudacityProject &project);
 bool HasProjectVideoClips(const AudacityProject &project);
 // Feed the existing transport clock when a project has picture but no sound.
 // This adds an in-memory silent sequence, never a hidden track or audio file.

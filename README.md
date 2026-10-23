@@ -49,11 +49,18 @@ Download the Windows installer from [AuTopsy Releases](https://github.com/Cerato
 To remove picture edges, right-click a video clip and choose **Crop Picture...**.
 Set the left/top/right/bottom percentages, or use **Reset Crop**. The source
 footage stays available, and crop follows the clip through saved projects and
-ordinary editing.
+ordinary editing. Automatic export dimensions follow the cropped picture, so
+cropping does not restore the removed area as black borders. Explicit output
+dimensions still fit the picture inside the chosen frame. Export uses one frame
+clock across cuts and speed changes to keep the edited picture aligned with the
+project's audio mix.
 
 Right-click an audio clip for **Clip Volume...** to raise or lower that clip's
 level in dB using the native Amplify dialog, with normal Undo/Redo. **Export
-Clip...** opens export for the clicked audio or video clip. Video clip export
+Clip...** selects the clicked audio clip before opening export, with **Current
+Selection** already chosen, including when there was no previous selection.
+Mute or solo exclusion does not switch its range to Entire Project; the native
+exporter reports inaudible audio separately. Video clip export
 uses its picture and everything audible in the project over that clip's original
 time span. The edit cursor extends through the full track pane.
 
@@ -65,14 +72,16 @@ at a collision. One Undo reverses the drag; Escape cancels it. A plain click on
 another clip replaces the set; a waveform/blank range click clears it. Shift-drag
 keeps the usual whole-track behavior. This temporary selection applies to
 movement and is not saved or turned into a persistent group; range edits still
-use the ordinary time selection.
+use the ordinary time selection. **Ctrl-drag a clip header** to move between
+compatible tracks while keeping its exact time, even if the pointer drifts
+sideways. Ctrl-click without dragging still toggles the temporary selection.
 
 Ordinary Record starts at the cursor. For existing recording tracks, an occupied
 start is rejected and the take stops at the next clip or an earlier selected
 end. The recording-gap policy has focused automated coverage; this preview has
 not been checked against microphone hardware.
 
-The main transport uses compact 35-pixel buttons. **Go to Cursor** brings the
+The main transport uses the original 52-pixel buttons. **Go to Cursor** brings the
 current playhead into view during playback or pause, or the edit cursor when
 stopped, without changing zoom, selection or project content.
 
@@ -184,7 +193,7 @@ joined content, both trim edges, differing audio/video placements, speed,
 repeated requests, Undo/Redo and native save/reopen.
 `fork-video-transport` covers the actual preview buttons, pause/resume, live
 picture mute, video-only playback and ownership between projects.
-`fork-transport-toolbar` covers compact button dimensions, canceled clicks,
+`fork-transport-toolbar` covers native button dimensions, canceled clicks,
 repeated cursor navigation in both directions, playback/pause and unchanged
 selection, zoom and history.
 `fork-preview-navigation` covers preview timeline seeks, canceled/repeated drags,
@@ -302,7 +311,9 @@ been deleted. Video-only projects supply silence in memory to its clock; no
 hidden audio track or temporary soundtrack is created.
 
 Drag a clip's header along the timeline or onto another video track with free
-space. Drag either edge to trim it; click its picture body to select time.
+space. Drag either edge to trim it; a single click places the cursor at that
+time, and a double click selects just that clip. Delete also removes the clip
+under a point cursor when its video track alone is selected.
 Use the normal **Edit > Clips > Split**, **Split New**, **Trim**, Cut, Copy,
 Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
 Splits and video moves snap to source frames. Linked splits create separate

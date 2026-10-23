@@ -256,20 +256,23 @@ def check_video_crop(client, root, ffmpeg, ffprobe, controls_only=False):
     print("crop: rendered preview and export pixels", flush=True)
     expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
 
-    def export_pixels(name, expected):
+    def export_pixels(name, expected, expected_size):
         output = root / name
         client.file("ExportVideoMix", output, "Overwrite=1")
-        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format",
+        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-show_streams",
                                           "-of", "json", str(output)]))
         assert abs(float(metadata["format"]["duration"]) - 4) < 0.1, metadata
+        video = next(stream for stream in metadata["streams"] if stream["codec_type"] == "video")
+        assert (video["width"], video["height"]) == expected_size, video
         rgb = run_process([ffmpeg, "-v", "error", "-ss", "1", "-i", str(output), "-frames:v", "1",
                            "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
         counts = crop_pixel_counts(rgb)
         assert all(counts[colour] > 50 for colour in expected), counts
         assert sum(value for colour, value in counts.items() if colour not in expected) < 30, counts
+        assert not any(max(rgb[index:index + 3]) < 20 for index in range(0, len(rgb), 3)), "Crop export added black bars."
 
     for _ in range(2):
-        export_pixels("cropped.mp4", {"green", "white"})
+        export_pixels("cropped.mp4", {"green", "white"}, (80, 90))
     assert client.data("GetInfo: Type=Clips Format=JSON") == original_audio
     set_crop(top=0.5)
     print("crop: saved projects and compound clips", flush=True)
@@ -284,7 +287,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe, controls_only=False):
     client.send("JoinVideoClips")
     clip_id = client.data("GetVideoClips")["clips"][0]["id"]
     set_crop(left=0.5)
-    export_pixels("joined-crop.mp4", {"white"})
+    export_pixels("joined-crop.mp4", {"white"}, (80, 44))
     save_reopen(client, root / "joined-crop.aup3")
     client.send("ShowVideoPreview")
     expect_preview_crop_pixels(client, root, ffmpeg, {"white"})
@@ -304,7 +307,7 @@ def check_video_crop(client, root, ffmpeg, ffprobe, controls_only=False):
     set_crop(bottom=0.5)
     client.send("ShowVideoPreview")
     expect_preview_crop_pixels(client, root, ffmpeg, {"green", "white"})
-    export_pixels("rotated-crop.mp4", {"green", "white"})
+    export_pixels("rotated-crop.mp4", {"green", "white"}, (90, 80))
     # The worker's normal Close must never prompt for these owned test edits.
     client.file("SaveProject2", root / "_crop-state.aup3")
 
@@ -383,7 +386,7 @@ class PreviewNativeWindows:
 
 
 def check_transport_toolbar(client, root):
-    """Exercise compact native controls and cursor visibility without shared input.
+    """Exercise native-size controls and cursor visibility without shared input.
 
     Window identity comes from the owned button's caption and parent, never
     toolbar positions or upstream numeric IDs. Native mouse messages traverse
@@ -401,6 +404,7 @@ def check_transport_toolbar(client, root):
     user.EnumChildWindows.argtypes = [w.HWND, callback_type, w.LPARAM]
     user.GetParent.argtypes, user.GetParent.restype = [w.HWND], w.HWND
     user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
     user.GetWindowDpiAwarenessContext.argtypes = [w.HWND]
     user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
     user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
@@ -445,7 +449,7 @@ def check_transport_toolbar(client, root):
             assert native.owner(handle) == pid
             rectangle = w.RECT()
             assert user.GetWindowRect(handle, ctypes.byref(rectangle))
-            assert (rectangle.right - rectangle.left, rectangle.bottom - rectangle.top) == (35, 35), (label, rectangle)
+            assert (rectangle.right - rectangle.left, rectangle.bottom - rectangle.top) == (52, 52), (label, rectangle)
     finally:
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
@@ -457,9 +461,12 @@ def check_transport_toolbar(client, root):
             if not user.SendMessageTimeoutW(handle, message, flags, position, 2, 2000, ctypes.byref(reply)):
                 raise RuntimeError(f"Owned transport button message {message:#x} failed: {ctypes.WinError()}")
 
-        # Every button has the same logical client size. The outside release
-        # cancels a press through the same native path as a user's cancelled click.
-        centre = 17 | (17 << 16)
+        # Resolve the actual client rectangle; native theme/DPI sizing owns it.
+        # An outside release cancels through the same path as a user's gesture.
+        rectangle = w.RECT()
+        assert user.GetClientRect(handle, ctypes.byref(rectangle))
+        centre = ((rectangle.right - rectangle.left) // 2
+                  | ((rectangle.bottom - rectangle.top) // 2 << 16))
         send(0x201, 1, centre)
         try:
             send(0x202, 0, 0xFFFFFFFF if cancel else centre)
@@ -521,13 +528,26 @@ def check_transport_toolbar(client, root):
                               "native toolbar playback clock")
         if paused:
             press(buttons["Pause"])
-            wait_for_native_state(lambda: native.enabled(preview_buttons["play"]),
+            wait_for_native_state(lambda: native.enabled(preview_buttons["play"]) and
+                                  not native.enabled(preview_buttons["pause"]),
                                   "native toolbar paused")
+            # Control availability can update before the decoder's last clock
+            # sample. Establish a stationary clock before testing navigation;
+            # an actually running stream cannot satisfy this precondition.
+            clock = [preview_project_seconds(status), time.monotonic()]
+
+            def paused_clock_settled(clock=clock):
+                current = preview_project_seconds(status)
+                if not math.isfinite(current) or current != clock[0]:
+                    clock[:] = [current, time.monotonic()]
+                return math.isfinite(current) and time.monotonic() - clock[1] >= 0.15
+
+            wait_for_native_state(paused_clock_settled, "stationary paused preview clock")
         position = preview_project_seconds(status)
         press(cursor_button)
         if paused:
             time.sleep(0.15)
-            assert abs(preview_project_seconds(status) - position) < 0.05
+            assert abs(preview_project_seconds(status) - position) < 0.05, (position, native.control_text(status))
         else:
             wait_for_native_state(lambda position=position: preview_project_seconds(status) > position + 0.08,
                                   "cursor navigation preserves playback")
@@ -1338,18 +1358,23 @@ def check_split_video_edges(client, root, linked):
     client.send("Split")
     original = client.data("GetLinkedMediaClips")
     video = client.data("GetVideoClips")
-    for _ in range(2):
-        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True)
+    for area in ("header", "picture"):
+        # Keep a preceding body click/Escape and the edge drag in one input
+        # session. Restoring the pointer outside the pane used to mask this bug.
+        preceding = at + 0.25 if area == "picture" else None
+        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True,
+                                  area=area, prior_click_time=preceding)
         assert client.data("GetLinkedMediaClips") == original
-        operate_owned_video_track(client, at, at + 0.5, track=0)
+        operate_owned_video_track(client, at, at + 0.5, track=0,
+                                  area=area, prior_click_time=preceding)
         trimmed = client.data("GetLinkedMediaClips")
         assert len(trimmed) == len(original), trimmed
         for before, after in zip(original, trimmed, strict=True):
             start = before["start"] + (0.5 if before["clip"] == 1 and (linked or before["kind"] == "video") else 0)
             assert abs(after["start"] - start) < 0.04 and after["end"] == before["end"], trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True)
+        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True, area=area)
         assert client.data("GetLinkedMediaClips") == trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0)
+        operate_owned_video_track(client, at + 0.5, at, track=0, area=area)
         assert client.data("GetLinkedMediaClips") == original
         assert client.data("GetVideoClips") == video
         client.send("Undo")

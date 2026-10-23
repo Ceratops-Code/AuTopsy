@@ -127,11 +127,14 @@ bool ApplyPreviewTransport(Transport &transport, PreviewTransportAction action)
 
 // Timecode is non-drop-frame: the frame counter uses the nearest nominal
 // integer rate, while conversion to seconds retains the source's exact rate.
+// Below one source frame per second, use an elapsed-second display with a zero
+// frame field; source-frame stepping still uses the actual source rate.
 inline std::string FormatFrameTimecode(double seconds, double rate)
 {
    if (!std::isfinite(seconds) || seconds < 0 || seconds > 100000000.0 ||
-       !std::isfinite(rate) || rate < 1 || rate > 1000)
+       !std::isfinite(rate) || rate <= 0 || rate > 1000)
       throw std::runtime_error("Timecode requires a finite time and frame rate.");
+   rate = std::max(1.0, rate);
    const auto nominal = static_cast<long long>(std::round(rate));
    const auto frames = static_cast<long long>(std::llround(seconds * rate));
    const auto whole = frames / nominal;
@@ -144,8 +147,9 @@ inline std::string FormatFrameTimecode(double seconds, double rate)
 
 inline double ParseFrameTimecode(const std::string &text, double rate)
 {
-   if (!std::isfinite(rate) || rate < 1 || rate > 1000)
+   if (!std::isfinite(rate) || rate <= 0 || rate > 1000)
       throw std::runtime_error("Timecode requires a usable frame rate.");
+   rate = std::max(1.0, rate);
    std::istringstream input{text};
    long long hours{}, minutes{}, seconds{}, frames{};
    char first{}, second{}, third{};
@@ -163,7 +167,7 @@ inline double AdjacentSourceFrame(double projectTime, double clipStart,
    double sourceStart, double rate, int direction, double playbackRate = 1)
 {
    if (!std::isfinite(projectTime) || !std::isfinite(clipStart) ||
-       !std::isfinite(sourceStart) || !std::isfinite(rate) || rate < 1 || rate > 1000 ||
+       !std::isfinite(sourceStart) || !std::isfinite(rate) || rate <= 0 || rate > 1000 ||
        !std::isfinite(playbackRate) || playbackRate < 0.01 || playbackRate > 100 ||
        (direction != -1 && direction != 1))
       throw std::runtime_error("Choose the previous or next video frame.");

@@ -16,20 +16,22 @@ def audio_clips(client, track=None):
                   key=lambda row: (row["track"], row["name"], row["start"]))
 
 
-def audio_gesture(client, track, at, end=None, *, control=False, cancel=False, body=False):
+def audio_gesture(client, track, at, end=None, *, control=False, cancel=False, body=False, to_track=None):
     """Resolve actual audio header cells, never an assumed upstream row height."""
     info = client.data("GetVideoPreviewInfo")
     boxes = client.data("GetInfo: Type=Boxes Format=JSON")
     pane = next(row["box"] for row in boxes if row.get("label") == "Track Panel")
-    headers = [row["box"] for row in boxes if row.get("label") == "ClipHeader" and row["track"] == track]
-    assert len(headers) == 1, (track, boxes)
-    header = headers[0]
-    row = {"index": track, "x": 0, "y": header[1] - pane[1],
-           "height": header[3] - header[1], "dataTop": header[1] - pane[1],
-           "dataLeft": info["videoTrackLeftOffset"], "dataWidth": info["videoTrackDataWidth"]}
-    info["videoTrackRows"] = [row]
+    rows = []
+    for index in sorted({track, track if to_track is None else to_track}):
+        headers = [row["box"] for row in boxes if row.get("label") == "ClipHeader" and row["track"] == index]
+        assert len(headers) == 1, (index, boxes)
+        header = headers[0]
+        rows.append({"index": index, "x": 0, "y": header[1] - pane[1],
+                     "height": header[3] - header[1], "dataTop": header[1] - pane[1],
+                     "dataLeft": info["videoTrackLeftOffset"], "dataWidth": info["videoTrackDataWidth"]})
+    info["videoTrackRows"] = rows
     operate_owned_video_track(client, at, end, track=track, painted=info, control=control,
-                             cancel=cancel, area="picture" if body else "header",
+                             cancel=cancel, to_track=to_track, area="picture" if body else "header",
                              gesture="click" if end is None else "drag")
     assert not ctypes.WinDLL("user32").GetAsyncKeyState(0x11) & 0x8000, "Test left Ctrl pressed."
 
@@ -244,10 +246,11 @@ def check_video_migration_selection(client, root):
     client.send("FitV")
     operate_owned_video_track(client, 1, track=source, gesture="click")
     operate_owned_video_track(client, 3, track=source, gesture="click", control=True)
-    operate_owned_video_track(client, 1, 1, track=source, to_track=destination)
+    operate_owned_video_track(client, 1, 1.6, track=source, to_track=destination, control=True)
     migrated = client.data("GetVideoClips")["clips"]
     assert all(row["track"] == destination for row in migrated), migrated
     assert {row["id"] for row in migrated} - source_ids - destination_ids, migrated
+    assert sorted(row["start"] for row in migrated) == sorted(row["start"] for row in original), migrated
     operate_owned_video_track(client, 1, 2, track=destination)
     moved = client.data("GetVideoClips")["clips"]
     delta = moved_set(migrated, moved, {0, 1}, 1)
@@ -272,11 +275,46 @@ def check_video_migration_selection(client, root):
     return {"post_migration_delta": delta}
 
 
+def check_control_audio_migration(client, root):
+    """Ctrl-click toggles selection; Ctrl-drag retains exact time across rows."""
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    for index, name in enumerate(("tone-a.wav", "tone-b.wav")):
+        client.file("Import2", root / name)
+        place_audio(client, index, 0.25, 2 if index == 0 else 8)
+    client.send("FitInWindow")
+    client.send("FitV")
+    before = audio_clips(client)
+    for _ in range(2):
+        # Horizontal pointer drift must neither shift time nor bypass a blocked
+        # destination. Escape must also leave both source and destination intact.
+        audio_gesture(client, 0, 2.5, 3.25, to_track=0, control=True)
+        assert audio_clips(client) == before
+        audio_gesture(client, 0, 2.5, 3.25, to_track=1, control=True, cancel=True)
+        assert audio_clips(client) == before
+        audio_gesture(client, 0, 2.5, 3.25, to_track=1, control=True)
+        moved = audio_clips(client)
+        assert len(moved) == len(before) and all(row["track"] == 1 for row in moved), moved
+        assert [(row["name"], row["start"], row["end"]) for row in moved] == [
+            (row["name"], row["start"], row["end"]) for row in before], moved
+        client.send("Undo")
+        assert audio_clips(client) == before
+        client.send("Redo")
+        assert audio_clips(client) == moved
+        client.send("Undo")
+    place_audio(client, 1, 8.25, 2)
+    blocked = audio_clips(client)
+    audio_gesture(client, 0, 2.5, 3.25, to_track=1, control=True)
+    assert audio_clips(client) == blocked
+    return {"time_locked_start": before[0]["start"], "blocked_destination": True}
+
+
 def check_clip_selection(client, root):
     observations = {"audio": check_audio_selection(client, root),
                     "mixed": check_mixed_selection(client, root),
                     "tiny_header": check_short_header_selection(client, root),
-                    "video_migration": check_video_migration_selection(client, root)}
+                    "video_migration": check_video_migration_selection(client, root),
+                    "control_audio_migration": check_control_audio_migration(client, root)}
     (root / "_selection-observations.json").write_text(json.dumps(observations, indent=2), encoding="utf-8")
     # The mixed case opened our saved fixture. Keep its later scenes saved too,
     # so the worker's normal Close cannot wait for a user save/discard decision.

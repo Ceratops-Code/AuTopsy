@@ -1,5 +1,6 @@
 #include "ExportVideoMix.h"
 #include "RenderVideoComposition.h"
+#include "PlanVideoExport.h"
 #include "Export.h"
 #include "ExportPluginRegistry.h"
 #include "Prefs.h"
@@ -22,6 +23,7 @@
 #include <iomanip>
 #include <locale>
 #include <memory>
+#include <map>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -289,7 +291,7 @@ public:
 };
 
 // FFprobe supplies structured source dimensions, including display rotation.
-// Export uses the first visible original as its canvas, never its small proxy.
+// Export applies the first rendered picture's crop to these original dimensions.
 std::optional<std::pair<int, int>> ReadExportPictureSize(const fs::path &source, wxWindow *parent)
 {
    const auto probe = wxFileName(wxStandardPaths::Get().GetExecutablePath())
@@ -318,7 +320,7 @@ std::optional<std::pair<int, int>> ReadExportPictureSize(const fs::path &source,
    if (std::abs(rotation) % 180 == 90) std::swap(width, height);
    if (width <= 0 || height <= 0 || width > 65536 || height > 65536)
       throw std::runtime_error("The original video dimensions are outside supported bounds.");
-   return std::pair<int,int>{(width + 1) & ~1, (height + 1) & ~1};
+   return std::pair<int,int>{width, height};
 }
 } // namespace
 
@@ -357,6 +359,8 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline) && AllowsOriginalPictureCopy(settings)
       && std::abs(duration - timeline.End()) <= 1e-7;
    const auto outputRate = settings.frameRate > 0 ? settings.frameRate : timeline.frameRate;
+   const auto spans = copyPicture ? std::vector<VideoExportFrameSpan>{}
+      : PlanVideoExportFrames(timeline, duration, outputRate);
    const fs::path target = fs::absolute(fs::path(destination.ToStdWstring()));
    if (!std::isfinite(duration) || duration <= 0 || duration + 1e-7 < timeline.End() ||
        timeline.sourcePath.empty() || destination.empty())
@@ -367,7 +371,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    if (!fs::is_directory(target.parent_path()))
       throw std::runtime_error("The output folder is unavailable.");
    std::vector<fs::path> inputs;
-   std::vector<size_t> clipInputs;
+   std::map<uint64_t, size_t> clipInputs;
    const auto protectSource = [&](const fs::path &input) {
       if (wxString(input.wstring()).CmpNoCase(wxString(target.wstring())) == 0 ||
           (fs::exists(target) && fs::exists(input) && fs::equivalent(input, target)))
@@ -384,7 +388,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
       const auto found = std::find_if(inputs.begin(), inputs.end(), [&](const auto &path) {
          return wxString(input.wstring()).CmpNoCase(wxString(path.wstring())) == 0;
       });
-      clipInputs.push_back(size_t(found - inputs.begin()));
+      clipInputs.emplace(clip.id, size_t(found - inputs.begin()));
       if (found == inputs.end()) inputs.push_back(input);
    }
    if (fs::exists(target) && !overwrite)
@@ -395,6 +399,8 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    if (!plugin) throw std::runtime_error("The WAV export module is unavailable.");
 
    std::optional<std::pair<int,int>> pictureSize;
+   std::optional<size_t> autoCanvasInput;
+   VideoEditing::VideoFrameCrop autoCanvasCrop;
    if (!copyPicture) {
       if (settings.width) pictureSize = std::pair{settings.width, settings.height};
       else if (inputs.empty()) {
@@ -402,7 +408,17 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
             throw std::runtime_error("Choose an output resolution for this hidden video; its older project has no saved canvas size.");
          pictureSize = std::pair{(timeline.sourceWidth + 1) / 2 * 2, (timeline.sourceHeight + 1) / 2 * 2};
       }
-      else pictureSize = ReadExportPictureSize(inputs.front(), parent);
+      else {
+         const auto first = std::find_if(spans.begin(), spans.end(),
+            [](const auto &span) { return span.clipId != 0; });
+         const auto input = first == spans.end() ? size_t{} : clipInputs.at(first->clipId);
+         pictureSize = ReadExportPictureSize(inputs.at(input), parent);
+         if (pictureSize) {
+            const auto crop = first == spans.end() ? VideoEditing::VideoFrameCrop{} : first->crop;
+            pictureSize = CalculateVideoExportCanvas(pictureSize->first, pictureSize->second, crop);
+            if (first != spans.end()) { autoCanvasInput = input; autoCanvasCrop = crop; }
+         }
+      }
       if (!pictureSize) return false;
    }
    ExportWorkspace workspace{ target };
@@ -437,44 +453,47 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
    else {
       // FFmpeg owns decoding, trimming, gap frames and concatenation. This
       // adapter translates only our value model, never Audacity track internals.
-       struct Span { size_t input; double sourceStart, duration; bool gap; double playbackRate{1}; VideoEditing::VideoFrameCrop crop; };
-      std::vector<Span> spans;
-      double end{};
-      for (size_t clipIndex = 0; clipIndex < timeline.clips.size(); ++clipIndex) {
-         const auto &clip = timeline.clips[clipIndex];
-         if (clip.start > end + 1e-7) spans.push_back({0, 0, clip.start - end, true});
-          spans.push_back({clipInputs[clipIndex], clip.sourceStart, clip.duration, false, clip.playbackRate, clip.crop});
-         end = clip.End();
-      }
-      if (duration > end + 1e-7) spans.push_back({0, 0, duration - end, true});
       std::ostringstream graph;
       graph.imbue(std::locale::classic()); graph << std::setprecision(17);
       for (size_t input = 0; input < inputs.size(); ++input) {
          const auto count = std::count_if(spans.begin(), spans.end(),
-            [&](const auto &span) { return !span.gap && span.input == input; });
+            [&](const auto &span) { return span.clipId && clipInputs.at(span.clipId) == input; });
          if (!count) continue;
          graph << "[" << input << ":v:0]split=" << count;
          for (size_t i = 0; i < spans.size(); ++i)
-            if (!spans[i].gap && spans[i].input == input) graph << "[s" << i << "]";
+            if (spans[i].clipId && clipInputs.at(spans[i].clipId) == input) graph << "[s" << i << "]";
          graph << ";\n";
       }
       for (size_t i = 0; i < spans.size(); ++i) {
          const auto &span = spans[i];
          const auto [width, height] = *pictureSize;
-         if (span.gap)
-            graph << "color=c=black:s=" << width << "x" << height << ":r=" << outputRate << ":d=" << span.duration;
+         if (!span.clipId)
+            graph << "color=c=black:s=" << width << "x" << height << ":r=" << outputRate
+               << ":d=" << static_cast<double>(span.frameCount) / outputRate;
          else {
-            graph << "[s" << i << "]trim=start=" << span.sourceStart << ":duration=" << span.duration * span.playbackRate
-               << ",setpts=(PTS-STARTPTS)/" << span.playbackRate;
+            // Keep pre-cut frames until fps samples the requested source time.
+            // Resetting each trim's first decoded frame would shift its clock.
+            graph << "[s" << i << "]trim=end=" << span.sourceEnd
+               << ",setpts=(PTS-STARTPTS-" << span.sourceStart << "/TB)/" << span.playbackRate;
             const auto crop = VideoEditing::VideoCropFilterExpression(span.crop);
             if (!crop.empty()) graph << "," << crop;
          }
          graph << ",fps=" << outputRate
-            << ",scale=" << width << ":" << height << ":force_original_aspect_ratio=decrease:force_divisible_by=2"
-            << ",pad=" << width << ":" << height << ":(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v" << i << "];\n";
+            << ":start_time=0:eof_action=pass,tpad=stop_mode=clone:stop=-1,trim=end_frame=" << span.frameCount
+            << ",setpts=N/(" << outputRate << "*TB)"
+            << ",scale=" << width << ":" << height;
+         // Mod-2 encoder rounding must not reintroduce thin bars around the
+         // very picture that chose the automatic canvas. Other aspect ratios
+         // and explicit dimensions retain their existing fit-with-padding policy.
+         const auto fillsCanvas = span.clipId && autoCanvasInput &&
+            clipInputs.at(span.clipId) == *autoCanvasInput && span.crop == autoCanvasCrop;
+         if (!fillsCanvas)
+            graph << ":force_original_aspect_ratio=decrease:force_divisible_by=2,pad="
+               << width << ":" << height << ":(ow-iw)/2:(oh-ih)/2";
+         graph << ",setsar=1,format=yuv420p[v" << i << "];\n";
       }
       for (size_t i = 0; i < spans.size(); ++i) graph << "[v" << i << "]";
-      graph << "concat=n=" << spans.size() << ":v=1:a=0[vout]\n";
+      graph << "concat=n=" << spans.size() << ":v=1:a=0,settb=expr=1/(" << outputRate << "),setpts=N[vout]\n";
       const auto filterPath = workspace.path / "_filters.txt";
       std::ofstream filterFile(filterPath, std::ios::binary);
       const auto script = graph.str();

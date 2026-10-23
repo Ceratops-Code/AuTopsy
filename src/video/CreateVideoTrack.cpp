@@ -13,6 +13,7 @@
 #include "WaveTrack.h"
 #include "AudioIO.h"
 #include "AudioIOSequences.h"
+#include "CommonCommandFlags.h"
 #include <algorithm>
 #include <cmath>
 
@@ -446,6 +447,34 @@ void TrimSelectedVideoTracks(AudacityProject &project, double from, double to)
       for (auto &clip : changed.clips) clip.start += from;
       track->SetTimeline(std::move(changed));
    }
+}
+namespace {
+const Clip *VideoClipAtSelectedCursor(const AudacityProject &project)
+{
+   const auto &region = ViewInfo::Get(project).selectedRegion;
+   if (!region.isPoint()) return nullptr;
+   const AuTopsyVideoTrack *selected{};
+   for (const auto *track : TrackList::Get(project).Selected<const Track>()) {
+      if (selected) return nullptr;
+      selected = dynamic_cast<const AuTopsyVideoTrack*>(track);
+      if (!selected) return nullptr;
+   }
+   return selected ? ClipAt(selected->Timeline(), region.t0()) : nullptr;
+}
+}
+const ReservedCommandFlag &TimeOrVideoClipSelectedFlag()
+{
+   static ReservedCommandFlag flag{
+      [](const AudacityProject &project) {
+         return TimeSelectedPred(project) || VideoClipAtSelectedCursor(project);
+      }, cutCopyOptions()
+   };
+   return flag;
+}
+void SelectVideoClipForDeletion(AudacityProject &project)
+{
+   if (const auto *clip = VideoClipAtSelectedCursor(project))
+      ViewInfo::Get(project).selectedRegion.setTimes(clip->start, clip->End());
 }
 const ReservedCommandFlag &AudioOrVideoTracksSelectedFlag()
 {
