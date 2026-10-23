@@ -280,6 +280,20 @@ permissible offset prevents partial movement or overlap, Escape restores the
 native history snapshot, and each completed drag has one Undo entry. Ordinary
 time-range edits retain their existing scope; this is a move selection.
 
+Ctrl-header presses retain owned copies of the native event's borrowed values
+until release or the drag threshold. A release toggles the clip without creating
+a history entry; a drag enters the existing native time-locked migration path
+without toggling it first. Cancellation discards the pending click. Each fresh
+press resets the header's movement threshold state. No event reference survives
+its callback, and no selection checkpoint is written.
+
+Audio clip export selects and paints its exact track/range before constructing
+the native export dialog. Explicit SelectedOnly mode keeps Current Selection
+chosen even when mute/solo makes that audio inaudible; the export engine owns
+that error rather than silently exporting other tracks. Split controls follow
+the active radio choice rather than a saved preference. Cancellation restores
+the preceding selection through the clip-action scope guard.
+
 `media-clip-selection::` checks additive/repeated toggles, anchor changes and
 expired-key pruning without native objects. `fork-clip-selection` separately
 checks Ctrl-click on headers/bodies, non-adjacent pieces, audio/video links,

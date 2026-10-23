@@ -53,7 +53,10 @@ ordinary editing.
 
 Right-click an audio clip for **Clip Volume...** to raise or lower that clip's
 level in dB using the native Amplify dialog, with normal Undo/Redo. **Export
-Clip...** opens export for the clicked audio or video clip. Video clip export
+Clip...** selects the clicked audio clip before opening export, with **Current
+Selection** already chosen, including when there was no previous selection.
+Mute or solo exclusion does not switch its range to Entire Project; the native
+exporter reports inaudible audio separately. Video clip export
 uses its picture and everything audible in the project over that clip's original
 time span. The edit cursor extends through the full track pane.
 
@@ -65,7 +68,9 @@ at a collision. One Undo reverses the drag; Escape cancels it. A plain click on
 another clip replaces the set; a waveform/blank range click clears it. Shift-drag
 keeps the usual whole-track behavior. This temporary selection applies to
 movement and is not saved or turned into a persistent group; range edits still
-use the ordinary time selection.
+use the ordinary time selection. **Ctrl-drag a clip header** to move between
+compatible tracks while keeping its exact time, even if the pointer drifts
+sideways. Ctrl-click without dragging still toggles the temporary selection.
 
 Ordinary Record starts at the cursor. For existing recording tracks, an occupied
 start is rejected and the take stops at the next clip or an earlier selected

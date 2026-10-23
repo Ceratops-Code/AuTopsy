@@ -63,6 +63,7 @@ AffordanceHandle::AffordanceHandle(const std::shared_ptr<Track>& track)
 UIHandle::Result AffordanceHandle::Click(const TrackPanelMouseEvent& evt, AudacityProject* pProject)
 {
     auto result = TimeShiftHandle::Click(evt, pProject);
+    mMoving = false;
     mClickPosition = evt.event.GetPosition();
     return result | RefreshCode::RefreshCell;
 }
@@ -85,7 +86,7 @@ UIHandle::Result AffordanceHandle::Drag(const TrackPanelMouseEvent& event, Audac
 UIHandle::Result AffordanceHandle::Release(const TrackPanelMouseEvent& event, AudacityProject* pProject, wxWindow* pParent)
 {
     auto result = TimeShiftHandle::Release(event, pProject, pParent);
-    if (!WasMoved())
+    if (!WasMoved() && !WasAdditiveClipClick())
         result |= UpdateTrackSelection(event, pProject);
     return result;
 }

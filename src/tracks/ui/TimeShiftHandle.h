@@ -303,7 +303,7 @@ class AUDACITY_DLL_API TimeShiftHandle : public UIHandle
 public:
    TimeShiftHandle(std::shared_ptr<Track> pTrack, bool gripHit);
 
-   TimeShiftHandle &operator=(TimeShiftHandle&&) = default;
+   TimeShiftHandle &operator=(TimeShiftHandle&&);
 
    bool IsGripHit() const { return mGripHit; }
 
@@ -346,8 +346,16 @@ public:
 protected:
    //There were attempt to move clip/track horizontally, or to move it vertically
    bool WasMoved() const;
+   bool WasAdditiveClipClick() const { return mCompletedAdditiveClipClick; }
 
 private:
+
+   // The native event borrows references. Retain owned values until release or
+   // the first drag, so Ctrl-click selection cannot consume Ctrl-drag movement.
+   struct PendingClipClick;
+   std::unique_ptr<PendingClipClick> mPendingClipClick;
+   bool mCompletedAdditiveClipClick{};
+   Result BeginClipShift(const TrackPanelMouseEvent &event, AudacityProject *project);
 
    // Try to move clips from one track to another with offset, allowing 1px tolerance,
    // that will move intervals and reset the origin

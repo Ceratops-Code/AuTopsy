@@ -703,7 +703,8 @@ used. The native connection/save adapters still need their separate app checks;
 this suite cannot prove storage firmware honors the operating system's flushes.
 
 `fork-clip-actions` owns audio clip-menu targeting, cancelled/applied negative and
-positive dB changes, Undo and export-dialog selection. `fork-video-clip-export`
+positive dB changes, Undo and export-dialog selection from an empty or broader
+prior selection, including mute/solo exclusion. `fork-video-clip-export`
 exports a split clip through its real context menu and checks output duration,
 picture pixels and two generated audio frequencies; a later project-only tone
 detects accidental mixing from time zero. `fork-edit-cursor-line` reads the line
@@ -720,6 +721,8 @@ equally, Escape restores the set, and Undo/Redo covers the whole move. Its audio
 cases also press outside a tiny clip's time span but inside its native header;
 video cases migrate several selected clips into a track with conflicting IDs,
 then drag the retained set again, including a canceled migration and reversal.
+Ctrl-drag cases include sideways pointer drift, exact time retention, repeated
+audio/video migration, cancellation, blocked destinations and Undo/Redo.
 Audio coordinates come from live `GetInfo Type=Boxes` clip-header cells. The owned input
 driver releases its Ctrl transition on success or failure. Selection produces no
 saved project fields; fixtures and observations use the existing case directory.

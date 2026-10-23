@@ -86,6 +86,7 @@ GROUPS = (
 NATIVE_INPUTS = (
     "src/clip-groups/SelectMediaClips.*", "scripts/piped-work/test_clip_selection.py",
     "src/tracks/ui/TimeShiftHandle.*", "src/tracks/ui/SelectHandle.cpp",
+    "src/tracks/ui/AffordanceHandle.*", "src/export/ExportAudioDialog.*",
     "src/tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp",
     "src/tracks/playabletrack/wavetrack/ui/WaveTrackShifter.cpp",
     "src/clip-groups/OpenClipActions.*", "src/ProjectAudioManager.cpp", "src/ProjectAudioManager.h",

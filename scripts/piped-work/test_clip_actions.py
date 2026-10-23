@@ -217,11 +217,16 @@ def check_audio_clip_actions(client, root, ffmpeg):
 
     # The menu must replace the older, broader selection with exactly its clip.
     for repeat in range(2):
-        client.send("SelectAll")
-        client.send(f"SelectTime: Start=0 End={end}")
+        if repeat:
+            client.send("SelectAll")
+            client.send(f"SelectTime: Start=0 End={end}")
+        else:
+            client.send("SelectTracks: Track=0 TrackCount=0 Mode=Set")
+            client.send("SelectTime: Start=0.25 End=0.25")
 
         def export_dialog(windows, dialog):
-            assert windows.message(windows.button(dialog, "Current Selection"), 0xF0) == 1
+            radio = windows.button(dialog, "Current Selection")
+            assert windows.enabled(radio) and windows.message(radio, 0xF0) == 1
             if repeat:
                 windows.text(windows.field(dialog, "File Name:"), "_audio-clip.wav")
                 windows.text(windows.field(dialog, "Folder:"), root)
@@ -234,6 +239,23 @@ def check_audio_clip_actions(client, root, ffmpeg):
     expected = baseline[4000:]
     assert abs(len(exported) - len(expected)) < 8
     assert max(abs(a - b) for a, b in zip(exported[32:-32], expected[32:-32], strict=True)) < 0.002
+    # Explicit clip scope remains selected when mute/solo excludes its sound.
+    # The native exporter can report inaudibility; it must never select another
+    # track or silently offer the entire project instead of this clip's range.
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SetTrackAudio: Mute=1")
+    client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
+    client.send("SetTrackAudio: Solo=1")
+    client.send("SelectTracks: Track=0 TrackCount=0 Mode=Set")
+    client.send("SelectTime: Start=0.25 End=0.25")
+
+    def muted_export(windows, dialog):
+        radio = windows.button(dialog, "Current Selection")
+        assert windows.enabled(radio) and windows.message(radio, 0xF0) == 1
+        windows.click(windows.button(dialog, "Cancel"))
+
+    with_native_dialog(lambda: audio_context(client, 0.75, 0, "Export Clip..."),
+                       "Export Audio", muted_export, menu_gesture=True)
     client.file("SaveProject2", root / "_audio-clip-actions.aup3")
 
 

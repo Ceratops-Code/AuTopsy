@@ -206,7 +206,13 @@ ExportAudioDialog::ExportAudioDialog(wxWindow* parent,
    const auto hasLabels = !labelTracks.empty() &&
       (*labelTracks.begin())->GetNumLabels() > 0;
    const auto hasMultipleWaveTracks = tracks.Any<WaveTrack>().size() > 1;
-   const auto hasSelectedAudio = ExportUtils::HasSelectedAudio(mProject);
+   // SelectedOnly is an explicit range request. Mute/solo can make a selected
+   // clip inaudible; that is checked by OnExport, never a reason to silently
+   // replace a clip export with an entire-project export.
+   const auto hasSelectedRange = !tracks.Selected<WaveTrack>().empty() &&
+      !ViewInfo::Get(mProject).selectedRegion.isPoint();
+   const auto hasSelectedAudio = ExportUtils::HasSelectedAudio(mProject) ||
+      (mode == ExportMode::SelectedOnly && hasSelectedRange);
 
    mRangeSelection->Enable(hasSelectedAudio);
    mRangeSplit->Enable(hasLabels || hasMultipleWaveTracks);
@@ -235,7 +241,7 @@ ExportAudioDialog::ExportAudioDialog(wxWindow* parent,
    if (mRangeSelection->IsEnabled() && !hasLabels && !hasMultipleWaveTracks)
       mRangeSelection->MoveAfterInTabOrder(mRangeProject);
 
-   if (ExportAudioExportRange.Read() != "split" || (!hasLabels && !hasMultipleWaveTracks))
+   if (!mRangeSplit->GetValue() || (!hasLabels && !hasMultipleWaveTracks))
       mSplitsPanel->Hide();
 
    mExportOptionsPanel->SetCustomMappingEnabled(

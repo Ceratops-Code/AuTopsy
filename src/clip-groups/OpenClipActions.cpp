@@ -52,6 +52,11 @@ public:
       for (auto* track : TrackList::Get(mProject)) track->SetSelected(track == &target);
       TrackFocus::Get(mProject).Set(&target);
       ViewInfo::Get(mProject).selectedRegion.setTimes(start, end);
+      // Paint the clip scope before a modal effect/export window takes over.
+      // The dialog and the visible project must start from the same selection.
+      auto& panel = TrackPanel::Get(mProject);
+      panel.Refresh(false);
+      panel.Update();
    }
    void Keep() { mRestore = false; }
    ~ScopedClipSelection()

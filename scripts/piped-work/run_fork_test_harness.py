@@ -520,8 +520,8 @@ def operate_owned_video_track(
         end_time = start_time
     if gesture not in ("drag", "click", "double-click", "context"):
         raise ValueError("Unknown native video gesture: " + gesture)
-    if control and gesture != "click":
-        raise ValueError("Ctrl is supported only for an additive clip click.")
+    if control and gesture not in ("click", "drag"):
+        raise ValueError("Ctrl is supported for clip clicks and time-locked drags.")
     user = ctypes.WinDLL("user32", use_last_error=True)
     # Wait before reading window/paint facts: project-open callbacks may replace
     # those controls while the native double-click interval expires.
