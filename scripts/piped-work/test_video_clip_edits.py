@@ -525,13 +525,26 @@ def check_transport_toolbar(client, root):
                               "native toolbar playback clock")
         if paused:
             press(buttons["Pause"])
-            wait_for_native_state(lambda: native.enabled(preview_buttons["play"]),
+            wait_for_native_state(lambda: native.enabled(preview_buttons["play"]) and
+                                  not native.enabled(preview_buttons["pause"]),
                                   "native toolbar paused")
+            # Control availability can update before the decoder's last clock
+            # sample. Establish a stationary clock before testing navigation;
+            # an actually running stream cannot satisfy this precondition.
+            clock = [preview_project_seconds(status), time.monotonic()]
+
+            def paused_clock_settled():
+                current = preview_project_seconds(status)
+                if not math.isfinite(current) or current != clock[0]:
+                    clock[:] = [current, time.monotonic()]
+                return math.isfinite(current) and time.monotonic() - clock[1] >= 0.15
+
+            wait_for_native_state(paused_clock_settled, "stationary paused preview clock")
         position = preview_project_seconds(status)
         press(cursor_button)
         if paused:
             time.sleep(0.15)
-            assert abs(preview_project_seconds(status) - position) < 0.05
+            assert abs(preview_project_seconds(status) - position) < 0.05, (position, native.control_text(status))
         else:
             wait_for_native_state(lambda position=position: preview_project_seconds(status) > position + 0.08,
                                   "cursor navigation preserves playback")
