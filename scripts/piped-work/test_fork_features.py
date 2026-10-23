@@ -60,7 +60,6 @@ from test_clip_actions import (
     check_video_clip_export,
 )
 from test_clip_selection import check_clip_selection
-from test_video_export_timing import check_video_export_timing
 from test_track_groups import check_track_groups
 from test_video_clip_edits import (
     check_preview_navigation,
@@ -73,6 +72,7 @@ from test_video_clip_edits import (
     check_video_transport,
     check_video_visibility,
 )
+from test_video_export_timing import check_video_export_timing
 
 
 def check_groups(client, root):
