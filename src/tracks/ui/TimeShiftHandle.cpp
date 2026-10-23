@@ -490,17 +490,20 @@ UIHandle::Result TimeShiftHandle::Click(
       viewInfo.PositionToTime(event.m_x, rect.x);
 
    if (event.ShiftDown()) ClipGroups::ClearTemporaryClipSelection(*pProject);
-   else if (ClipGroups::ClickTemporaryMediaClip(*pProject, *pTrack, clickTime, event.CmdDown()) && event.CmdDown())
-      return RefreshAll | Cancelled;
 
    auto pShifter = MakeTrackShifter::Call(*pTrack, *pProject);
 
    auto hitTestResult = TrackShifter::HitTestResult::Track;
+   bool useTemporaryClipSelection{};
    if (!event.ShiftDown()) {
       TrackShifter::HitTestParams params{
          rect, event.m_x, event.m_y
       };
       hitTestResult = pShifter->HitTest( clickTime, viewInfo, &params );
+      useTemporaryClipSelection = params.hitInterval && ClipGroups::ClickTemporaryMediaClip(
+         *pProject, *pTrack, *params.hitInterval, event.CmdDown());
+      if (!useTemporaryClipSelection) ClipGroups::ClearTemporaryClipSelection(*pProject);
+      if (useTemporaryClipSelection && event.CmdDown()) return RefreshAll | Cancelled;
       switch( hitTestResult ) {
       case TrackShifter::HitTestResult::Miss:
          return Cancelled;
@@ -516,7 +519,7 @@ UIHandle::Result TimeShiftHandle::Click(
    mClipMoveState.Init(*pProject, *pTrack,
       hitTestResult, move(pShifter), clickTime,
       viewInfo, trackList,
-      SyncLockState::Get( *pProject ).IsSyncLocked(), true );
+      SyncLockState::Get( *pProject ).IsSyncLocked(), useTemporaryClipSelection );
 
    mSlideUpDownOnly = event.CmdDown() && !multiToolModeActive;
    mRect = rect;

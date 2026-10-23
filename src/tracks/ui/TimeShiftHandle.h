@@ -12,6 +12,7 @@ Paul Licameli
 #define __AUDACITY_TIMESHIFT_HANDLE__
 
 #include <functional>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -52,6 +53,9 @@ public:
    struct HitTestParams {
       wxRect rect;
       wxCoord xx, yy;
+      // A successful media hit reports its exact interval, including native
+      // pixel tolerance for very short clips. Optional for other track types.
+      std::shared_ptr<ChannelGroupInterval> hitInterval{};
    };
 
    //! Decide how shift behaves, based on the track that is clicked in

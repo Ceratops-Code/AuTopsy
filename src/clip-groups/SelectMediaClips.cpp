@@ -4,6 +4,7 @@
 #include "Track.h"
 #include "WaveClip.h"
 #include "WaveTrack.h"
+#include "ViewInfo.h"
 #include "tracks/ui/TimeShiftHandle.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "../video/CreateVideoTrack.h"
@@ -71,27 +72,39 @@ ProjectClipSelection &For(AudacityProject &project)
 { return project.AttachedObjects::Get<ProjectClipSelection>(sSelectionKey); }
 }
 
-bool ClickTemporaryMediaClip(AudacityProject &project, Track &track, double time, bool additive)
+bool ClickTemporaryMediaClip(AudacityProject &project, Track &track, const ChannelGroupInterval &hit, bool additive)
 {
    auto &state = For(project);
    state.Prune(project);
    std::uint64_t key{};
    if (auto *wave = dynamic_cast<WaveTrack *>(&track)) {
       for (const auto &clip : wave->Intervals())
-         if (clip->GetPlayStartTime() <= time && time < clip->GetPlayEndTime()) {
+         if (clip.get() == &hit) {
             key = state.Add(track, clip, 0); break;
          }
    }
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
    else if (auto *video = dynamic_cast<AuTopsyVideoTrack *>(&track)) {
-      if (const auto *clip = VideoTimeline::ClipAt(video->Timeline(), time))
-         key = state.Add(track, {}, clip->id);
+      const auto *interval = dynamic_cast<const LinkedClipInterval *>(&hit);
+      if (interval)
+         for (const auto &clip : video->Timeline().clips)
+            if (clip.id == interval->VideoClipId()) { key = state.Add(track, {}, clip.id); break; }
    }
 #endif
    if (!key) return false;
    state.selection.Click(key, additive);
    state.DropUnused();
    return true;
+}
+
+bool ClickTemporaryMediaClipAtPointer(AudacityProject &project, Track &track,
+   const wxRect &rect, int x, int y, bool additive)
+{
+   auto shifter = MakeTrackShifter::Call(track, project);
+   const auto &view = ViewInfo::Get(project);
+   TrackShifter::HitTestParams params{rect, x, y};
+   shifter->HitTest(view.PositionToTime(x, rect.x), view, &params);
+   return params.hitInterval && ClickTemporaryMediaClip(project, track, *params.hitInterval, additive);
 }
 
 void ClearTemporaryClipSelection(AudacityProject &project)
@@ -112,6 +125,28 @@ bool IsVideoClipInTemporarySelection(AudacityProject &project, const Track &trac
    const auto &state = For(project);
    return state.selection.IsExplicit() && std::any_of(state.references.begin(), state.references.end(),
       [&](const ClipReference &ref) { return state.selection.Contains(ref.key) && ref.videoId == id && ref.track.lock().get() == &track; });
+}
+
+TemporaryClipSelection::Key TemporaryVideoClipSelectionKey(AudacityProject &project,
+   const Track &track, std::uint64_t id)
+{
+   const auto &state = For(project);
+   for (const auto &ref : state.references)
+      if (state.selection.Contains(ref.key) && ref.videoId == id && ref.track.lock().get() == &track)
+         return ref.key;
+   return 0;
+}
+
+void MoveTemporaryVideoClipReference(AudacityProject &project, TemporaryClipSelection::Key key,
+   Track &destination, std::uint64_t id)
+{
+   // Remap by the opaque selection key, never a source track/ID pair that an
+   // earlier attach may already have changed during a multi-track migration.
+   auto &state = For(project);
+   if (!key || !state.selection.Contains(key)) return;
+   for (auto &ref : state.references) if (ref.key == key) {
+      ref.track = destination.SharedPointer(); ref.videoId = id; return;
+   }
 }
 
 bool ApplyTemporaryClipMoveSelection(AudacityProject &project, ClipMoveState &state)

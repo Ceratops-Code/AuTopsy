@@ -7,6 +7,8 @@
 class AudacityProject;
 class Track;
 class WaveClip;
+class ChannelGroupInterval;
+class wxRect;
 struct ClipMoveState;
 
 namespace ClipGroups {
@@ -50,10 +52,13 @@ private:
 };
 
 // Native adapters resolve live objects at every gesture; selection is not saved.
-bool ClickTemporaryMediaClip(AudacityProject &project, Track &track, double time, bool additive);
+bool ClickTemporaryMediaClip(AudacityProject &project, Track &track, const ChannelGroupInterval &hit, bool additive);
+bool ClickTemporaryMediaClipAtPointer(AudacityProject &project, Track &track, const wxRect &rect, int x, int y, bool additive);
 void ClearTemporaryClipSelection(AudacityProject &project);
 bool HasTemporaryClipSelection(AudacityProject &project);
 bool IsAudioClipInTemporarySelection(AudacityProject &project, const WaveClip &clip);
 bool IsVideoClipInTemporarySelection(AudacityProject &project, const Track &track, std::uint64_t id);
 bool ApplyTemporaryClipMoveSelection(AudacityProject &project, ClipMoveState &state);
+TemporaryClipSelection::Key TemporaryVideoClipSelectionKey(AudacityProject &project, const Track &track, std::uint64_t id);
+void MoveTemporaryVideoClipReference(AudacityProject &project, TemporaryClipSelection::Key key, Track &destination, std::uint64_t id);
 }

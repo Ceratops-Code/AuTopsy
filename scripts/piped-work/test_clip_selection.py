@@ -42,8 +42,8 @@ def same_starts(actual, expected, tolerance=0.0001):
 def moved_set(before, after, selected, desired=None):
     """All selected clips share one movement; every omitted clip stays put."""
     assert len(before) == len(after), (before, after)
-    assert [(row["track"], row["name"]) for row in before] == [
-        (row["track"], row["name"]) for row in after], (before, after)
+    assert [(row["track"], row.get("name", row.get("id"))) for row in before] == [
+        (row["track"], row.get("name", row.get("id"))) for row in after], (before, after)
     deltas = [new["start"] - old["start"] for old, new in zip(before, after)]
     delta = deltas[next(iter(selected))]
     assert all(abs(value - (delta if index in selected else 0)) < 0.0001
@@ -186,7 +186,95 @@ def check_mixed_selection(client, root):
     return {"linked_picture_sound_delta": delta}
 
 
+def check_short_header_selection(client, root):
+    """A painted tiny header has a larger target than its sample-time span."""
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    for name in ("tone-a.wav", "tone-b.wav"):
+        client.file("Import2", root / name)
+    client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=2 End=2.0001")
+    client.send("Trim")
+    client.send("SetClip: At=2.00005 Name=\"tiny\"")
+    client.send("FitInWindow")
+    client.send("FitV")
+    audio_gesture(client, 0, 1)
+    audio_gesture(client, 0, 1, control=True)
+    audio_gesture(client, 0, 1, control=True)
+    before = audio_clips(client)
+    info = client.data("GetVideoPreviewInfo")
+    pixel = (info["viewEnd"] - info["viewStart"]) / info["videoTrackDataWidth"]
+    outside = before[1]["start"] - pixel
+    assert outside < before[1]["start"] and before[1]["end"] - before[1]["start"] < pixel
+    audio_gesture(client, 1, outside, outside + 1)
+    moved = audio_clips(client)
+    moved_set(before, moved, {1}, 1)
+    # Add the same tiny native target to a new move set from beyond its exact
+    # source-time boundary, then move from the ordinary audio header.
+    audio_gesture(client, 0, 1)
+    audio_gesture(client, 1, moved[1]["start"] - pixel, control=True)
+    audio_gesture(client, 0, 1, 1.5)
+    moved_set(moved, audio_clips(client), {0, 1}, 0.5)
+    return {"target_seconds_per_pixel": pixel}
+
+
+def check_video_migration_selection(client, root):
+    """Keep the exact set through native migration and destination ID reuse."""
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    client.file("ImportVideo", root / "source.mp4")
+    client.send("SelectAll")
+    client.send("SelectTime: Start=2 End=2")
+    client.send("Split")
+    client.send('UnlinkMediaClips: Clips="0:0,0:1"')
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=0 End=2")
+    client.send("Copy")
+    client.send("NewVideoTrack")
+    tracks = client.data("GetVideoClips")["tracks"]
+    source, destination = tracks[0]["index"], tracks[-1]["index"]
+    client.send(f"SelectTracks: Track={destination} TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=8 End=8")
+    client.send("Paste")
+    original = client.data("GetVideoClips")["clips"]
+    source_ids = {row["id"] for row in original if row["track"] == source}
+    destination_ids = {row["id"] for row in original if row["track"] == destination}
+    assert source_ids & destination_ids, original
+    client.send("FitInWindow")
+    client.send("FitV")
+    operate_owned_video_track(client, 1, track=source, gesture="click")
+    operate_owned_video_track(client, 3, track=source, gesture="click", control=True)
+    operate_owned_video_track(client, 1, 1, track=source, to_track=destination)
+    migrated = client.data("GetVideoClips")["clips"]
+    assert all(row["track"] == destination for row in migrated), migrated
+    assert {row["id"] for row in migrated} - source_ids - destination_ids, migrated
+    operate_owned_video_track(client, 1, 2, track=destination)
+    moved = client.data("GetVideoClips")["clips"]
+    delta = moved_set(migrated, moved, {0, 1}, 1)
+    before_cancel = [(row["track"], row["start"], row["end"]) for row in moved]
+    operate_owned_video_track(client, 2, 2, track=destination, to_track=source, cancel=True)
+    assert [(row["track"], row["start"], row["end"]) for row in
+            client.data("GetVideoClips")["clips"]] == before_cancel
+    # The canceled native transaction restores track objects. Select the live
+    # clips again, then repeat migration and a horizontal drag in reverse.
+    operate_owned_video_track(client, 2, track=destination, gesture="click")
+    operate_owned_video_track(client, 4, track=destination, gesture="click", control=True)
+    operate_owned_video_track(client, 2, 2, track=destination, to_track=source)
+    returned = client.data("GetVideoClips")["clips"]
+    assert sum(row["track"] == source for row in returned) == 2, returned
+    operate_owned_video_track(client, 2, 2.5, track=source)
+    after = client.data("GetVideoClips")["clips"]
+    moved_set(returned, after, {0, 1}, 0.5)
+    client.send("Undo")
+    same_starts(client.data("GetVideoClips")["clips"], returned)
+    client.send("Redo")
+    same_starts(client.data("GetVideoClips")["clips"], after)
+    return {"post_migration_delta": delta}
+
+
 def check_clip_selection(client, root):
     observations = {"audio": check_audio_selection(client, root),
-                    "mixed": check_mixed_selection(client, root)}
+                    "mixed": check_mixed_selection(client, root),
+                    "tiny_header": check_short_header_selection(client, root),
+                    "video_migration": check_video_migration_selection(client, root)}
     (root / "_selection-observations.json").write_text(json.dumps(observations, indent=2), encoding="utf-8")

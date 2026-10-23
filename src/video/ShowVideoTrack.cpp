@@ -55,7 +55,9 @@ namespace {
 using namespace VideoTimeline;
 struct ShiftInterval final : ChannelGroupInterval, ClipGroups::LinkedClipInterval {
    Clip clip;
-   explicit ShiftInterval(Clip value) : clip(std::move(value)) {}
+   ClipGroups::TemporaryClipSelection::Key selectionKey{};
+   explicit ShiftInterval(Clip value, ClipGroups::TemporaryClipSelection::Key key = 0)
+      : clip(std::move(value)), selectionKey(key) {}
    double Start() const override { return clip.start; }
    double End() const override { return clip.End(); }
    std::vector<std::string> MediaGroupIds() const override { return VideoTimeline::VideoContentLinkGroups(clip); }
@@ -67,21 +69,26 @@ struct ShiftInterval final : ChannelGroupInterval, ClipGroups::LinkedClipInterva
 // source-frame quantization and free-space constraints.
 class VideoTrackShifter final : public TrackShifter {
    std::shared_ptr<AuTopsyVideoTrack> mTrack;
+   AudacityProject &mProject;
    static ShiftInterval &Data(const std::shared_ptr<ChannelGroupInterval> &value)
    { return static_cast<ShiftInterval&>(*value); }
 public:
-   explicit VideoTrackShifter(AuTopsyVideoTrack &track)
-      : mTrack(track.SharedPointer<AuTopsyVideoTrack>()) {
+   explicit VideoTrackShifter(AuTopsyVideoTrack &track, AudacityProject &project)
+      : mTrack(track.SharedPointer<AuTopsyVideoTrack>()), mProject(project) {
       for (const auto &clip : track.Timeline().clips) {
          auto value = clip; value.media = SourceFor(track.Timeline(), clip);
-         mFixed.push_back(std::make_shared<ShiftInterval>(std::move(value)));
+         const auto key = ClipGroups::TemporaryVideoClipSelectionKey(project, track, clip.id);
+         mFixed.push_back(std::make_shared<ShiftInterval>(std::move(value), key));
       }
    }
    Track &GetTrack() const override { return *mTrack; }
    bool SyncLocks() override { return true; }
-   HitTestResult HitTest(double time, const ViewInfo &view, HitTestParams *) override {
+   HitTestResult HitTest(double time, const ViewInfo &view, HitTestParams *params) override {
       const auto *clip = ClipAt(mTrack->Timeline(), time);
       if (!clip) return HitTestResult::Miss;
+      if (params)
+         for (const auto &interval : mFixed)
+            if (Data(interval).clip.id == clip->id) { params->hitInterval = interval; break; }
       const auto &selection = view.selectedRegion;
       if (mTrack->GetSelected() && selection.t1() > selection.t0() &&
           time >= selection.t0() && time < selection.t1()) {
@@ -171,11 +178,13 @@ public:
          if (ids.count(clip.id)) clip.id = candidate.nextId++;
          candidate.nextId = std::max(candidate.nextId, clip.id + 1); ids.insert(clip.id);
          candidate.clips.push_back(clip);
-         attached.push_back(std::make_shared<ShiftInterval>(std::move(clip)));
+         attached.push_back(std::make_shared<ShiftInterval>(std::move(clip), Data(interval).selectionKey));
       }
       std::sort(candidate.clips.begin(), candidate.clips.end(),
          [](const auto &a, const auto &b) { return a.start < b.start; });
       RequireWellFormedTimeline(candidate); mTrack->SetTimeline(std::move(candidate));
+      for (const auto &interval : attached)
+         ClipGroups::MoveTemporaryVideoClipReference(mProject, Data(interval).selectionKey, *mTrack, Data(interval).clip.id);
       mMoving.insert(mMoving.end(), attached.begin(), attached.end());
       return true;
    }
@@ -183,8 +192,8 @@ public:
 }
 using MakeVideoShifter = MakeTrackShifter::Override<AuTopsyVideoTrack>;
 DEFINE_ATTACHED_VIRTUAL_OVERRIDE(MakeVideoShifter) {
-    return [](AuTopsyVideoTrack &track, AudacityProject &) {
-       return std::make_unique<VideoTrackShifter>(track);
+    return [](AuTopsyVideoTrack &track, AudacityProject &project) {
+       return std::make_unique<VideoTrackShifter>(track, project);
    };
 }
 

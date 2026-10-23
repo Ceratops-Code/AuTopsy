@@ -560,12 +560,12 @@ UIHandle::Result SelectHandle::Click(
    auto &viewInfo = ViewInfo::Get(*pProject);
 
    if (event.LeftDown() || event.LeftDClick()) {
-      const auto time = viewInfo.PositionToTime(event.GetX(), evt.rect.x);
       if (event.CmdDown() && !event.ShiftDown() &&
-          ClipGroups::ClickTemporaryMediaClip(*pProject, *pTrack, time, true))
+          ClipGroups::ClickTemporaryMediaClipAtPointer(*pProject, *pTrack, evt.rect, event.GetX(), event.GetY(), true))
          return RefreshAll | Cancelled;
       ClipGroups::ClearTemporaryClipSelection(*pProject);
-      if (!event.ShiftDown()) ClipGroups::ClickTemporaryMediaClip(*pProject, *pTrack, time, false);
+      if (!event.ShiftDown()) ClipGroups::ClickTemporaryMediaClipAtPointer(
+         *pProject, *pTrack, evt.rect, event.GetX(), event.GetY(), false);
    }
 
    mMostRecentX = event.m_x;

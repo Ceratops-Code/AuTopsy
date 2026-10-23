@@ -262,7 +262,11 @@ and a drag anchor. Its `.cpp` adapter keeps weak references to current audio
 clips or video-track/clip-ID pairs. Each gesture resolves those references
 against the live track list; deleted or history-replaced objects are removed.
 Audio clips can retain selection when the existing drag engine migrates the same
-object to another track. Replaced identities are never guessed from time ranges,
+object to another track. Video shifters carry opaque selection keys through
+detach/attach and update the destination track/ID before painting, including ID
+collisions. Remapping by key prevents cascading matches between migrating tracks.
+Native hit testing supplies the exact clicked interval, including the inflated
+pixel target of a very short audio header. Replaced identities are never guessed from time ranges,
 names or pane positions. Project close releases the entire attachment. No XML,
 database, diagnostics, cache or recovery artifact is produced by selection.
 
@@ -280,7 +284,8 @@ time-range edits retain their existing scope; this is a move selection.
 `media-clip-selection::` checks additive/repeated toggles, anchor changes and
 expired-key pruning without native objects. `fork-clip-selection` separately
 checks Ctrl-click on headers/bodies, non-adjacent pieces, audio/video links,
-collision limits, cancellation, repeated moves, Undo/Redo and save/reopen using
+collision limits, tiny zoomed-out headers, migration with reused destination IDs,
+cancellation, repeated moves, Undo/Redo and save/reopen using
 generated media. The native scripting adapter reports actual clip-header cell
 rectangles so the test does not assume an upstream header height or screen row.
 
