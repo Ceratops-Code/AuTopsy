@@ -709,3 +709,15 @@ picture pixels and two generated audio frequencies; a later project-only tone
 detects accidental mixing from time zero. `fork-edit-cursor-line` reads the line
 across the owned pane, including other tracks and blank space. Generated media,
 temporary exports and projects use the existing marked case directory/cleanup.
+
+`media-clip-selection::` owns the host-free additive-selection, anchor and stale
+identity cases. `fork-clip-selection` drives actual Ctrl-clicks and header drags
+on generated audio/video clips: non-adjacent pieces omit the intervening clip,
+mixed selections include existing linked sound, collisions limit every member
+equally, Escape restores the set, and Undo/Redo covers the whole move. Its audio
+cases also press outside a tiny clip's time span but inside its native header;
+video cases migrate several selected clips into a track with conflicting IDs,
+then drag the retained set again, including a canceled migration and reversal.
+Audio coordinates come from live `GetInfo Type=Boxes` clip-header cells. The owned input
+driver releases its Ctrl transition on success or failure. Selection produces no
+saved project fields; fixtures and observations use the existing case directory.

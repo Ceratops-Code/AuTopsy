@@ -48,6 +48,8 @@ public:
       if (!pClip)
          return HitTestResult::Miss;
 
+      if (params) params->hitInterval = pClip;
+
       auto t0 = viewInfo.selectedRegion.t0();
       auto t1 = viewInfo.selectedRegion.t1();
       if (mpTrack->IsSelected() && time >= t0 && time < t1) {

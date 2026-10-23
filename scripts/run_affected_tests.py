@@ -41,6 +41,8 @@ COMMON_INPUTS = (
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
+    CheckGroup("media-clip-selection", ("src/clip-groups/SelectMediaClips.h",
+        "src/clip-groups/TestMediaClipSelection.cpp"), "media-clip-selection-test"),
     CheckGroup("project-storage", ("libraries/lib-project-file-io/ConfigureProjectStorage.*",
         "libraries/lib-project-file-io/tests/*", "lib-src/sqlite/sqlite3.c", "lib-src/sqlite/sqlite3.h"),
         "project-storage-test"),
@@ -82,6 +84,10 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/clip-groups/SelectMediaClips.*", "scripts/piped-work/test_clip_selection.py",
+    "src/tracks/ui/TimeShiftHandle.*", "src/tracks/ui/SelectHandle.cpp",
+    "src/tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp",
+    "src/tracks/playabletrack/wavetrack/ui/WaveTrackShifter.cpp",
     "src/clip-groups/OpenClipActions.*", "src/ProjectAudioManager.cpp", "src/ProjectAudioManager.h",
     "src/tracks/ui/EditCursorOverlay.cpp", "src/tracks/playabletrack/wavetrack/ui/WaveClipUIUtilities.cpp",
     "scripts/piped-work/test_clip_actions.py",

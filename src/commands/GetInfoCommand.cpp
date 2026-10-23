@@ -36,6 +36,7 @@ This class now lists
 #include "TrackFocus.h"
 #include "../TrackPanel.h"
 #include "WaveClip.h"
+#include "../tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.h"
 #include "../tracks/playabletrack/wavetrack/ui/WaveformAppearance.h"
 #include "ViewInfo.h"
 #include "WaveTrack.h"
@@ -752,7 +753,23 @@ void GetInfoCommand::ExploreTrackPanel( const CommandContext &context,
    AudacityProject * pProj = &context.project;
    auto &tp = TrackPanel::Get( *pProj );
    wxRect panelRect{ {}, tp.GetSize() };
+   int trackIndex{};
    for (auto pTrack : TrackList::Get(*pProj)) {
+      // Report the live header cell itself: consumers must not guess its
+      // location from a waveform ruler or a fixed upstream header height.
+      tp.VisitCells([&](const wxRect &rect, TrackPanelCell &cell) {
+         auto *header = dynamic_cast<WaveTrackAffordanceControls *>(&cell);
+         if (!header || header->FindTrack().get() != pTrack || !rect.Intersects(panelRect)) return;
+         auto box = rect;
+         box.Offset(P);
+         context.StartStruct();
+         context.AddItem(depth, "depth"); context.AddItem("ClipHeader", "label");
+         context.AddItem(trackIndex, "track");
+         context.StartField("box"); context.StartArray();
+         context.AddItem(box.GetLeft()); context.AddItem(box.GetTop());
+         context.AddItem(box.GetRight()); context.AddItem(box.GetBottom());
+         context.EndArray(); context.EndField(); context.EndStruct();
+      });
       for (auto pChannel : pTrack->Channels()) {
          auto rulers = tp.FindRulerRects(*pChannel);
          for (auto &R : rulers) {
@@ -773,6 +790,7 @@ void GetInfoCommand::ExploreTrackPanel( const CommandContext &context,
             context.EndStruct();
          }
       }
+      ++trackIndex;
    }
 }
 

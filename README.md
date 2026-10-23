@@ -57,6 +57,16 @@ Clip...** opens export for the clicked audio or video clip. Video clip export
 uses its picture and everything audible in the project over that clip's original
 time span. The edit cursor extends through the full track pane.
 
+To move individual clips together, click the first clip and **Ctrl-click** each
+additional audio or video clip, then drag any selected clip's header. Ctrl-click
+again to remove a clip from the temporary move selection. The set keeps its
+relative timing, includes existing linked/grouped partners, and stops together
+at a collision. One Undo reverses the drag; Escape cancels it. A plain click on
+another clip replaces the set; a waveform/blank range click clears it. Shift-drag
+keeps the usual whole-track behavior. This temporary selection applies to
+movement and is not saved or turned into a persistent group; range edits still
+use the ordinary time selection.
+
 Ordinary Record starts at the cursor. For existing recording tracks, an occupied
 start is rejected and the take stops at the next clip or an earlier selected
 end. The recording-gap policy has focused automated coverage; this preview has
