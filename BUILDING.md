@@ -586,6 +586,14 @@ concurrent-owner, corruption, archive safety and cleanup behavior without networ
 access or an application window.
 
 Each native consumer runs from a private copy in the marked case directory.
+`run_audacity_consumer.py` owns those sessions and shared process observations.
+Every input and saved copy opens through a fresh normal application startup;
+stock scripting never creates or destroys project windows. A Windows job owns
+the consumer and its descendants before its first instruction, including crash
+reporters, and ends them before private scratch cleanup. Child failures retain
+their invocation, exit status and both output streams in the returned error.
+`fork-audacity-consumer-runtime` checks repeat, interruption, ownership,
+round trips, scratch cleanup and accepted-application reuse independently.
 Its private portable profile disables file association and update changes,
 separates audio and GUI temporary storage, and places its project window on the
 selected test display. The upstream name `Portable Settings` is required for
@@ -598,7 +606,13 @@ dither, while clip timing, names, track properties and labels must match. Result
 records name both consumer versions, official package digests and executable hashes. After all saved-copy
 acknowledgements the harness ends only its private consumer process; stock pipe
 shutdown is outside this file-format test. It removes the private copied app,
-profile, log and working copies on success or failure. Current neutral fixtures
+profile, log and working copies on success or failure. App acceptance and stock
+consumer acceptance have separate immutable identities. A consumer retry keeps
+the app result and checks only the missing consumer scope; fixture descriptor
+and file hashes bind that result to the retained generated inputs. Missing or
+changed fixture bytes block instead of silently replaying the app. The marked
+case owner keeps only its current descriptor/project/audio group and replaces
+it on a new application run. Current neutral fixtures
 and original test projects remain in the existing bounded per-case workspace.
 
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects

@@ -68,10 +68,13 @@ GROUPS = (
         "scripts/piped-work/test_fork_features.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
         "scripts/piped-work/test_video_clip_edits.py")),
+    CheckGroup("fork-audacity-consumer-runtime", (
+        "scripts/piped-work/run_audacity_consumer.py",
+        "scripts/piped-work/test_run_audacity_consumer.py",
+        "scripts/piped-work/test_fork_features.py")),
     CheckGroup("fork-audacity-consumer-cache", (
         "scripts/piped-work/prepare_audacity_consumer.py",
-        "scripts/piped-work/test_prepare_audacity_consumer.py",
-        "scripts/piped-work/run_fork_test_harness.py")),
+        "scripts/piped-work/test_prepare_audacity_consumer.py")),
 )
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.

@@ -59,6 +59,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    if(Python3_Interpreter_FOUND)
       file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests" "${CMAKE_BINARY_DIR}/_selection-tests"
          "${CMAKE_BINARY_DIR}/_consumer-tests")
+      add_test(NAME fork-audacity-consumer-runtime COMMAND uv run --project
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
+         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work" -p test_run_audacity_consumer.py)
+      set_tests_properties(fork-audacity-consumer-runtime PROPERTIES TIMEOUT 180
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_consumer-tests")
       add_test(NAME fork-audacity-consumer-cache COMMAND uv run --project
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
          -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work" -p test_prepare_audacity_consumer.py)
@@ -180,6 +185,11 @@ if(TARGET video-playback-test)
    find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
       file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_installer-tests" "${CMAKE_BINARY_DIR}/_consumer-tests")
+      add_test(NAME fork-audacity-consumer-runtime COMMAND uv run --project
+         "${CMAKE_SOURCE_DIR}/scripts" --locked python -m unittest discover
+         -s "${CMAKE_SOURCE_DIR}/scripts/piped-work" -p test_run_audacity_consumer.py)
+      set_tests_properties(fork-audacity-consumer-runtime PROPERTIES TIMEOUT 180
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_consumer-tests")
       add_test(NAME fork-audacity-consumer-cache COMMAND uv run --project
          "${CMAKE_SOURCE_DIR}/scripts" --locked python -m unittest discover
          -s "${CMAKE_SOURCE_DIR}/scripts/piped-work" -p test_prepare_audacity_consumer.py)

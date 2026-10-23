@@ -10,12 +10,8 @@ import threading
 import time
 from typing import TypedDict
 
-from run_fork_test_harness import (
-    assert_owned_test_display,
-    read_audio_project_state,
-    save_reopen,
-    select_audio_project_tracks,
-)
+from run_audacity_consumer import read_audio_project_state, select_audio_project_tracks
+from run_fork_test_harness import save_reopen
 
 
 class OwnedWindowText(TypedDict):
@@ -104,8 +100,8 @@ def settled_summary(client, group_id):
 
 
 def click_group_toggle(client, group_id, cancel=False):
-    """Send press/release through the guarded owned pane, including cancellation."""
-    from ctypes import wintypes as w
+    """Use real guarded pointer events and the currently painted group control."""
+    from run_fork_test_harness import operate_owned_video_track
 
     deadline = time.monotonic() + 8
     while True:
@@ -115,36 +111,14 @@ def click_group_toggle(client, group_id, cancel=False):
         if time.monotonic() >= deadline:
             raise AssertionError(f"The group header has not been painted: {group}")
         time.sleep(0.025)
-    panel = int(info["panelHandle"])
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
-    user.GetAncestor.argtypes = [w.HWND, w.UINT]
-    user.GetAncestor.restype = w.HWND
-    user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT,
-                                       w.UINT, ctypes.POINTER(ctypes.c_size_t)]
-    user.SendMessageTimeoutW.restype = ctypes.c_size_t
-    owner = w.DWORD()
-    assert user.GetWindowThreadProcessId(panel, ctypes.byref(owner))
-    assert owner.value == int(os.environ["AUTOPSY_OWNED_APP_PID"])
-    # The display guard enumerates top-level windows; the pane is a child.
-    assert_owned_test_display(owner.value, include_window=user.GetAncestor(panel, 2))
-    rect = group["toggle"]
-    assert rect["width"] > 0 and rect["height"] > 0, group
-    position = ((rect["x"] + rect["width"] // 2) & 0xFFFF) | (((rect["y"] + rect["height"] // 2) & 0xFFFF) << 16)
-    reply = ctypes.c_size_t()
-
-    def message(code, flags, point):
-        if not user.SendMessageTimeoutW(panel, code, flags, point, 2, 2000, ctypes.byref(reply)):
-            raise RuntimeError(f"Folder toggle message {code:#x} to HWND={panel} failed: {ctypes.WinError()}")
-
-    message(0x200, 0, position)
-    message(0x201, 1, position)
-    try:
-        if cancel:
-            message(0x200, 1, 0xFFFFFFFF)
-        message(0x202, 0, 0xFFFFFFFF if cancel else position)
-    finally:
-        message(0x202, 0, 0xFFFFFFFF)
+    native = client.data("GetVideoPreviewInfo")
+    # Both feature adapters report native pane coordinates. The common gesture
+    # owner supplies physical input, idle/focus checks and display containment.
+    assert int(native["videoTrackPanelHandle"]) == int(info["panelHandle"])
+    native["videoTrackRows"] = [{"index": group["index"], "toggle": group["toggle"]}]
+    operate_owned_video_track(client, native["viewStart"], track=group["index"],
+                              gesture="drag" if cancel else "click", area="toggle",
+                              cancel=cancel, painted=native)
 
 
 def check_track_groups(client, root):

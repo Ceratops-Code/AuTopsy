@@ -47,6 +47,10 @@ class SelectionTests(unittest.TestCase):
         for name in ("prepare_audacity_consumer.py", "test_prepare_audacity_consumer.py"):
             self.assertEqual(self.names(["scripts/piped-work/" + name]), {"fork-audacity-consumer-cache"})
 
+    def test_consumer_runtime_has_its_own_lifecycle_check(self) -> None:
+        for name in ("run_audacity_consumer.py", "test_run_audacity_consumer.py"):
+            self.assertEqual(self.names(["scripts/piped-work/" + name]), {"fork-audacity-consumer-runtime"})
+
     def test_track_folder_policy_and_native_adapters_have_separate_scopes(self) -> None:
         for path in ("src/track-groups/EditTrackGroups.cpp", "src/track-groups/RenderGroupWaveform.h",
                      "src/track-groups/TestTrackGroups.cpp"):

@@ -51,6 +51,17 @@ Set the left/top/right/bottom percentages, or use **Reset Crop**. The source
 footage stays available, and crop follows the clip through saved projects and
 ordinary editing.
 
+Right-click an audio clip for **Clip Volume...** to raise or lower that clip's
+level in dB using the native Amplify dialog, with normal Undo/Redo. **Export
+Clip...** opens export for the clicked audio or video clip. Video clip export
+uses its picture and everything audible in the project over that clip's original
+time span. The edit cursor extends through the full track pane.
+
+Ordinary Record starts at the cursor. For existing recording tracks, an occupied
+start is rejected and the take stops at the next clip or an earlier selected
+end. The recording-gap policy has focused automated coverage; this preview has
+not been checked against microphone hardware.
+
 The main transport uses compact 35-pixel buttons. **Go to Cursor** brings the
 current playhead into view during playback or pause, or the edit cursor when
 stopped, without changing zoom, selection or project content.

@@ -679,7 +679,7 @@ user's responsibility; the product must not delete them to repair a cache.
 | `.build/_core` | CMake/CTest: portable checks and generated executables | Updated in place on each normal test call; disposable build cache, not an install or product version |
 | `.build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
 | Installer build `package` | `build_video_installer.py`: completed installer and build manifest | Deterministic builder retains its accepted matching output, cleans pending owned build work; a new candidate receives its own content identity |
-| Test work roots | `run_fork_test_harness.py`: owned processes, generated neutral footage and result records | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
+| Test work roots | `test_fork_features.py`: generated fixtures and bounded immutable stage receipts; `run_audacity_consumer.py`: private stock process trees and scratch | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
 | Failure diagnostic payloads, target lifecycle | Each operation's existing owner: evidence for a named unresolved question | Default: persist none; when needed, one unresolved report per operation/target, seven-day expiry, declared finite byte/group limits; matching success removes obsolete failure payloads |
 | Future complex-preview chunks | `PrepareVideoPreview` orchestration with renderer | Same source/plan version grouping and leases; finite cache bound before enabling; no unbounded per-play history |
 
@@ -815,13 +815,22 @@ with video, linked/grouped audio and a label, plus one containing only video.
 Pinned portable Audacity 3.7.8 and 3.7.9 consumers each open, save/copy and reopen
 both twice. Standard track/clip/label data must match; decoded five-second audio
 mixes must agree within 0.0005 per sample. Original AuTopsy files remain unchanged.
-The receipt records both application identities and test versions. The harness
-owns the private copied consumer, portable preferences and working files, and
-removes them after the check; it never uses a personal project. Consumer shutdown
-uses owned-process termination after saved-copy acknowledgements, because the
-stock scripting Close path can destroy GUI objects on its worker thread. That
-upstream scripting behavior is outside the format contract. Native AuTopsy tests
-still require their normal application exit.
+The native application and stock consumer stages have separate immutable
+receipts. The first stage retains the descriptor and hashes of its current
+generated project/audio fixtures. A failed consumer leaves that acceptance intact;
+a fresh call checks fixture integrity and runs only missing consumer work.
+Changed or missing accepted fixtures block instead of silently replaying the GUI.
+
+`run_audacity_consumer.py` owns the copied consumers, private portable preferences,
+working files and both child output streams. Each input and saved copy opens by
+normal application startup, avoiding scripted project-window creation or
+destruction. A Windows job owns the process and descendants atomically from
+creation, including crash reporters; worker interruption closes that ownership
+and ends its tree. Session exit ends descendants before removing copied files.
+Primary errors and cleanup errors are reported together. No personal project or
+installed editor participates. Native AuTopsy tests still require normal exit.
+The focused `fork-audacity-consumer-runtime` cases cover process/worker
+interruption, repeated round trips, scratch ownership/cleanup and app-pass reuse.
 
 Dedicated `TestVideoEdits.cpp` cases cover all-or-nothing plans, stale expected
 states, interruption before/after publication, repeated absolute requests, bound
