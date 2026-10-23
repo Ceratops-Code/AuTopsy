@@ -11,6 +11,7 @@
 #include "TrackFocus.h"
 #include "TrackPanel.h"
 #include "ViewInfo.h"
+#include "WaveClip.h"
 #include "WaveTrack.h"
 #include "export/ExportAudioDialog.h"
 #include <wx/filename.h>

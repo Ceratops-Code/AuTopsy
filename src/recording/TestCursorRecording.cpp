@@ -60,4 +60,5 @@ TEST_CASE("Cursor recording rejects unusable requests before capture")
    REQUIRE_THROWS(PlanRecordingAtCursor(1, nan, 48000, {}));
    REQUIRE_THROWS(PlanRecordingAtCursor(1, {}, 48000, {{3, 2}}));
    REQUIRE_THROWS(PlanRecordingAtCursor(1, {}, 48000, {{nan, 2}}));
+   REQUIRE_THROWS(PlanRecordingAtCursor(1, {}, 48000, {{1e100, 2e100}}));
 }

@@ -29,6 +29,8 @@ RecordingPlan PlanRecordingAtCursor(double cursor, std::optional<double> selecti
          plan.stop = plan.stop ? std::min(*plan.stop, range.start) : range.start;
    }
    if (plan.stop) {
+      if (!usableTime(*plan.stop))
+         throw std::invalid_argument("The recording end exceeds the usable sample range.");
       // Stop on the last complete recording sample before the next clip. A tiny
       // rounding allowance only repairs representation of an exact sample edge.
       *plan.stop = std::floor(*plan.stop * sampleRate + 1e-7) / sampleRate;
