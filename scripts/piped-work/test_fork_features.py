@@ -59,8 +59,8 @@ from test_clip_actions import (
     check_edit_cursor_line,
     check_video_clip_export,
 )
-from test_track_groups import check_track_groups
 from test_clip_selection import check_clip_selection
+from test_track_groups import check_track_groups
 from test_video_clip_edits import (
     check_preview_navigation,
     check_split_video_edges,
