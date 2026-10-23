@@ -504,18 +504,21 @@ def ready_video_preview(client):
 
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
-    gesture="drag", area="header", menu_path=(), key=None, painted=None
+    gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False
 ):
     """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
 
     Coordinates come from the painted native row, including its actual data
     origin. Menu choices use caption-resolved native rectangles in the owned window;
     cancellation always releases held input before restoring the previous focus.
+    Additive clicks own their Ctrl transition and release it even on failure.
     """
     if end_time is None:
         end_time = start_time
     if gesture not in ("drag", "click", "double-click", "context"):
         raise ValueError("Unknown native video gesture: " + gesture)
+    if control and gesture != "click":
+        raise ValueError("Ctrl is supported only for an additive clip click.")
     user = ctypes.WinDLL("user32", use_last_error=True)
     # Wait before reading window/paint facts: project-open callbacks may replace
     # those controls while the native double-click interval expires.
@@ -667,6 +670,7 @@ def operate_owned_video_track(
     user.ClientToScreen(panel, ctypes.byref(point))
     hidden = []
     pressed = False
+    control_pressed = False
     positioned = False
 
     @callback
@@ -719,6 +723,12 @@ def operate_owned_video_track(
             if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
                 raise RuntimeError("Windows rejected the owned test's keyboard event.")
         time.sleep(0.08)
+
+    def set_control(down):
+        packet = Input(1, Union(keyboard=Key(0x11, user.MapVirtualKeyW(0x11, 0), 0 if down else 2, 0, 0)))
+        if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
+            raise RuntimeError("Windows rejected the owned test's Ctrl transition.")
+        time.sleep(0.03)
 
     def choose_popup_path():
         # OBJID_CLIENT on a native popup exposes its actual HMENU. Resolve
@@ -877,6 +887,9 @@ def operate_owned_video_track(
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
         thread = user.GetWindowThreadProcessId(panel, None)
+        if control:
+            set_control(True)
+            control_pressed = True
         if gesture == "context":
             button(8)
             pressed = True
@@ -938,6 +951,12 @@ def operate_owned_video_track(
             keyboard(key)
 
     finally:
+        control_release_error = None
+        if control_pressed:
+            try:
+                set_control(False)
+            except RuntimeError as error:
+                control_release_error = error
         if pressed:
             try:
                 # A failed/closed owned app has no remaining capture to cancel.
@@ -960,6 +979,8 @@ def operate_owned_video_track(
             user.SetForegroundWindow(foreground)
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
+        if control_release_error:
+            raise control_release_error
 
     return panel
 

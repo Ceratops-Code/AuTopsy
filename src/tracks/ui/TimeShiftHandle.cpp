@@ -19,6 +19,7 @@ Paul Licameli split from TrackPanel.cpp
 #include "Snap.h"
 #include "SyncLock.h"
 #include "../../clip-groups/GroupAudioClips.h"
+#include "../../clip-groups/SelectMediaClips.h"
 #include "Track.h"
 #include "../../TrackArt.h"
 #include "../../TrackArtist.h"
@@ -279,7 +280,7 @@ void ClipMoveState::Init(
    std::unique_ptr<TrackShifter> pHit,
    double clickTime,
    const ViewInfo &viewInfo,
-   TrackList &trackList, bool syncLocked )
+   TrackList &trackList, bool syncLocked, bool useTemporaryClipSelection )
 {
    shifters.clear();
 
@@ -316,6 +317,9 @@ void ClipMoveState::Init(
       if (!pShifter)
          pShifter = MakeTrackShifter::Call(*track, project);
    }
+
+   if (useTemporaryClipSelection && ClipGroups::ApplyTemporaryClipMoveSelection(project, state))
+      state.movingSelection = false;
 
    if ( state.movingSelection ) {
       // All selected tracks may move some intervals
@@ -485,6 +489,10 @@ UIHandle::Result TimeShiftHandle::Click(
    const double clickTime =
       viewInfo.PositionToTime(event.m_x, rect.x);
 
+   if (event.ShiftDown()) ClipGroups::ClearTemporaryClipSelection(*pProject);
+   else if (ClipGroups::ClickTemporaryMediaClip(*pProject, *pTrack, clickTime, event.CmdDown()) && event.CmdDown())
+      return RefreshAll | Cancelled;
+
    auto pShifter = MakeTrackShifter::Call(*pTrack, *pProject);
 
    auto hitTestResult = TrackShifter::HitTestResult::Track;
@@ -508,7 +516,7 @@ UIHandle::Result TimeShiftHandle::Click(
    mClipMoveState.Init(*pProject, *pTrack,
       hitTestResult, move(pShifter), clickTime,
       viewInfo, trackList,
-      SyncLockState::Get( *pProject ).IsSyncLocked() );
+      SyncLockState::Get( *pProject ).IsSyncLocked(), true );
 
    mSlideUpDownOnly = event.CmdDown() && !multiToolModeActive;
    mRect = rect;
@@ -955,7 +963,7 @@ UIHandle::Result TimeShiftHandle::Release
          : XO("Time shifted tracks/clips left %.02f seconds")
       )
          .Format( fabs( mClipMoveState.hSlideAmount ) );
-      consolidate = true;
+      consolidate = !ClipGroups::HasTemporaryClipSelection(*pProject);
    }
    ProjectHistory::Get( *pProject ).PushState(msg, XO("Move Clip"),
       consolidate ? (UndoPush::CONSOLIDATE) : (UndoPush::NONE));

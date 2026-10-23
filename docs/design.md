@@ -22,6 +22,7 @@ Owner: AuTopsy maintainers.
     {"path": "src/video/EvaluateVideoTimeline.cpp", "role": "independent ordered composition, crop and embedded-layer geometry"},
     {"path": "src/video/CreateVideoTrack.cpp", "role": "implemented native track and persistence adapter"},
     {"path": "src/clip-groups/LinkMediaClips.cpp", "role": "implemented mixed-media editing adapter"},
+    {"path": "src/clip-groups/SelectMediaClips.h", "role": "host-free temporary move-selection policy"},
     {"path": "src/video/TestVideoPlayback.cpp", "role": "independent behavior evidence"},
     {"path": "src/video/TestVideoEdits.cpp", "role": "dedicated planner behavior evidence"},
     {"path": "src/video/TestVideoComposition.cpp", "role": "dedicated composition behavior evidence"},
@@ -191,6 +192,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/CreateVideoTrack.h/.cpp` | Native track, clipboard, XML, history and picture lookup | Track/project adapters, authoritative states, transactional publication |
 | `src/clip-groups/LinkMediaClips.h/.cpp` | Mixed picture/sound links and edits | Native audio adapter and one linked edit coordinator |
 | `src/clip-groups/EditClipMarkers.h/.cpp` | Content-relative flags | Marker operations and native marker UI boundary |
+| `src/clip-groups/SelectMediaClips.h/.cpp` | Temporary move selection and live-identity resolution | Host-free opaque keys, weak native references and exact input to the existing drag engine |
 | `src/video/ShowVideoTrack.h/.cpp` | Pane painting and mouse edits | View and semantic gesture requests only |
 | `src/video/ShowVideoPreview.cpp` | Window and audio-clock following | View adapter using shared sampling and transport facade |
 | `src/video/PlayVideoMedia.h/.cpp` | Owned decoder/window boundary | mpv loading, playback and picture crop; no native project objects |
@@ -252,6 +254,35 @@ The edit cursor overlay uses the native time-to-pixel conversion and draws one
 vertical line across the entire track pane, including blank space. Its position
 is the time-selection start even when a whole clip or range is selected; native
 scrolling, zoom and overlay invalidation retain ownership of the view.
+
+### Temporary clip move selection
+
+`TemporaryClipSelection` owns only opaque, process-local keys, additive toggles
+and a drag anchor. Its `.cpp` adapter keeps weak references to current audio
+clips or video-track/clip-ID pairs. Each gesture resolves those references
+against the live track list; deleted or history-replaced objects are removed.
+Audio clips can retain selection when the existing drag engine migrates the same
+object to another track. Replaced identities are never guessed from time ranges,
+names or pane positions. Project close releases the entire attachment. No XML,
+database, diagnostics, cache or recovery artifact is produced by selection.
+
+Ctrl-click toggles one clip; an ordinary selected-header press retains the exact
+set and changes its anchor. An unrelated clip replaces that set. Range selection
+clears it; Shift-drag retains the native whole-track contract. The adapter seeds
+fresh native shifters with exactly the chosen intervals, then lets the existing
+link/group closure, collision constraints, snapping, migration and history act
+on them. It applies only to mouse move gestures, never unrelated scripted moves.
+Every selected interval must resolve once before any movement. One shared
+permissible offset prevents partial movement or overlap, Escape restores the
+native history snapshot, and each completed drag has one Undo entry. Ordinary
+time-range edits retain their existing scope; this is a move selection.
+
+`media-clip-selection::` checks additive/repeated toggles, anchor changes and
+expired-key pruning without native objects. `fork-clip-selection` separately
+checks Ctrl-click on headers/bodies, non-adjacent pieces, audio/video links,
+collision limits, cancellation, repeated moves, Undo/Redo and save/reopen using
+generated media. The native scripting adapter reports actual clip-header cell
+rectangles so the test does not assume an upstream header height or screen row.
 
 ### Track folders and summed waveforms
 

@@ -6,6 +6,7 @@
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
+#include "../clip-groups/SelectMediaClips.h"
 #include "../clip-groups/OpenClipActions.h"
 #include "Project.h"
 #include "ProjectHistory.h"
@@ -398,6 +399,7 @@ public:
       if (!project) return;
       const auto &view = ViewInfo::Get(*project);
       const auto &timeline = mGhost ? *mGhost : track->Timeline();
+      const bool explicitSelection = ClipGroups::HasTemporaryClipSelection(*project);
       auto &dc = context.dc;
       dc.SetPen(*wxTRANSPARENT_PEN); dc.SetBrush(wxBrush(wxColour(29,31,35)));
       dc.DrawRectangle(rect);
@@ -434,8 +436,9 @@ public:
          }
          dc.DestroyClippingRegion(); dc.SetClippingRegion(rect);
          const auto &selection = view.selectedRegion;
-         const bool selected = track->GetSelected() && selection.t0() <= clip.start+1e-7 &&
-            selection.t1() >= clip.End()-1e-7;
+         const bool selected = explicitSelection
+            ? ClipGroups::IsVideoClipInTemporarySelection(*project, *track, clip.id)
+            : track->GetSelected() && selection.t0() <= clip.start+1e-7 && selection.t1() >= clip.End()-1e-7;
          dc.SetPen(wxPen(selected ? wxColour(252,211,90) : wxColour(111,155,187),selected ? 2 : 1));
          dc.SetBrush(*wxTRANSPARENT_BRUSH); dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
          dc.SetTextForeground(*wxWHITE);

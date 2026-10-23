@@ -26,6 +26,7 @@
 #include "ViewInfo.h"
 #include "WaveTrack.h"
 #include "WaveClip.h"
+#include "clip-groups/SelectMediaClips.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "clip-groups/EditClipMarkers.h"
 #endif
@@ -294,6 +295,9 @@ void WaveTrackAffordanceControls::Draw(TrackPanelDrawingContext& context, const 
       
       auto &waveTrack = static_cast<WaveTrack&>(
          pendingTracks.SubstitutePendingChangedTrack(*track));
+      const auto owner = track->GetOwner();
+      const auto project = owner ? owner->GetOwner() : nullptr;
+      const bool explicitSelection = project && ClipGroups::HasTemporaryClipSelection(*project);
       const auto& zoomInfo = *artist->pZoomInfo;
       {
          wxDCClipper dcClipper(context.dc, rect);
@@ -320,7 +324,9 @@ void WaveTrackAffordanceControls::Draw(TrackPanelDrawingContext& context, const 
                 continue;
              }
 
-             const auto selected = GetSelectedInterval() == it;
+             const auto selected = explicitSelection
+                ? ClipGroups::IsAudioClipInTemporarySelection(*project, clip)
+                : GetSelectedInterval() == it;
              const auto highlightAffordance =
                  !overflowHandle && (selected || clipRect.Contains(px, py));
              auto affordanceRect = TrackArt::DrawClipAffordance(

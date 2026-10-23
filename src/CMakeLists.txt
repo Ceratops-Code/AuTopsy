@@ -1479,6 +1479,7 @@ endif()
 
 # Fork-owned clip metadata and commands use one native drag adapter.
 target_sources(Audacity PRIVATE clip-groups/GroupAudioClips.cpp clip-groups/GroupAudioClips.h
+   clip-groups/SelectMediaClips.cpp clip-groups/SelectMediaClips.h
    clip-groups/OpenClipActions.cpp clip-groups/OpenClipActions.h)
 add_subdirectory(track-groups)
 add_subdirectory(recording)

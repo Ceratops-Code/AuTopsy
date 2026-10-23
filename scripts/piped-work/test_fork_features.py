@@ -60,6 +60,7 @@ from test_clip_actions import (
     check_video_clip_export,
 )
 from test_track_groups import check_track_groups
+from test_clip_selection import check_clip_selection
 from test_video_clip_edits import (
     check_preview_navigation,
     check_split_video_edges,
@@ -975,6 +976,8 @@ def worker(args, root):
         check_track_groups(client, root)
     elif args.case == "clip-actions":
         check_audio_clip_actions(client, root, args.ffmpeg)
+    elif args.case == "clip-selection":
+        check_clip_selection(client, root)
     elif args.case == "video-clip-export":
         check_video_clip_export(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "edit-cursor-line":
@@ -1134,6 +1137,8 @@ def native_test_inputs(args, executable, module, display):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "track-groups":
         inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
+    if args.case == "clip-selection":
+        inputs["clip_selection_sha256"] = sha(here / "test_clip_selection.py")
     return inputs
 
 
@@ -1304,7 +1309,7 @@ def main():
             "transport-toolbar",
             "preview-navigation",
             "track-groups",
-            "clip-actions", "video-clip-export", "edit-cursor-line",
+            "clip-actions", "clip-selection", "video-clip-export", "edit-cursor-line",
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
@@ -1404,7 +1409,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in ("video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in ("clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,

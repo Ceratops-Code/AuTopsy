@@ -253,7 +253,8 @@ struct AUDACITY_DLL_API ClipMoveState {
          If null, implies `Track`, overriding previous argument */
       double clickTime,
       const ViewInfo &viewInfo,
-      TrackList &trackList, bool syncLocked);
+      TrackList &trackList, bool syncLocked,
+      bool useTemporaryClipSelection = false);
 
    //! Return pointer to the first fixed interval of the captured track, if there is one
    /*! Pointer may be invalidated by operations on the associated TrackShifter */

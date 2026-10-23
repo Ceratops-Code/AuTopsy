@@ -35,6 +35,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    include("${catch2_SOURCE_DIR}/contrib/Catch.cmake")
    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libraries/lib-project-file-io/tests"
       "${CMAKE_BINARY_DIR}/project-storage")
+   add_executable(media-clip-selection-test ../clip-groups/TestMediaClipSelection.cpp ../../tests/Catch2Main.cpp)
+   target_compile_features(media-clip-selection-test PRIVATE cxx_std_17)
+   target_link_libraries(media-clip-selection-test PRIVATE Catch2::Catch2)
+   catch_discover_tests(media-clip-selection-test TEST_PREFIX "media-clip-selection::" PROPERTIES TIMEOUT 30)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../track-groups" "${CMAKE_BINARY_DIR}/track-groups")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../recording" "${CMAKE_BINARY_DIR}/recording")
    add_executable(video-playback-test ${autopsy_video_playback_test_sources} ../../tests/Catch2Main.cpp)
@@ -147,6 +151,7 @@ set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../prefs/GUISettings.cpp"
 set_property(SOURCE
    "${CMAKE_CURRENT_SOURCE_DIR}/../menus/EditMenus.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/GroupAudioClips.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/SelectMediaClips.cpp"
      "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/OpenClipActions.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp"
@@ -182,6 +187,7 @@ add_unit_test(
 )
 add_unit_test(NAME video-edits SOURCES ${autopsy_video_edits_test_sources})
 add_unit_test(NAME video-composition SOURCES ${autopsy_video_composition_test_sources})
+add_unit_test(NAME media-clip-selection SOURCES ../clip-groups/TestMediaClipSelection.cpp)
 if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")
    find_package(Python3 QUIET COMPONENTS Interpreter)
@@ -212,7 +218,7 @@ if(TARGET video-playback-test)
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-        foreach(_case clip-actions video-clip-export edit-cursor-line groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-crop-controls video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view transport-toolbar preview-navigation project-compatibility)
+        foreach(_case clip-selection clip-actions video-clip-export edit-cursor-line groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-crop-controls video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view transport-toolbar preview-navigation project-compatibility)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"

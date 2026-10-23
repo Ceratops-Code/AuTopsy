@@ -27,6 +27,7 @@ Paul Licameli split from TrackPanel.cpp
 #include "../../ProjectWindow.h"
 #include "../../RefreshCode.h"
 #include "../../SelectUtilities.h"
+#include "../../clip-groups/SelectMediaClips.h"
 #include "SelectionState.h"
 #include "SyncLock.h"
 #include "../../TrackArt.h"
@@ -557,6 +558,15 @@ UIHandle::Result SelectHandle::Click(
       return Cancelled;
    auto &trackPanel = TrackPanel::Get(*pProject);
    auto &viewInfo = ViewInfo::Get(*pProject);
+
+   if (event.LeftDown() || event.LeftDClick()) {
+      const auto time = viewInfo.PositionToTime(event.GetX(), evt.rect.x);
+      if (event.CmdDown() && !event.ShiftDown() &&
+          ClipGroups::ClickTemporaryMediaClip(*pProject, *pTrack, time, true))
+         return RefreshAll | Cancelled;
+      ClipGroups::ClearTemporaryClipSelection(*pProject);
+      if (!event.ShiftDown()) ClipGroups::ClickTemporaryMediaClip(*pProject, *pTrack, time, false);
+   }
 
    mMostRecentX = event.m_x;
    mMostRecentY = event.m_y;
