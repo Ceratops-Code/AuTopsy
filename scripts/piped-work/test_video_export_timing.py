@@ -35,7 +35,7 @@ def write_sync_source(root, ffmpeg):
 
 def cue_starts(active, rate):
     """Read separated pulse onsets; codec noise inside one pulse cannot add cues."""
-    result = []
+    result: list[float] = []
     previous = False
     for index, value in enumerate(active):
         if value and not previous and (not result or index / rate - result[-1] > 0.3):
@@ -87,12 +87,13 @@ def check_video_export_timing(client, root, ffmpeg, ffprobe):
     clips = client.data("GetVideoClips")["clips"]
     for clip in clips:
         client.send(f'SetVideoClipCrop: Track=0 Id="{clip["id"]}" Top=0.2')
-    for repeat in range(2):
+    first: dict | None = None
+    for _ in range(2):
         output = root / "_sync-export.mp4"
         client.file("ExportVideoMix", output, "Overwrite=1 FrameRate=30")
         observed = read_export_cues(output, ffmpeg, ffprobe)
         assert client.data("GetInfo: Type=Clips Format=JSON") == original_audio
-        if repeat:
+        if first is not None:
             assert observed == first
         else:
             first = observed
