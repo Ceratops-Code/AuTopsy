@@ -666,3 +666,16 @@ including opening and closing About twice. It uses only its private test process
 Inherited Audacity 4 and upstream release-publishing jobs are restricted to the
 official repository. This fork's workflow checks its own feature models and
 does not fetch or merge upstream updates automatically.
+
+`cursor-recording::` cases exercise the independent gap policy without opening a
+microphone. The adapter creates a fresh pending capture clip at the cursor and
+passes the earliest free-space/selection end to the native stream. Actual capture
+device behavior still depends on the user's audio device.
+
+`fork-clip-actions` owns audio clip-menu targeting, cancelled/applied negative and
+positive dB changes, Undo and export-dialog selection. `fork-video-clip-export`
+exports a split clip through its real context menu and checks output duration,
+picture pixels and two generated audio frequencies; a later project-only tone
+detects accidental mixing from time zero. `fork-edit-cursor-line` reads the line
+across the owned pane, including other tracks and blank space. Generated media,
+temporary exports and projects use the existing marked case directory/cleanup.

@@ -51,6 +51,7 @@ from run_fork_test_harness import (
     write_tone,
 )
 from test_track_groups import check_track_groups
+from test_clip_actions import check_audio_clip_actions, check_edit_cursor_line, check_video_clip_export
 from test_video_clip_edits import (
     check_preview_navigation,
     check_split_video_edges,
@@ -964,6 +965,12 @@ def worker(args, root):
         check_preview_navigation(client, root, args.ffmpeg)
     elif args.case == "track-groups":
         check_track_groups(client, root)
+    elif args.case == "clip-actions":
+        check_audio_clip_actions(client, root, args.ffmpeg)
+    elif args.case == "video-clip-export":
+        check_video_clip_export(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "edit-cursor-line":
+        check_edit_cursor_line(client, root, args.ffmpeg)
     elif args.case == "project-compatibility":
         check_project_compatibility(client, root)
     elif args.case == "video":
@@ -1111,6 +1118,9 @@ def native_test_inputs(args, executable, module, display):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "project-compatibility":
         inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
+    if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line"):
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+        inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "track-groups":
         inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
         inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
@@ -1248,6 +1258,7 @@ def main():
             "transport-toolbar",
             "preview-navigation",
             "track-groups",
+            "clip-actions", "video-clip-export", "edit-cursor-line",
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
@@ -1347,7 +1358,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in ("video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,

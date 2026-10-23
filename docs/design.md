@@ -197,7 +197,9 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/EditVideoComposition.h/.cpp` | Native picture crop controls and history | Numeric margins, reset and one native history transaction |
 | `src/video/RenderVideoComposition.h/.cpp` | Host-free source geometry and encoder expressions | Oriented crop projection and FFmpeg crop translation |
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
-| `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan |
+| `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan and explicit project audio range |
+| `src/clip-groups/OpenClipActions.h/.cpp` | Clicked-clip targeting, native dB effect and export dialogs | Selection scope and cancellation stay at the host boundary |
+| `src/recording/PlanCursorRecording.h/.cpp` | Host-free cursor/gap/sample-edge policy | Reject occupied starts and choose the earliest stop across capture tracks |
 | `src/video/ChooseVideoExport.h/.cpp` | Export preset values and chooser | Explicit codec/size/FPS/quality policy |
 | `src/video/RelinkVideoMedia.h/.cpp` | Source replacement and native chooser | Catalog relinking through a complete edit plan |
 | `src/video/TestVideoPlayback.cpp` | Independent timing/playback/flags/export tests | Preserve current simple model contracts |
@@ -217,6 +219,39 @@ including pause, or its edit cursor while stopped. It calls the native viewport
 scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into
 `RenderVideoFrames.h/.cpp` after separate path approval.
+
+### Clip actions, recording gaps and cursor projection
+
+An audio clip's context pick resolves against the native temporary track/time
+selection, independent of older selected tracks. Clip Volume selects that entire
+visible clip and invokes the registered Amplify effect with its normal dB dialog,
+sample processing and Undo. Cancelling restores the prior selection. Audio
+Export Clip uses the existing export dialog in selection mode and restores
+selection after the dialog closes. Neither operation introduces project metadata.
+
+Video clip export freezes an owned `VideoClipExportPlan`: its flattened retained
+picture starts at output time zero, and its project start/duration identify the
+audio mix window. The native audio exporter mixes every audible project track
+over that window, preserving mute/solo, gain, pan and native effects. This is
+independent of which video track was selected or is covering the clicked picture.
+All retained media paths remain protected from output overwrite. The existing
+export workspace owns intermediate WAV/render files and removes them after
+success, cancellation or a failed attempt; the final output belongs to the user.
+
+Ordinary recording keeps native channel/rate/device selection but sends visible
+capture-track ranges to `PlanRecordingAtCursor` before modifying tracks or opening
+a device. A cursor inside an existing clip rejects the request. Otherwise the
+sample-aligned stop is the earliest following clip or earlier selection end.
+No following boundary means open-ended recording. A new capture interval is
+inserted only into the pending track copy; a device-start failure cannot insert
+an empty clip into the original. Punch-and-roll keeps its existing adapter path.
+Pure `cursor-recording::` cases exercise range/rate rejection, complete-sample
+boundaries, multiple capture tracks and repeated requests without a microphone.
+
+The edit cursor overlay uses the native time-to-pixel conversion and draws one
+vertical line across the entire track pane, including blank space. Its position
+is the time-selection start even when a whole clip or range is selected; native
+scrolling, zoom and overlay invalidation retain ownership of the view.
 
 ### Track folders and summed waveforms
 
