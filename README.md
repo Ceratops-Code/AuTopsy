@@ -97,6 +97,13 @@ AuTopsy's video, links, clip groups and flags; keep the original AuTopsy project
 when those additions matter. Compatibility with unreleased Audacity versions
 cannot be guaranteed.
 
+Project writes use SQLite's durable WAL commits, including autosaves. Saved
+copies keep rollback journaling enabled and report a failed disk commit instead
+of claiming the copy succeeded. These changes preserve the AUP3 format. Storage
+must honor flush requests, and a project that is still open may need its `-wal`
+file as well as the main `.aup3`; use **Save Project > Backup Project** for a
+self-contained copy rather than copying the live main file alone.
+
 Preview publication uploads the completed installer and its source/build-check
 manifest. The publisher keeps the original accepted build intact, checks the
 uploaded asset identities, and makes the preview public after both uploads.

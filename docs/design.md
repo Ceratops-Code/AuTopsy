@@ -309,6 +309,29 @@ do not create empty scaffolding or an all-purpose feature manager.
 
 ## 6. Owned data model and persistence
 
+The existing SQLite AUP3 schema remains the project store. The owned
+`libraries/lib-project-file-io/ConfigureProjectStorage.cpp` supplies its commit
+policy through narrow `DBConnection` adapters. Live writer and checkpoint
+connections use WAL with FULL synchronization, so an acknowledged transaction
+does not rely on a later background checkpoint to reach durable storage. The
+initial switch from a rollback journal to WAL uses EXTRA synchronization before
+settling on FULL. Standalone copies keep a DELETE rollback journal with EXTRA
+synchronization and batch their audio blocks and document in one transaction.
+`ProjectFileIO::CopyTo` checks BEGIN and COMMIT results; a failed commit cannot
+report a completed copy or allow Save As to discard the source's recovery data.
+These are connection policies, not new project tables or a format migration.
+
+The desired boundary is a readable previous or completed state after interruption,
+with every acknowledged edit durable when the filesystem and device honor flushes.
+Uncommitted edits may roll back. The `project-storage::` cases use generated data
+and a private SQLite VFS to discard unsynced bytes and interrupt writes, syncs,
+truncation and deletion, including checkpointing. A NORMAL-mode control exposes
+the earlier durability gap. The model does not prove real firmware behavior or
+make a live copy of only the main AUP3 file safe: committed data can still be in
+its WAL. Native save/reopen and supported-Audacity checks remain separate adapter
+evidence. Existing autosave, compaction and project-file cleanup retain their
+ownership; this change introduces no backup or diagnostic history producer.
+
 Clips have a track-local integer ID, project start, content-window start,
 duration, playback rate, optional source override, link group and content-relative flags. An
 optional immutable `VideoClipContent` stores ordered child clips, retained source

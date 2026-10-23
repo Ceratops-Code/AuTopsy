@@ -41,6 +41,9 @@ COMMON_INPUTS = (
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
+    CheckGroup("project-storage", ("libraries/lib-project-file-io/ConfigureProjectStorage.*",
+        "libraries/lib-project-file-io/tests/*", "lib-src/sqlite/sqlite3.c", "lib-src/sqlite/sqlite3.h"),
+        "project-storage-test"),
     CheckGroup("cursor-recording", ("src/recording/PlanCursorRecording.*",
         "src/recording/TestCursorRecording.cpp", "src/recording/CMakeLists.txt"), "cursor-recording-test"),
     CheckGroup("track-groups", ("src/track-groups/EditTrackGroups.*", "src/track-groups/RenderGroupWaveform.*",
@@ -100,7 +103,8 @@ NATIVE_INPUTS = (
     "src/clip-groups/GroupAudioClips.cpp",
     "src/menus/*.cpp", "src/commands/GetInfoCommand.cpp",
     "src/tracks/ui/CommonTrackControls.cpp",
-    "libraries/lib-project-history/*", "libraries/lib-viewport/*", "CMakeLists.txt", "CMakePresets.json",
+    "libraries/lib-project-history/*", "libraries/lib-project-file-io/*", "libraries/lib-viewport/*",
+    "CMakeLists.txt", "CMakePresets.json",
 )
 OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
 DOCUMENT_SUFFIXES = {".md", ".rst"}

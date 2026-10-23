@@ -12,6 +12,8 @@ set( SOURCES
    ActiveProjects.h
    DBConnection.cpp
    DBConnection.h
+   ConfigureProjectStorage.cpp
+   ConfigureProjectStorage.h
    ProjectFileIOExtension.cpp
    ProjectFileIOExtension.h
    ProjectFileIO.cpp

@@ -33,6 +33,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       GIT_TAG 6bf41f4f71bf25641befe33365b9d3da4d940920)
    FetchContent_MakeAvailable(Catch2)
    include("${catch2_SOURCE_DIR}/contrib/Catch.cmake")
+   add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libraries/lib-project-file-io/tests"
+      "${CMAKE_BINARY_DIR}/project-storage")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../track-groups" "${CMAKE_BINARY_DIR}/track-groups")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../recording" "${CMAKE_BINARY_DIR}/recording")
    add_executable(video-playback-test ${autopsy_video_playback_test_sources} ../../tests/Catch2Main.cpp)

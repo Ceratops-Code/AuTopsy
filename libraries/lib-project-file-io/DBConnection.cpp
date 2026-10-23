@@ -10,6 +10,7 @@ Paul Licameli -- split from ProjectFileIO.cpp
 **********************************************************************/
 
 #include "DBConnection.h"
+#include "ConfigureProjectStorage.h"
 
 #include "sqlite3.h"
 
@@ -32,21 +33,6 @@ Paul Licameli -- split from ProjectFileIO.cpp
 static const char* PageSizeConfig =
    "PRAGMA <schema>.page_size = " xstr(AUDACITY_PROJECT_PAGE_SIZE) ";"
    "VACUUM;";
-
-// Configuration to provide "safe" connections
-static const char* SafeConfig =
-   "PRAGMA <schema>.busy_timeout = 5000;"
-   "PRAGMA <schema>.locking_mode = SHARED;"
-   "PRAGMA <schema>.synchronous = NORMAL;"
-   "PRAGMA <schema>.journal_mode = WAL;"
-   "PRAGMA <schema>.wal_autocheckpoint = 0;";
-
-// Configuration to provide "Fast" connections
-static const char *FastConfig =
-   "PRAGMA <schema>.busy_timeout = 5000;"
-   "PRAGMA <schema>.locking_mode = SHARED;"
-   "PRAGMA <schema>.synchronous = OFF;"
-   "PRAGMA <schema>.journal_mode = OFF;";
 
 DBConnection::DBConnection(
    const std::weak_ptr<AudacityProject> &pProject,
@@ -215,7 +201,8 @@ int DBConnection::OpenStepByStep(const FilePath fileName)
       return rc;
    }
 
-   rc = ModeConfig(mCheckpointDB, "main", SafeConfig);
+   rc = autopsy::project_storage::ConfigureProjectStorage(mCheckpointDB,
+      "main", autopsy::project_storage::StorageMode::LiveProject);
    if (rc != SQLITE_OK) {
       SetDBError(XO("Failed to set safe mode on checkpoint connection to %s").Format(fileName));
       return rc;
@@ -365,12 +352,14 @@ bool DBConnection::Close()
 
 int DBConnection::SafeMode(const char *schema /* = "main" */)
 {
-   return ModeConfig(mDB, schema, SafeConfig);
+   return autopsy::project_storage::ConfigureProjectStorage(mDB, schema,
+      autopsy::project_storage::StorageMode::LiveProject);
 }
 
-int DBConnection::FastMode(const char *schema /* = "main" */)
+int DBConnection::CopyMode(const char *schema /* = "main" */)
 {
-   return ModeConfig(mDB, schema, FastConfig);
+   return autopsy::project_storage::ConfigureProjectStorage(mDB, schema,
+      autopsy::project_storage::StorageMode::StandaloneCopy);
 }
 
 int DBConnection::SetPageSize(const char* schema)

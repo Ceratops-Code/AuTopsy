@@ -51,6 +51,15 @@ class SelectionTests(unittest.TestCase):
         for name in ("run_audacity_consumer.py", "test_run_audacity_consumer.py"):
             self.assertEqual(self.names(["scripts/piped-work/" + name]), {"fork-audacity-consumer-runtime"})
 
+    def test_storage_policy_and_native_adapters_have_separate_scopes(self) -> None:
+        for path in ("libraries/lib-project-file-io/ConfigureProjectStorage.cpp",
+                     "libraries/lib-project-file-io/tests/TestProjectStorage.cpp",
+                     "lib-src/sqlite/sqlite3.c"):
+            self.assertEqual(self.names([path]), {"project-storage"})
+        groups, native_inputs = runner.select_groups(["libraries/lib-project-file-io/DBConnection.cpp"])
+        self.assertEqual(groups, [])
+        self.assertEqual(native_inputs, ["libraries/lib-project-file-io/DBConnection.cpp"])
+
     def test_track_folder_policy_and_native_adapters_have_separate_scopes(self) -> None:
         for path in ("src/track-groups/EditTrackGroups.cpp", "src/track-groups/RenderGroupWaveform.h",
                      "src/track-groups/TestTrackGroups.cpp"):

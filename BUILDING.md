@@ -689,6 +689,17 @@ microphone. The adapter creates a fresh pending capture clip at the cursor and
 passes the earliest free-space/selection end to the native stream. Actual capture
 device behavior still depends on the user's audio device.
 
+`project-storage::` cases compile the application's owned SQLite configuration
+against its bundled SQLite. A private VFS separates volatile writes from synced
+bytes, discards the volatile bytes on a simulated power cut, and reopens the
+project. Cases cover durable live commits, copy rollback journals, interruptions
+before/after each write/sync/truncate/delete, failed commits, interrupted
+checkpoints, and repeated configuration/retry. A control using the former NORMAL
+setting must lose an acknowledged edit, so an app-only crash test cannot stand
+in for this power-cut model. No user files, physical input, or disk artifacts are
+used. The native connection/save adapters still need their separate app checks;
+this suite cannot prove storage firmware honors the operating system's flushes.
+
 `fork-clip-actions` owns audio clip-menu targeting, cancelled/applied negative and
 positive dB changes, Undo and export-dialog selection. `fork-video-clip-export`
 exports a split clip through its real context menu and checks output duration,
