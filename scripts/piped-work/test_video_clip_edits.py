@@ -533,7 +533,7 @@ def check_transport_toolbar(client, root):
             # an actually running stream cannot satisfy this precondition.
             clock = [preview_project_seconds(status), time.monotonic()]
 
-            def paused_clock_settled():
+            def paused_clock_settled(clock=clock):
                 current = preview_project_seconds(status)
                 if not math.isfinite(current) or current != clock[0]:
                     clock[:] = [current, time.monotonic()]
