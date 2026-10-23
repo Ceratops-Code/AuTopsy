@@ -946,13 +946,15 @@ def operate_owned_video_track(
                         position_pointer(round(x0 + (x1-x0)*step/5), round(y0 + (y1-y0)*step/5))
                         time.sleep(0.04)
                     if cancel:
-                        # Ctrl+Escape belongs to Windows, not the owned pane.
-                        # Release only our Ctrl transition before canceling a
-                        # held drag, so Start/Search cannot steal the gesture.
+                        # Ctrl+Escape belongs to Windows. Releasing Ctrl first
+                        # also completes native time-shift gestures, so deliver
+                        # Escape through the owned pane's normal key-message
+                        # route while the drag is still captured. Other drags
+                        # keep the physical keyboard route.
                         if control_pressed:
-                            set_control(False)
-                            control_pressed = False
-                        keyboard(0x1B)
+                            send(0x100, 0x1B, 0, 0)
+                        else:
+                            keyboard(0x1B)
                 button(4)
                 pressed = False
                 deadline = time.monotonic() + 3
