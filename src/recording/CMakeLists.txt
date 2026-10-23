@@ -1,0 +1,11 @@
+# Pure policy checks are shared by the application and affected-test runner.
+set(_recording_tests PlanCursorRecording.cpp TestCursorRecording.cpp)
+if(TARGET Audacity)
+   target_sources(Audacity PRIVATE PlanCursorRecording.h PlanCursorRecording.cpp)
+   add_unit_test(NAME cursor-recording SOURCES ${_recording_tests})
+else()
+   add_executable(cursor-recording-test ${_recording_tests} ../../tests/Catch2Main.cpp)
+   target_compile_features(cursor-recording-test PRIVATE cxx_std_17)
+   target_link_libraries(cursor-recording-test PRIVATE Catch2::Catch2)
+   catch_discover_tests(cursor-recording-test TEST_PREFIX "cursor-recording::" PROPERTIES TIMEOUT 30)
+endif()

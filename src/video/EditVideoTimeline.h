@@ -445,4 +445,27 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
    return result;
 }
 
+struct VideoClipExportPlan {
+   Timeline picture;
+   double projectStart{}, duration{};
+};
+// Export picture begins at zero, while its soundtrack is mixed from the
+// original project-time window. Retained trims/compounds are flattened once.
+inline VideoClipExportPlan PlanVideoClipExport(const Timeline& timeline, uint64_t id)
+{
+   RequireWellFormedTimeline(timeline);
+   const auto found = std::find_if(timeline.clips.begin(), timeline.clips.end(),
+      [id](const auto& clip) { return clip.id == id; });
+   if (found == timeline.clips.end()) throw std::runtime_error("The video clip was removed.");
+   auto oneClip = timeline;
+   oneClip.clips = {*found};
+   const auto range = CopyVideoRange(oneClip, found->start, found->End());
+   VideoClipExportPlan result{ComposeVideoTracks({&range}), found->start, found->duration};
+   result.picture.protectedSourcePaths = timeline.protectedSourcePaths;
+   for (const auto& clip : timeline.clips)
+      for (const auto& source : VideoContentSources(clip, SourceFor(timeline, clip)))
+         result.picture.protectedSourcePaths.push_back(source.path);
+   return result;
+}
+
 }

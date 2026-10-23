@@ -34,6 +34,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    FetchContent_MakeAvailable(Catch2)
    include("${catch2_SOURCE_DIR}/contrib/Catch.cmake")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../track-groups" "${CMAKE_BINARY_DIR}/track-groups")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../recording" "${CMAKE_BINARY_DIR}/recording")
    add_executable(video-playback-test ${autopsy_video_playback_test_sources} ../../tests/Catch2Main.cpp)
    target_compile_features(video-playback-test PRIVATE cxx_std_17)
    target_link_libraries(video-playback-test PRIVATE Catch2::Catch2)
@@ -139,6 +140,7 @@ set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../prefs/GUISettings.cpp"
 set_property(SOURCE
    "${CMAKE_CURRENT_SOURCE_DIR}/../menus/EditMenus.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/GroupAudioClips.cpp"
+     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/OpenClipActions.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/CommonTrackControls.cpp"

@@ -776,3 +776,28 @@ TEST_CASE("Clip flags retain content-relative placement across video moves, spli
    REQUIRE(clipboard.clips[0].markers[0].id == before[0].id);
    REQUIRE(ClipMarkers::ProjectMarkerTime(before[0], 2, 0.5) == Approx(4));
 }
+
+TEST_CASE("Clip export separates source picture time from the project mix range")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("neutral.mp4", 12, 30, 160, 90);
+   timeline.clips.front().start = 8;
+   timeline.clips.front().sourceStart = 3;
+   timeline.clips.front().duration = 2;
+   timeline.clips.front().playbackRate = 2;
+   timeline.clips.front().crop.left = 0.125;
+   for (int repeat = 0; repeat < 3; ++repeat) {
+      const auto plan = PlanVideoClipExport(timeline, 1);
+      REQUIRE(plan.projectStart == 8);
+      REQUIRE(plan.duration == 2);
+      REQUIRE(plan.picture.End() == 2);
+      REQUIRE(plan.picture.clips.front().start == 0);
+      REQUIRE(plan.picture.clips.front().sourceStart == 3);
+      REQUIRE(plan.picture.clips.front().playbackRate == 2);
+      REQUIRE(plan.picture.clips.front().crop.left == 0.125);
+      REQUIRE(plan.picture.sourcePath == "neutral.mp4");
+      REQUIRE(plan.picture.protectedSourcePaths == std::vector<std::string>{"neutral.mp4"});
+   }
+   REQUIRE(timeline.clips.front().start == 8);
+   REQUIRE_THROWS(PlanVideoClipExport(timeline, 99));
+}

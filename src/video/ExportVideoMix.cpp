@@ -345,11 +345,15 @@ bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *paren
 }
 
 bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline,
-   double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent, const ExportSettings &settings)
+   double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent,
+   const ExportSettings &settings, double projectAudioStart)
 {
    RequireUsableExportSettings(settings);
    VideoTimeline::RequireWellFormedTimeline(timeline, VideoTimeline::MaximumVideoRenderSegments);
    const auto duration = projectVideoDuration;
+   if (!std::isfinite(projectAudioStart) || projectAudioStart < 0 ||
+       !std::isfinite(projectAudioStart + duration))
+      throw std::runtime_error("Choose a usable project audio range for this export.");
    const auto copyPicture = VideoTimeline::KeepsOriginalPicture(timeline) && AllowsOriginalPictureCopy(settings)
       && std::abs(duration - timeline.End()) <= 1e-7;
    const auto outputRate = settings.frameRate > 0 ? settings.frameRate : timeline.frameRate;
@@ -409,7 +413,8 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
       // supplies track/master effects, time stretching, mute/solo, gain and pan.
       auto task = ExportTaskBuilder{}.SetPlugin(plugin, format)
          .SetFileName(wxFileName(wxString(mix.wstring())))
-         .SetRange(0.0, duration, false).SetNumChannels(2).SetSampleRate(48000)
+         .SetRange(projectAudioStart, projectAudioStart + duration, false)
+         .SetNumChannels(2).SetSampleRate(48000)
          .SetParameters({ { SF_FORMAT_WAV, int(SF_FORMAT_FLOAT) } }).Build(project);
       MixProgress progress{ parent };
       auto outcome = task.get_future();

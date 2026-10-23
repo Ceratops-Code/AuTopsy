@@ -48,6 +48,15 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(groups, [])
             self.assertEqual(native, [path])
 
+    def test_cursor_recording_policy_and_clip_adapters_have_separate_scopes(self) -> None:
+        for path in ("src/recording/PlanCursorRecording.cpp", "src/recording/TestCursorRecording.cpp"):
+            self.assertEqual(self.names([path]), {"cursor-recording"})
+        for path in ("src/clip-groups/OpenClipActions.cpp", "src/ProjectAudioManager.cpp",
+                     "src/tracks/ui/EditCursorOverlay.cpp", "scripts/piped-work/test_clip_actions.py"):
+            groups, native = runner.select_groups([path])
+            self.assertEqual(groups, [])
+            self.assertEqual(native, [path])
+
     def test_unknown_owned_executable_input_requires_a_scope_decision(self) -> None:
         for path in ("scripts/new_operation.py", "src/video/NewVideoOperation.cpp",
                      "src/video/ShowVideoNewFeature.h", "src/clip-groups/ChangeClipLinks.cpp",

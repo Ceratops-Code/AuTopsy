@@ -10,6 +10,7 @@ Paul Licameli split from ProjectManager.cpp
 
 
 #include "ProjectAudioManager.h"
+#include "recording/PlanCursorRecording.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "video/CreateVideoTrack.h"
 #endif
@@ -681,9 +682,6 @@ void ProjectAudioManager::OnRecord(bool altAppearance)
          // try to choose only from them; else if wave tracks exist, may record into any.)
          existingTracks = ChooseExistingRecordingTracks(*p, true, rateOfSelected);
          if (!existingTracks.empty()) {
-            t0 = std::max(t0,
-               TrackList::Get(*p).Selected<const WaveTrack>()
-               .max(&Track::GetEndTime));
             options.rate = rateOfSelected;
          }
          else {
@@ -699,31 +697,29 @@ void ProjectAudioManager::OnRecord(bool altAppearance)
             }
 
             existingTracks = ChooseExistingRecordingTracks(*p, false, options.rate);
-            if (!existingTracks.empty())
-            {
-               const auto endTime = accumulate(
-                  existingTracks.begin(), existingTracks.end(),
-                  std::numeric_limits<double>::lowest(),
-                  [](double acc, auto &pTrack) {
-                     return std::max(acc, pTrack->GetEndTime());
-                  }
-               );
-
-               //If there is a suitable track, then adjust t0 so
-               //that recording not starts before the end of that track
-               t0 = std::max(t0, endTime);
-            }
             // If suitable tracks still not found, will record into NEW ones,
             // starting with t0
          }
 
-         // Whether we decided on NEW tracks or not:
-         if (t1 <= selectedRegion.t0() && selectedRegion.t1() > selectedRegion.t0()) {
-            t1 = selectedRegion.t1();   // record within the selection
-         }
-         else {
-            t1 = DBL_MAX;        // record for a long, long time
-         }
+      }
+
+      // Plan before changing tracks or opening a capture device. Native channel
+      // and rate selection stays above; the owned policy only limits free time.
+      std::vector<CursorRecording::OccupiedRange> occupied;
+      for (const auto& sequence : existingTracks)
+         if (const auto* track = dynamic_cast<const WaveTrack*>(sequence.get()))
+            for (const auto& clip : track->Intervals())
+               occupied.push_back({clip->GetPlayStartTime(), clip->GetPlayEndTime()});
+      try {
+         const auto plan = CursorRecording::PlanRecordingAtCursor(t0,
+            t1 == DBL_MAX ? std::optional<double>{} : t1, options.rate, occupied);
+         t0 = plan.start;
+         t1 = plan.stop.value_or(DBL_MAX);
+      }
+      catch (const std::exception& error) {
+         AudacityMessageBox(Verbatim(wxString::FromUTF8(error.what())),
+            XO("Record at Cursor"), wxICON_INFORMATION | wxCENTRE);
+         return;
       }
 
       TransportSequences transportTracks;
@@ -750,7 +746,7 @@ void ProjectAudioManager::OnRecord(bool altAppearance)
       std::copy(existingTracks.begin(), existingTracks.end(),
          back_inserter(transportTracks.captureSequences));
 
-      DoRecord(*p, transportTracks, t0, t1, altAppearance, options);
+      DoRecord(*p, transportTracks, t0, t1, altAppearance, options, true);
    }
 }
 
@@ -765,7 +761,7 @@ bool ProjectAudioManager::DoRecord(AudacityProject &project,
    const TransportSequences &sequences,
    double t0, double t1,
    bool altAppearance,
-   const AudioIOStartStreamOptions &options)
+   const AudioIOStartStreamOptions &options, bool createCaptureClipAtCursor)
 {
    auto &projectAudioManager = *this;
 
@@ -856,40 +852,50 @@ bool ProjectAudioManager::DoRecord(AudacityProject &project,
                RealtimeEffectList::ShareStates(dst, src);
             };
 
-            // End of current track is before or at recording start time.
-            // Less than or equal, not just less than, to ensure a clip boundary.
-            // when append recording.
-            //const auto pending = static_cast<WaveTrack*>(newTrack);
-            const auto lastClip = wt->GetRightmostClip();
-            // RoundedT0 to have a new clip created when punch-and-roll
-            // recording with the cursor in the second half of the space
-            // between two samples
-            // (https://github.com/audacity/audacity/issues/5113#issuecomment-1705154108)
-            const auto recordingStart =
-               std::round(t0 * wt->GetRate()) / wt->GetRate();
-            const auto recordingStartsBeforeTrackEnd =
-               lastClip && recordingStart < lastClip->GetPlayEndTime();
-            // Recording doesn't start before the beginning of the last clip
-            // - or the check for creating a new clip or not should be more
-            // general than that ...
-            assert(
-               !recordingStartsBeforeTrackEnd ||
-               lastClip->WithinPlayRegion(recordingStart));
-            WaveTrack::IntervalHolder newClip{};
-            if (!recordingStartsBeforeTrackEnd ||
-               lastClip->HasPitchOrSpeed())
-               newClip = insertEmptyInterval(*wt, t0, true);
-            // Get a copy of the track to be appended, to be pushed into
-            // undo history only later.
-            const auto pending = static_cast<WaveTrack*>(
-               pendingTracks.RegisterPendingChangedTrack(updater, wt)
-            );
-            // Source clip was marked as placeholder so that it would not be
-            // skipped in clip copying.  Un-mark it and its copy now
-            if (newClip)
-               newClip->SetIsPlaceholder(false);
-            if (auto copiedClip = pending->NewestOrNewClip())
-               copiedClip->SetIsPlaceholder(false);
+            WaveTrack* pending{};
+            if (createCaptureClipAtCursor) {
+               // Create only in the pending copy. Failed or cancelled capture
+               // cannot leave an empty interval in the original track.
+               pending = static_cast<WaveTrack*>(
+                  pendingTracks.RegisterPendingChangedTrack(updater, wt));
+               insertEmptyInterval(*pending, t0, false);
+            }
+            else {
+               // End of current track is before or at recording start time.
+               // Less than or equal, not just less than, to ensure a clip boundary.
+               // when append recording.
+               //const auto pending = static_cast<WaveTrack*>(newTrack);
+               const auto lastClip = wt->GetRightmostClip();
+               // RoundedT0 to have a new clip created when punch-and-roll
+               // recording with the cursor in the second half of the space
+               // between two samples
+               // (https://github.com/audacity/audacity/issues/5113#issuecomment-1705154108)
+               const auto recordingStart =
+                  std::round(t0 * wt->GetRate()) / wt->GetRate();
+               const auto recordingStartsBeforeTrackEnd =
+                  lastClip && recordingStart < lastClip->GetPlayEndTime();
+               // Recording doesn't start before the beginning of the last clip
+               // - or the check for creating a new clip or not should be more
+               // general than that ...
+               assert(
+                  !recordingStartsBeforeTrackEnd ||
+                  lastClip->WithinPlayRegion(recordingStart));
+               WaveTrack::IntervalHolder newClip{};
+               if (!recordingStartsBeforeTrackEnd ||
+                  lastClip->HasPitchOrSpeed())
+                  newClip = insertEmptyInterval(*wt, t0, true);
+               // Get a copy of the track to be appended, to be pushed into
+               // undo history only later.
+               pending = static_cast<WaveTrack*>(
+                  pendingTracks.RegisterPendingChangedTrack(updater, wt)
+               );
+               // Source clip was marked as placeholder so that it would not be
+               // skipped in clip copying.  Un-mark it and its copy now
+               if (newClip)
+                  newClip->SetIsPlaceholder(false);
+               if (auto copiedClip = pending->NewestOrNewClip())
+                  copiedClip->SetIsPlaceholder(false);
+            }
             transportSequences.captureSequences
                .push_back(pending->SharedPointer<WaveTrack>());
          }
