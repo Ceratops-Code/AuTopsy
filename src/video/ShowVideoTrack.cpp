@@ -205,15 +205,22 @@ public:
 };
 // Header clicks use the same click-versus-drag contract as audio clips.
 class VideoAffordanceHandle final : public AffordanceHandle {
+   bool mDoubleClick{};
 public:
    using AffordanceHandle::AffordanceHandle;
+   Result Click(const TrackPanelMouseEvent &event, AudacityProject *project) override {
+      mDoubleClick = event.event.LeftDClick();
+      return AffordanceHandle::Click(event, project);
+   }
    Result SelectAt(const TrackPanelMouseEvent &event, AudacityProject *project) override {
       const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(GetTrack());
       if (!track || !project) return RefreshCode::RefreshNone;
       auto &view = ViewInfo::Get(*project);
       if (const auto *clip = ClipAt(track->Timeline(),
             view.PositionToTime(event.event.GetX(), event.rect.x))) {
-         view.selectedRegion.setTimes(clip->start, clip->End());
+         const auto at = std::max(0.0, view.PositionToTime(event.event.GetX(), event.rect.x));
+         if (mDoubleClick) view.selectedRegion.setTimes(clip->start, clip->End());
+         else view.selectedRegion.setTimes(at, at);
          TrackFocus::Get(*project).Set(track.get(), true);
          ProjectHistory::Get(*project).ModifyState(false);
       }
@@ -221,13 +228,14 @@ public:
    }
 };
 
-// Picture clicks select one clip. Actual drags still use the host's range,
-// snapping, modifier keys, autoscroll and Escape handling.
+// Picture clicks keep the host's edit cursor at the pointer. Double clicks
+// select one clip, and drags retain native range selection and cancellation.
 class VideoSelectionHandle final : public SelectHandle {
    std::weak_ptr<AuTopsyVideoTrack> mTrack;
    wxPoint mClick;
    uint64_t mId{};
    bool mDragged{};
+   bool mDoubleClick{};
    Result SelectClip(AudacityProject *project) {
       const auto track = mTrack.lock();
       if (!track || !mId) return RefreshCode::RefreshNone;
@@ -247,6 +255,7 @@ public:
         mTrack(track) {}
    Result Click(const TrackPanelMouseEvent &event, AudacityProject *project) override {
       mClick = event.event.GetPosition(); mDragged = false; mId = 0;
+      mDoubleClick = event.event.LeftDClick();
       if (!event.event.ShiftDown() && !event.event.CmdDown())
          if (const auto track = mTrack.lock())
             if (const auto *clip = ClipAt(track->Timeline(),
@@ -262,7 +271,7 @@ public:
    }
    Result Release(const TrackPanelMouseEvent &event, AudacityProject *project, wxWindow *parent) override {
       const auto result = SelectHandle::Release(event, project, parent);
-      return mDragged ? result : result | SelectClip(project);
+      return !mDragged && mDoubleClick ? result | SelectClip(project) : result;
    }
 };
 class VideoTrackView;
@@ -386,8 +395,14 @@ public:
          consider(candidate, candidate.start, -1); consider(candidate, candidate.End(), 1);
       }
       if (edge)
+      {
+         // Escape can rotate the native panel to its fallback range selector.
+         // That old candidate must not keep priority over a newly hit edge.
+         // Retire its identity here; CommonChannelView supplies a fresh fallback.
+         mSelectHandle.reset();
          return {AssignUIHandlePtr(mClipHandle, std::make_shared<VideoClipHandle>(
             track, std::static_pointer_cast<VideoTrackView>(shared_from_this()), clip->id, edge))};
+      }
       if (clip && state.state.GetY() < state.rect.y+24)
          return {AssignUIHandlePtr(mAffordanceHandle,
             std::make_shared<VideoAffordanceHandle>(track))};

@@ -5,7 +5,7 @@ Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
 per-clip speed and picture crop are implemented in this branch. Embedded-layer
 geometry remains an independent foundation awaiting native controls, saved
 parent identities and pixel rendering.
-Collapsible track groups, compact transport controls and the preview timeline
+Collapsible track groups, native-size transport controls and the preview timeline
 and keyboard controls are also implemented.
 Other later operations remain targets until their delivery status says otherwise.
 Owner: AuTopsy maintainers.
@@ -214,9 +214,8 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 The small native transport facade currently lives in `ShowVideoPreview.cpp`;
 its desired-state policy lives in `SyncVideoPlayback.h`. It uses the existing
 `ProjectAudioManager` API and introduces no separate transport engine.
-The main transport adapter in `src/toolbars/ControlToolBar.cpp` uses local scaled
-theme images for its 35-pixel buttons; shared theme resources and other toolbars
-keep their own sizing. Go to Cursor reads this project's active stream time,
+The main transport adapter in `src/toolbars/ControlToolBar.cpp` uses the native
+52-pixel button sizing and theme frames. Go to Cursor reads this project's active stream time,
 including pause, or its edit cursor while stopped. It calls the native viewport
 scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into

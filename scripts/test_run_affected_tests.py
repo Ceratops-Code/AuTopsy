@@ -89,6 +89,9 @@ class SelectionTests(unittest.TestCase):
                          {group.name for group in runner.GROUPS})
 
     def test_native_impact_is_explicit_and_does_not_claim_desktop_acceptance(self) -> None:
+        groups, native = runner.select_groups(["src/toolbars/ControlToolBar.cpp"])
+        self.assertEqual(groups, [])
+        self.assertEqual(native, ["src/toolbars/ControlToolBar.cpp"])
         groups, native = runner.select_groups(["src/video/ShowVideoPreview.cpp"])
         self.assertEqual(groups, [])
         self.assertEqual(native, ["src/video/ShowVideoPreview.cpp"])

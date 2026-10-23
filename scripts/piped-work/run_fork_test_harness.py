@@ -504,7 +504,8 @@ def ready_video_preview(client):
 
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
-    gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False
+    gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False,
+    prior_click_time=None
 ):
     """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
 
@@ -512,6 +513,8 @@ def operate_owned_video_track(
     origin. Menu choices use caption-resolved native rectangles in the owned window;
     cancellation always releases held input before restoring the previous focus.
     Additive clicks own their Ctrl transition and release it even on failure.
+    An optional preceding click and Escape stay in the same pane, exercising
+    native hit-target continuity before the requested gesture.
     """
     if end_time is None:
         end_time = start_time
@@ -887,6 +890,15 @@ def operate_owned_video_track(
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
         thread = user.GetWindowThreadProcessId(panel, None)
+        if prior_click_time is not None:
+            position_pointer(*position(prior_click_time, source))
+            button(2)
+            pressed = True
+            button(4)
+            pressed = False
+            time.sleep(0.06)
+            keyboard(0x1B)
+            position_pointer(x0, y0)
         if control:
             set_control(True)
             control_pressed = True
@@ -1088,8 +1100,15 @@ def check_video_interactions(client, root, case):
         for gesture in ("click", "double-click", "click"):
             operate_owned_video_track(client, 0.8, track=0, gesture=gesture, area="picture")
             selection = client.data("GetInfo: Type=Selection Format=JSON")
-            assert selection["Start"] == 0 and selection["End"] == 2, selection
+            if gesture == "double-click":
+                assert selection["Start"] == 0 and selection["End"] == 2, selection
+            else:
+                assert abs(selection["Start"] - 0.8) < 0.02 and selection["End"] == selection["Start"], selection
             assert clips() == original
+        operate_owned_video_track(client, 0.5, 1.5, track=0, area="picture")
+        selection = client.data("GetInfo: Type=Selection Format=JSON")
+        assert abs(selection["Start"] - 0.5) < 0.02 and abs(selection["End"] - 1.5) < 0.02, selection
+        assert clips() == original
         # The same single click must make Delete work through the keyboard command,
         # not a script that bypasses its selection preconditions.
         operate_owned_video_track(client, 0.8, track=0, gesture="click", area="picture", key=0x2E)

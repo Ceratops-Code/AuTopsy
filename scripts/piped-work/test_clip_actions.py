@@ -340,15 +340,18 @@ def check_edit_cursor_line(client, root, ffmpeg):
         for handle in hidden:
             user.ShowWindow(handle, 0)
         assert user.SetWindowPos(main, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x13)
-        for repeat in range(2):
+        for area in ("picture", "header"):
             client.send("SelectTime: Start=0.5 End=0.5")
             time.sleep(0.15)
             before, width, height = capture()
-            # A range selection must still show its start line across the pane.
-            client.send("SelectTime: Start=1.25 End=1.75")
+            # A real clip click must keep its exact time and paint the full line.
+            operate_owned_video_track(client, 1.25, track=0, gesture="click", area=area)
+            selection = client.data("GetInfo: Type=Selection Format=JSON")
+            at = selection["Start"]
+            assert abs(at - 1.25) < 0.02 and selection["End"] == at, (area, selection)
             time.sleep(0.15)
             after, _, _ = capture()
-            x = round((info["videoTrackLeftOffset"] + (1.25 - info["viewStart"])
+            x = round((info["videoTrackLeftOffset"] + (at - info["viewStart"])
                        / (info["viewEnd"] - info["viewStart"]) * info["videoTrackDataWidth"])
                       * width / info["videoTrackPanelWidth"])
             changed = 0
@@ -357,7 +360,7 @@ def check_edit_cursor_line(client, root, ffmpeg):
                                - before[(y * width + column) * 3 + channel]) for channel in range(3))
                        for column in range(x - 2, x + 3)) > 20:
                     changed += 1
-            assert changed > (height - 19) * 0.9, (repeat, changed, height)
+            assert changed > (height - 19) * 0.9, (area, changed, height)
     finally:
         user.SetWindowPos(main, ctypes.c_void_p(-1 if pinned else -2), 0, 0, 0, 0, 0x13)
         for handle in hidden:

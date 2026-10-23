@@ -72,7 +72,7 @@ start is rejected and the take stops at the next clip or an earlier selected
 end. The recording-gap policy has focused automated coverage; this preview has
 not been checked against microphone hardware.
 
-The main transport uses compact 35-pixel buttons. **Go to Cursor** brings the
+The main transport uses the original 52-pixel buttons. **Go to Cursor** brings the
 current playhead into view during playback or pause, or the edit cursor when
 stopped, without changing zoom, selection or project content.
 
@@ -184,7 +184,7 @@ joined content, both trim edges, differing audio/video placements, speed,
 repeated requests, Undo/Redo and native save/reopen.
 `fork-video-transport` covers the actual preview buttons, pause/resume, live
 picture mute, video-only playback and ownership between projects.
-`fork-transport-toolbar` covers compact button dimensions, canceled clicks,
+`fork-transport-toolbar` covers native button dimensions, canceled clicks,
 repeated cursor navigation in both directions, playback/pause and unchanged
 selection, zoom and history.
 `fork-preview-navigation` covers preview timeline seeks, canceled/repeated drags,
@@ -302,7 +302,9 @@ been deleted. Video-only projects supply silence in memory to its clock; no
 hidden audio track or temporary soundtrack is created.
 
 Drag a clip's header along the timeline or onto another video track with free
-space. Drag either edge to trim it; click its picture body to select time.
+space. Drag either edge to trim it; a single click places the cursor at that
+time, and a double click selects just that clip. Delete also removes the clip
+under a point cursor when its video track alone is selected.
 Use the normal **Edit > Clips > Split**, **Split New**, **Trim**, Cut, Copy,
 Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
 Splits and video moves snap to source frames. Linked splits create separate

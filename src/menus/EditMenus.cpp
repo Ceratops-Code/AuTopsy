@@ -56,6 +56,15 @@ const ReservedCommandFlag &EditableClipTracksSelectedFlag()
 #endif
 }
 
+const ReservedCommandFlag &DeleteSelectionAvailableFlag()
+{
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   return VideoTimeline::TimeOrVideoClipSelectedFlag();
+#else
+   return TimeSelectedFlag();
+#endif
+}
+
 // Handle text paste. Return true if did paste.
 // (This was formerly the first part of overly-long OnPaste.)
 bool DoPasteText(AudacityProject &project)
@@ -364,6 +373,9 @@ void OnCut(const CommandContext &context)
 void OnDelete(const CommandContext &context)
 {
    auto &project = context.project;
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   VideoTimeline::SelectVideoClipForDeletion(project);
+#endif
    auto &tracks = TrackList::Get( project );
    auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
 
@@ -1234,7 +1246,7 @@ auto EditMenu()
             AudioIONotBusyFlag() | CutCopyAvailableFlag() | NoAutoSelect(),
             wxT("Ctrl+X") ),
          Command( wxT("Delete"), XXO("&Delete"), OnDelete,
-            AudioIONotBusyFlag() | EditableTracksSelectedFlag() | TimeSelectedFlag() | NoAutoSelect(),
+            AudioIONotBusyFlag() | EditableTracksSelectedFlag() | DeleteSelectionAvailableFlag() | NoAutoSelect(),
             wxT("Ctrl+K") ),
          /* i18n-hint: (verb)*/
          Command( wxT("Copy"), XXO("&Copy"), OnCopy,
@@ -1317,7 +1329,7 @@ AttachedItem sAttachment1{ Indirect(EditMenu()) };
 auto ExtraEditMenu()
 {
    static const auto flags =
-      AudioIONotBusyFlag() | EditableTracksSelectedFlag() | TimeSelectedFlag();
+      AudioIONotBusyFlag() | EditableTracksSelectedFlag() | DeleteSelectionAvailableFlag();
    static auto menu = std::shared_ptr{
    Menu( wxT("Edit"), XXO("&Edit"),
       Command( wxT("DeleteKey"), XXO("&Delete Key"), OnDelete,

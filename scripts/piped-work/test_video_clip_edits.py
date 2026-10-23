@@ -383,7 +383,7 @@ class PreviewNativeWindows:
 
 
 def check_transport_toolbar(client, root):
-    """Exercise compact native controls and cursor visibility without shared input.
+    """Exercise native-size controls and cursor visibility without shared input.
 
     Window identity comes from the owned button's caption and parent, never
     toolbar positions or upstream numeric IDs. Native mouse messages traverse
@@ -401,6 +401,7 @@ def check_transport_toolbar(client, root):
     user.EnumChildWindows.argtypes = [w.HWND, callback_type, w.LPARAM]
     user.GetParent.argtypes, user.GetParent.restype = [w.HWND], w.HWND
     user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
     user.GetWindowDpiAwarenessContext.argtypes = [w.HWND]
     user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
     user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
@@ -445,7 +446,7 @@ def check_transport_toolbar(client, root):
             assert native.owner(handle) == pid
             rectangle = w.RECT()
             assert user.GetWindowRect(handle, ctypes.byref(rectangle))
-            assert (rectangle.right - rectangle.left, rectangle.bottom - rectangle.top) == (35, 35), (label, rectangle)
+            assert (rectangle.right - rectangle.left, rectangle.bottom - rectangle.top) == (52, 52), (label, rectangle)
     finally:
         if previous_dpi:
             user.SetThreadDpiAwarenessContext(previous_dpi)
@@ -457,9 +458,12 @@ def check_transport_toolbar(client, root):
             if not user.SendMessageTimeoutW(handle, message, flags, position, 2, 2000, ctypes.byref(reply)):
                 raise RuntimeError(f"Owned transport button message {message:#x} failed: {ctypes.WinError()}")
 
-        # Every button has the same logical client size. The outside release
-        # cancels a press through the same native path as a user's cancelled click.
-        centre = 17 | (17 << 16)
+        # Resolve the actual client rectangle; native theme/DPI sizing owns it.
+        # An outside release cancels through the same path as a user's gesture.
+        rectangle = w.RECT()
+        assert user.GetClientRect(handle, ctypes.byref(rectangle))
+        centre = ((rectangle.right - rectangle.left) // 2
+                  | ((rectangle.bottom - rectangle.top) // 2 << 16))
         send(0x201, 1, centre)
         try:
             send(0x202, 0, 0xFFFFFFFF if cancel else centre)
@@ -1338,18 +1342,23 @@ def check_split_video_edges(client, root, linked):
     client.send("Split")
     original = client.data("GetLinkedMediaClips")
     video = client.data("GetVideoClips")
-    for _ in range(2):
-        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True)
+    for area in ("header", "picture"):
+        # Keep a preceding body click/Escape and the edge drag in one input
+        # session. Restoring the pointer outside the pane used to mask this bug.
+        preceding = at + 0.25 if area == "picture" else None
+        operate_owned_video_track(client, at, at + 0.5, track=0, cancel=True,
+                                  area=area, prior_click_time=preceding)
         assert client.data("GetLinkedMediaClips") == original
-        operate_owned_video_track(client, at, at + 0.5, track=0)
+        operate_owned_video_track(client, at, at + 0.5, track=0,
+                                  area=area, prior_click_time=preceding)
         trimmed = client.data("GetLinkedMediaClips")
         assert len(trimmed) == len(original), trimmed
         for before, after in zip(original, trimmed, strict=True):
             start = before["start"] + (0.5 if before["clip"] == 1 and (linked or before["kind"] == "video") else 0)
             assert abs(after["start"] - start) < 0.04 and after["end"] == before["end"], trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True)
+        operate_owned_video_track(client, at + 0.5, at, track=0, cancel=True, area=area)
         assert client.data("GetLinkedMediaClips") == trimmed
-        operate_owned_video_track(client, at + 0.5, at, track=0)
+        operate_owned_video_track(client, at + 0.5, at, track=0, area=area)
         assert client.data("GetLinkedMediaClips") == original
         assert client.data("GetVideoClips") == video
         client.send("Undo")

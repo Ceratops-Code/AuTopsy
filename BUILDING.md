@@ -444,7 +444,7 @@ content and quarter-turn sources. `fork-video-crop-controls` checks the real
 clip menu, Reset, Cancel and history with idle shared input. Each case saves its
 owned fixture project before the worker closes it, preventing a save prompt.
 
-`fork-transport-toolbar` checks 35-pixel native controls and Go to Cursor through
+`fork-transport-toolbar` checks 52-pixel native controls and Go to Cursor through
 owned-window press/release messages. It exercises canceled and repeated clicks,
 left/right offscreen edit cursors, playback and pause, preserving zoom, selection,
 audio content and history. It does not move the shared pointer or press shared
@@ -707,7 +707,9 @@ positive dB changes, Undo and export-dialog selection. `fork-video-clip-export`
 exports a split clip through its real context menu and checks output duration,
 picture pixels and two generated audio frequencies; a later project-only tone
 detects accidental mixing from time zero. `fork-edit-cursor-line` reads the line
-across the owned pane, including other tracks and blank space. Generated media,
+across the owned pane after real video body/header clicks, including other tracks
+and blank space. Split-edge cases retain pointer continuity after Escape.
+Generated media,
 temporary exports and projects use the existing marked case directory/cleanup.
 
 `media-clip-selection::` owns the host-free additive-selection, anchor and stale

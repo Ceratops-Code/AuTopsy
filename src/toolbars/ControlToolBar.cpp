@@ -115,25 +115,17 @@ AButton* MakeControlToolBarButton(wxWindow* parent,
                                   const wxImage& iconDown,
                                   const wxImage& iconDisabled)
 {
-   // AuTopsy uses two thirds of the native 52-pixel square, rounded to 35.
-   // Scale local frame copies so other toolbars and theme resources keep their
-   // own dimensions. Native 16-pixel transport glyphs remain legible inside.
-   constexpr int buttonSide = 35;
-   const auto frame = [](teBmps resource) {
-      return theTheme.Image(resource).Scale(32, 32, wxIMAGE_QUALITY_HIGH);
-   };
    auto button = safenew AButton(parent, id);
    button->SetButtonType(AButton::FrameButton);
    button->SetImages(
-      frame(bmpRecoloredUpLarge),
-      frame(bmpRecoloredUpHiliteLarge),
-      frame(bmpRecoloredDownLarge),
-      frame(bmpRecoloredHiliteLarge),
-      frame(bmpRecoloredUpLarge));
+      theTheme.Image(bmpRecoloredUpLarge),
+      theTheme.Image(bmpRecoloredUpHiliteLarge),
+      theTheme.Image(bmpRecoloredDownLarge),
+      theTheme.Image(bmpRecoloredHiliteLarge),
+      theTheme.Image(bmpRecoloredUpLarge));
    button->SetIcons(iconUp, iconDown, iconDisabled);
    button->SetLabel(label);
-   button->SetMinSize(wxSize { buttonSide, buttonSide });
-   button->SetMaxSize(wxSize { buttonSide, buttonSide });
+   button->SetMinSize(wxSize { 52, 52 });
    button->SetFrameMid(2);
    return button;
 }

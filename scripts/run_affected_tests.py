@@ -108,6 +108,7 @@ NATIVE_INPUTS = (
     "src/clip-groups/EditClipMarkers.cpp", "src/clip-groups/GroupAudioClips.h",
     "src/clip-groups/GroupAudioClips.cpp",
     "src/menus/*.cpp", "src/commands/GetInfoCommand.cpp",
+    "src/toolbars/ControlToolBar.*",
     "src/tracks/ui/CommonTrackControls.cpp",
     "libraries/lib-project-history/*", "libraries/lib-project-file-io/*", "libraries/lib-viewport/*",
     "CMakeLists.txt", "CMakePresets.json",
