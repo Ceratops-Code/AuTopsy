@@ -90,6 +90,9 @@ WaveClipUIUtilities::GetWaveClipMenuItems()
       { L"RenameClip", XO("Rename Clip...") },
       { L"ChangePitchAndSpeed", XO("Pitch and Speed...") },
       { L"RenderPitchAndSpeed", XO("Render Pitch and Speed") },
+      {},
+      { L"ChangeAudioClipVolume", XO("Clip Volume...") },
+      { L"ExportAudioClip", XO("Export Clip...") },
    };
    ;
 }

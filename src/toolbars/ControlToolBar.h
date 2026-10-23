@@ -53,6 +53,7 @@ class AUDACITY_DLL_API ControlToolBar final : public ToolBar {
    void OnStop(wxCommandEvent & evt);
    void OnRecord(wxCommandEvent & evt);
    void OnFF(wxCommandEvent & evt);
+   void OnGoToCursor(wxCommandEvent & evt);
    void OnPause(wxCommandEvent & evt);
    void OnLoop(wxCommandEvent & evt);
    void OnIdle(wxIdleEvent & event);
@@ -97,6 +98,7 @@ class AUDACITY_DLL_API ControlToolBar final : public ToolBar {
       ID_REW_BUTTON,
       ID_RECORD_BUTTON,
       ID_LOOP_BUTTON,
+      ID_GOTO_CURSOR_BUTTON,
       BUTTON_COUNT,
    };
 
@@ -107,6 +109,7 @@ class AUDACITY_DLL_API ControlToolBar final : public ToolBar {
    AButton *mStop;
    AButton *mFF;
    AButton *mLoop;
+   AButton *mGoToCursor;
 
    wxString mStrLocale; // standard locale abbreviation
 

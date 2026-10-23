@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import prepare_audacity_consumer as consumer
-import run_fork_test_harness as harness
+import run_audacity_consumer as sessions
 
 
 def package_zip(entries: dict[str, bytes] | None = None) -> bytes:
@@ -298,7 +298,7 @@ class ConsumerCacheTests(unittest.TestCase):
         self.assertEqual(preserved.read_text(), "untouched")
         self.assertTrue(result["executable"].is_file())
 
-    def test_native_matrix_uses_both_pins_and_cleans_expected_input_on_success_or_failure(self) -> None:
+    def test_native_matrix_uses_both_pins_and_keeps_fixture_descriptor_on_success_or_failure(self) -> None:
         case = self.root / "_case"
         case.mkdir()
         expected = case / "_compatibility-expected.json"
@@ -313,20 +313,20 @@ class ConsumerCacheTests(unittest.TestCase):
                 return {"projects": ["neutral.aup3"]}
             fake_result = {"executable": self.root / "audacity.exe", "version": "3.7.8",
                            "archive_sha256": "a" * 64, "url": "official"}
-            with patch.object(harness, "AudacityConsumerCache") as cache, \
-                    patch.object(harness, "check_stock_audacity_projects", side_effect=check):
+            with patch.object(sessions, "AudacityConsumerCache") as cache, \
+                    patch.object(sessions, "check_stock_audacity_projects", side_effect=check):
                 cache.return_value.__enter__.return_value.prepare_consumer.return_value = fake_result
                 if fail_at is None:
-                    result = harness.check_portable_audacity_projects(case, {}, "ffmpeg")
+                    result = sessions.check_portable_audacity_projects(case, {}, "ffmpeg")
                     self.assertEqual(len(result), 2)
                     self.assertEqual(len(calls), 2)
                     self.assertEqual(result[0]["package"]["archive_sha256"], "a" * 64)
                 else:
                     with self.assertRaisesRegex(RuntimeError, "consumer rejected"):
-                        harness.check_portable_audacity_projects(case, {}, "ffmpeg")
+                        sessions.check_portable_audacity_projects(case, {}, "ffmpeg")
                 prepared = cache.return_value.__enter__.return_value.prepare_consumer.call_args_list
                 self.assertEqual([item.args[0] for item in prepared], list(consumer.PINNED_CONSUMERS))
-            self.assertFalse(expected.exists())
+            self.assertEqual(expected.read_text(), "[]")
 
 
 if __name__ == "__main__":

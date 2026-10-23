@@ -13,6 +13,7 @@ before showing them; the runner refuses modules without that contract.
 import argparse
 import ctypes
 import hashlib
+import inspect
 import json
 import os
 import platform
@@ -25,33 +26,44 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from run_audacity_consumer import (
+    check_portable_audacity_projects,
+    executable_version,
+    read_audio_project_state,
+    read_compatibility_fixture_inputs,
+    run_process,
+    select_audio_project_tracks,
+    startup_window_messages,
+)
 from run_fork_test_harness import (
     ScriptClient,
     assert_owned_test_display,
     capture_owned_project,
     check_behavior_worker_lifecycle,
     check_neutral_preview_fixture,
-    check_portable_audacity_projects,
     check_test_display_selection,
     check_video_interactions,
     connected_test_displays,
-    executable_version,
     operate_owned_video_track,
     painted_video_tracks,
-    read_audio_project_state,
     ready_video_preview,
     require_test_display_guard,
     run_behavior_worker,
-    run_process,
     save_reopen,
-    select_audio_project_tracks,
     select_test_display,
-    startup_window_messages,
     write_neutral_preview_video,
     write_tone,
 )
+from test_clip_actions import (
+    check_audio_clip_actions,
+    check_edit_cursor_line,
+    check_video_clip_export,
+)
+from test_track_groups import check_track_groups
 from test_video_clip_edits import (
+    check_preview_navigation,
     check_split_video_edges,
+    check_transport_toolbar,
     check_video_clip_structure,
     check_video_compound_render,
     check_video_crop,
@@ -955,6 +967,18 @@ def worker(args, root):
         check_tracks(client, root)
     elif args.case == "history-view":
         check_history_view(client, root)
+    elif args.case == "transport-toolbar":
+        check_transport_toolbar(client, root)
+    elif args.case == "preview-navigation":
+        check_preview_navigation(client, root, args.ffmpeg)
+    elif args.case == "track-groups":
+        check_track_groups(client, root)
+    elif args.case == "clip-actions":
+        check_audio_clip_actions(client, root, args.ffmpeg)
+    elif args.case == "video-clip-export":
+        check_video_clip_export(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "edit-cursor-line":
+        check_edit_cursor_line(client, root, args.ffmpeg)
     elif args.case == "project-compatibility":
         check_project_compatibility(client, root)
     elif args.case == "video":
@@ -1086,6 +1110,11 @@ def native_test_inputs(args, executable, module, display):
         "check_sha256": sha(Path(__file__)),
         "harness_sha256": sha(here / "run_fork_test_harness.py"),
         "pipe_client_sha256": sha(here / "pipeclient.py"),
+        "shared_process_checks": {
+            operation.__name__: hashlib.sha256(inspect.getsource(operation).encode()).hexdigest()
+            for operation in (read_audio_project_state, select_audio_project_tracks,
+                              executable_version, startup_window_messages, run_process)
+        },
         "payload_dependencies": {p.name: sha(p) for p in sorted(executable.parent.glob("*.dll"))},
         "execution_scope": {
             "platform": platform.platform(), "machine": platform.machine(),
@@ -1098,10 +1127,13 @@ def native_test_inputs(args, executable, module, display):
     if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-speed", "video-speed-storage",
-                     "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls"):
+                     "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
-    if args.case == "project-compatibility":
-        inputs["consumer_preparation_sha256"] = sha(here / "prepare_audacity_consumer.py")
+    if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line"):
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+        inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
+    if args.case == "track-groups":
+        inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
     return inputs
 
 
@@ -1222,6 +1254,42 @@ def run_native_check(work_root, case, read_inputs, execute):
     return {"case": case, "result": "passed", "receipt": str(target), "original_run": run_id}
 
 
+def run_project_compatibility_checks(work_root, case, read_inputs, execute, root, display, ffmpeg):
+    """Accept the app and its fixtures before a separately owned consumer check.
+
+    A fresh call reads current fixture bytes and immutable app acceptance. A
+    failed consumer cannot revoke the app's pass or cause its GUI to replay.
+    Missing/tampered accepted fixtures block instead of silently rerunning it.
+    """
+    application = run_native_check(work_root, case + "-application", read_inputs, execute)
+    accepted = json.loads(Path(application["receipt"]).read_text(encoding="utf-8"))
+    fixtures = read_compatibility_fixture_inputs(root)
+    if accepted.get("compatibility_fixtures") != fixtures:
+        raise RuntimeError("Accepted compatibility fixture bytes are missing or changed.")
+
+    def consumer_inputs():
+        here = Path(__file__).parent
+        return {
+            "application_result": application["original_run"],
+            "fixtures": read_compatibility_fixture_inputs(root),
+            "consumer_checks": {
+                name: hashlib.sha256((here / name).read_bytes()).hexdigest()
+                for name in ("run_audacity_consumer.py", "prepare_audacity_consumer.py")
+            },
+            "execution_scope": read_inputs()["execution_scope"],
+        }
+
+    def consume(run_id, inputs):
+        return {
+            "result": "passed",
+            "stock_audacity": check_portable_audacity_projects(root, display, ffmpeg),
+        }
+
+    consumer = run_native_check(work_root, case + "-stock-audacity", consumer_inputs, consume)
+    return {"case": case, "result": "reused" if application["result"] == consumer["result"] == "reused" else "passed",
+            "application": application, "stock_audacity": consumer}
+
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1233,6 +1301,10 @@ def main():
             "groups",
             "tracks",
             "history-view",
+            "transport-toolbar",
+            "preview-navigation",
+            "track-groups",
+            "clip-actions", "video-clip-export", "edit-cursor-line",
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
@@ -1332,7 +1404,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in ("video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in ("video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,
@@ -1387,7 +1459,7 @@ def main():
                 ],
                 timeout=30,
             )
-        if args.case == "preview":
+        if args.case in ("preview", "transport-toolbar", "preview-navigation"):
             write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
         version_numbers = executable_version(executable)
         profile = executable.parent / "Portable Settings"
@@ -1559,9 +1631,6 @@ def main():
                     ) from error
                 if status:
                     raise RuntimeError(f"The owned app exited with status {status}.")
-                stock_result = None
-                if args.case == "project-compatibility":
-                    stock_result = check_portable_audacity_projects(root, display, args.ffmpeg)
                 log.flush()
                 shows = re.findall(
                     r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
@@ -1591,9 +1660,10 @@ def main():
                     "test_display": display,
                     "pre_show_count": len(shows),
                     "input": source_identity,
-                    "stock_audacity": stock_result,
                     **identities,
                 }
+                if args.case in ("project-compatibility", "track-groups"):
+                    record["compatibility_fixtures"] = read_compatibility_fixture_inputs(root)
                 observations = root / "_playback.json"
                 if observations.is_file():
                     record["observations"] = json.loads(observations.read_text())
@@ -1618,9 +1688,14 @@ def main():
         retain_behavior_result(root.parent)
         execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display))
         return
-    result = run_native_check(
-        root.parent, args.case,
-        lambda: native_test_inputs(args, executable, module, display), execute)
+    def read_inputs():
+        return native_test_inputs(args, executable, module, display)
+
+    if args.case in ("project-compatibility", "track-groups"):
+        result = run_project_compatibility_checks(
+            root.parent, args.case, read_inputs, execute, root, display, args.ffmpeg)
+    else:
+        result = run_native_check(root.parent, args.case, read_inputs, execute)
     print(json.dumps(result))
 
 

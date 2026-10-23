@@ -444,6 +444,37 @@ content and quarter-turn sources. `fork-video-crop-controls` checks the real
 clip menu, Reset, Cancel and history with idle shared input. Each case saves its
 owned fixture project before the worker closes it, preventing a save prompt.
 
+`fork-transport-toolbar` checks 35-pixel native controls and Go to Cursor through
+owned-window press/release messages. It exercises canceled and repeated clicks,
+left/right offscreen edit cursors, playback and pause, preserving zoom, selection,
+audio content and history. It does not move the shared pointer or press shared
+keyboard keys.
+
+`fork-preview-navigation` exercises the real timeline and focused preview arrow
+keys, canceled/repeated drags, frame steps, playback-volume changes, live seeks
+and paused seeks/resume. A neutral 120-fps source forces a 30-fps proxy; captured
+red/blue source frames distinguish precise paused stepping from a timecode-only
+change. Both transport cases read the live preview status while
+playing; Audacity's configured scripting dispatch stops audio before returning
+command data, so it cannot serve as a live clock observer.
+
+Track-folder policy and streaming peak reduction have dedicated `track-groups::`
+core cases. The affected-test runner selects them for changes in their owned
+model/reducer inputs. `fork-track-groups` checks the native header, nonadjacent
+members, repeated/canceled collapse, phase cancellation, native move commands,
+native multi-member duplication with an unrelated following track,
+Undo/Redo, saved identities and project reopening. Its collapsed and expanded
+project fixtures also pass to the same pinned portable Audacity consumers.
+The native group test owns only the marked case directory and uses the existing
+fixture/profile/process cleanup and finite acceptance-record owner.
+
+Group waveform jobs write no files. Each view owns at most one current result and
+one running job. Changed inputs cancel obsolete work between 4,096-sample mixer
+blocks; snapshots share immutable sample blocks, and view destruction joins its
+worker before project storage closes. Error text is one replaceable in-memory
+value, removed on the next successful result. Saved grouping metadata belongs
+only to the project's optional XML attributes/header.
+
 The SDK remains at the caller-selected path and is read during the build.
 CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
 ffmpeg.exe, ffprobe.exe and
@@ -498,7 +529,10 @@ The existing per-architecture installer retention remains current plus two
 predecessors. Building never installs or publishes an application.
 
 GitHub's `Validate` workflow builds on `windows-2022` when manually
-dispatched, or when a pull request has the `build-windows-installer` label.
+dispatched with **Build the unsigned Windows installer after the checks**
+enabled (the default), or when a pull request has the `build-windows-installer` label.
+Disable that input for a checks-only manual run, for example
+`gh workflow run validate.yml --ref release/local -f build_installer=false`.
 Its repository checks precede the installer job. After building, it runs the
 same focused native project-compatibility case used locally, against pinned
 portable Audacity consumers. The uploaded unsigned installer and source manifest
@@ -555,6 +589,14 @@ concurrent-owner, corruption, archive safety and cleanup behavior without networ
 access or an application window.
 
 Each native consumer runs from a private copy in the marked case directory.
+`run_audacity_consumer.py` owns those sessions and shared process observations.
+Every input and saved copy opens through a fresh normal application startup;
+stock scripting never creates or destroys project windows. A Windows job owns
+the consumer and its descendants before its first instruction, including crash
+reporters, and ends them before private scratch cleanup. Child failures retain
+their invocation, exit status and both output streams in the returned error.
+`fork-audacity-consumer-runtime` checks repeat, interruption, ownership,
+round trips, scratch cleanup and accepted-application reuse independently.
 Its private portable profile disables file association and update changes,
 separates audio and GUI temporary storage, and places its project window on the
 selected test display. The upstream name `Portable Settings` is required for
@@ -567,7 +609,13 @@ dither, while clip timing, names, track properties and labels must match. Result
 records name both consumer versions, official package digests and executable hashes. After all saved-copy
 acknowledgements the harness ends only its private consumer process; stock pipe
 shutdown is outside this file-format test. It removes the private copied app,
-profile, log and working copies on success or failure. Current neutral fixtures
+profile, log and working copies on success or failure. App acceptance and stock
+consumer acceptance have separate immutable identities. A consumer retry keeps
+the app result and checks only the missing consumer scope; fixture descriptor
+and file hashes bind that result to the retained generated inputs. Missing or
+changed fixture bytes block instead of silently replaying the app. The marked
+case owner keeps only its current descriptor/project/audio group and replaces
+it on a new application run. Current neutral fixtures
 and original test projects remain in the existing bounded per-case workspace.
 
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
@@ -611,6 +659,8 @@ source changes during compilation or execution cannot earn a pass. At startup an
 after publication, receipts retain the current and at most two earlier records per
 named check. An OS lock protects active work; its one lock file persists, while
 pending files are removed under exclusive ownership. Other files are untouched.
+Publication order increases under that lock even if clock values tie or move
+backwards; selection and retention use that order rather than file timestamps.
 The standard-library test interpreter is bound to persistent `sys.base_prefix`,
 so a CMake cache never depends on a discarded temporary `uv --with` environment.
 Later test changes do not rebuild or revoke an unchanged accepted installer.
@@ -635,3 +685,27 @@ including opening and closing About twice. It uses only its private test process
 Inherited Audacity 4 and upstream release-publishing jobs are restricted to the
 official repository. This fork's workflow checks its own feature models and
 does not fetch or merge upstream updates automatically.
+
+`cursor-recording::` cases exercise the independent gap policy without opening a
+microphone. The adapter creates a fresh pending capture clip at the cursor and
+passes the earliest free-space/selection end to the native stream. Actual capture
+device behavior still depends on the user's audio device.
+
+`project-storage::` cases compile the application's owned SQLite configuration
+against its bundled SQLite. A private VFS separates volatile writes from synced
+bytes, discards the volatile bytes on a simulated power cut, and reopens the
+project. Cases cover durable live commits, copy rollback journals, interruptions
+before/after each write/sync/truncate/delete, failed commits, interrupted
+checkpoints, and repeated configuration/retry. A control using the former NORMAL
+setting must lose an acknowledged edit, so an app-only crash test cannot stand
+in for this power-cut model. No user files, physical input, or disk artifacts are
+used. The native connection/save adapters still need their separate app checks;
+this suite cannot prove storage firmware honors the operating system's flushes.
+
+`fork-clip-actions` owns audio clip-menu targeting, cancelled/applied negative and
+positive dB changes, Undo and export-dialog selection. `fork-video-clip-export`
+exports a split clip through its real context menu and checks output duration,
+picture pixels and two generated audio frequencies; a later project-only tone
+detects accidental mixing from time zero. `fork-edit-cursor-line` reads the line
+across the owned pane, including other tracks and blank space. Generated media,
+temporary exports and projects use the existing marked case directory/cleanup.

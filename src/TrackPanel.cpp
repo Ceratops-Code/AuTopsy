@@ -973,6 +973,10 @@ void TrackPanel::UpdateVRuler(Track *t)
 
 void TrackPanel::UpdateTrackVRuler(Track &t)
 {
+   // Restoring history adds collapsed members individually and emits native
+   // resize events. Hidden rows have no ruler; native channel proportions
+   // require a positive height and must only be computed for visible rows.
+   if (ChannelView::GetChannelGroupHeight(&t) <= 0) return;
    auto heights = FindAdjustedChannelHeights(t);
 
    wxRect rect(mViewInfo->GetVRulerOffset(),
@@ -1473,6 +1477,7 @@ struct Subgroup final : TrackPanelGroup {
             auto &view = ChannelView::Get(*pChannel);
             height += view.GetHeight();
          }
+         if (height <= 0) continue;
          refinement.emplace_back( yy,
             std::make_shared<ResizingChannelGroup>(
                pTrack->SharedPointer(), viewInfo.GetLeftOffset())

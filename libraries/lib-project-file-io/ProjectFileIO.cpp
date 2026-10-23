@@ -1044,14 +1044,12 @@ bool ProjectFileIO::CopyTo(const FilePath &destpath,
       return false;
    }
 
-   // Ensure attached DB connection gets configured
-   //
-   // NOTE:  Between the above attach and setting the mode here, a normal DELETE
-   //        mode journal will be used and will briefly appear in the filesystem.
-   if ( pConn->FastMode("outbound") != SQLITE_OK)
+   // A completed copy must survive a PC crash independently of the original.
+   // Keep rollback journaling enabled and sync the one batched transaction.
+   if (pConn->CopyMode("outbound") != SQLITE_OK)
    {
       SetDBError(
-         XO("Unable to switch to fast journaling mode")
+         XO("Unable to configure durable project storage")
       );
 
       return false;
@@ -1105,14 +1103,13 @@ bool ProjectFileIO::CopyTo(const FilePath &destpath,
       wxLongLong_t count = 0;
       wxLongLong_t total = blockids.size();
 
-      // Start a transaction.  Since we're running without a journal,
-      // this really doesn't provide rollback.  It just prevents SQLite
-      // from auto committing after each step through the loop.
-      //
-      // Also note that we will have an open transaction if we fail
-      // while copying the blocks. This is fine since we're just going
-      // to delete the database anyway.
-      sqlite3_exec(db, "BEGIN;", nullptr, nullptr, nullptr);
+      // Batch the copy without weakening SQLite's rollback or disk-sync rules.
+      rc = sqlite3_exec(db, "BEGIN;", nullptr, nullptr, nullptr);
+      if (rc != SQLITE_OK)
+      {
+         SetDBError(XO("Unable to begin project copy transaction"));
+         return false;
+      }
 
       // Copy sample blocks from the main DB to the outbound DB
       for (auto blockid : blockids)
@@ -1175,8 +1172,14 @@ bool ProjectFileIO::CopyTo(const FilePath &destpath,
          return false;
       }
 
-      // See BEGIN above...
-      sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+      // In particular, SQLITE_FULL/IOERR at this boundary must never be
+      // reported as a successful save or followed by source recovery cleanup.
+      rc = sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+      if (rc != SQLITE_OK)
+      {
+         SetDBError(XO("Unable to commit project copy to disk"));
+         return false;
+      }
    }
 
    // Detach the destination database
@@ -2265,10 +2268,8 @@ bool ProjectFileIO::SaveProject(
          mProject.shared_from_this(), mpErrors,
          [this]{ OnCheckpointFailure(); });
 
-      // NOTE: There is a noticeable delay here when dealing with large multi-hour
-      //       projects that we just created. The delay occurs in Open() when it
-      //       calls SafeMode() and is due to the switch from the NONE journal mode
-      //       to the WAL journal mode.
+      // NOTE: There can be a noticeable delay when opening large multi-hour
+      //       projects and switching their rollback journal to WAL mode.
       //
       //       So, we do the Open() in a thread and display a progress dialog. Since
       //       this is currently the only known instance where this occurs, we do the

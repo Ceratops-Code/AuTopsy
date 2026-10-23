@@ -50,6 +50,32 @@ To remove picture edges, right-click a video clip and choose **Crop Picture...**
 Set the left/top/right/bottom percentages, or use **Reset Crop**. The source
 footage stays available, and crop follows the clip through saved projects and
 ordinary editing.
+
+Right-click an audio clip for **Clip Volume...** to raise or lower that clip's
+level in dB using the native Amplify dialog, with normal Undo/Redo. **Export
+Clip...** opens export for the clicked audio or video clip. Video clip export
+uses its picture and everything audible in the project over that clip's original
+time span. The edit cursor extends through the full track pane.
+
+Ordinary Record starts at the cursor. For existing recording tracks, an occupied
+start is rejected and the take stops at the next clip or an earlier selected
+end. The recording-gap policy has focused automated coverage; this preview has
+not been checked against microphone hardware.
+
+The main transport uses compact 35-pixel buttons. **Go to Cursor** brings the
+current playhead into view during playback or pause, or the edit cursor when
+stopped, without changing zoom, selection or project content.
+
+Select several tracks, then use **Tracks > Track Groups > Group Selected
+Tracks...** or their track menu. The group arrow collapses its members into one
+summed-audio waveform; expanding restores the individual editable tracks. Track
+gain, pan, mute and clip envelopes contribute to that waveform. It describes the
+member audio before real-time effects. Opposite signals cancel in the summary.
+Clicking the header selects its members. Drag the header, or use the normal track
+move commands, to move the whole group. **Ungroup Tracks** and the header's **x**
+remove the grouping while keeping the member tracks and audio. Groups are flat.
+Ordinary audio stays in standard AUP3 tracks, so stock Audacity opens it without
+the optional group headers.
 Local deployments use the installer, including locally built releases; source
 and build directories are not installation inputs. A local installation runs from
 `%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing
@@ -70,6 +96,13 @@ Audacity is required by either AuTopsy or this test. Saving in Audacity drops
 AuTopsy's video, links, clip groups and flags; keep the original AuTopsy project
 when those additions matter. Compatibility with unreleased Audacity versions
 cannot be guaranteed.
+
+Project writes use SQLite's durable WAL commits, including autosaves. Saved
+copies keep rollback journaling enabled and report a failed disk commit instead
+of claiming the copy succeeded. These changes preserve the AUP3 format. Storage
+must honor flush requests, and a project that is still open may need its `-wal`
+file as well as the main `.aup3`; use **Save Project > Backup Project** for a
+self-contained copy rather than copying the live main file alone.
 
 Preview publication uploads the completed installer and its source/build-check
 manifest. The publisher keeps the original accepted build intact, checks the
@@ -141,6 +174,13 @@ joined content, both trim edges, differing audio/video placements, speed,
 repeated requests, Undo/Redo and native save/reopen.
 `fork-video-transport` covers the actual preview buttons, pause/resume, live
 picture mute, video-only playback and ownership between projects.
+`fork-transport-toolbar` covers compact button dimensions, canceled clicks,
+repeated cursor navigation in both directions, playback/pause and unchanged
+selection, zoom and history.
+`fork-preview-navigation` covers preview timeline seeks, canceled/repeated drags,
+focused arrow keys, paused frame steps, playback volume and resume.
+`fork-track-groups` covers grouping, phase-aware summed waveforms, repeated
+Undo/Redo, native collapse controls, saved identities and stock Audacity readers.
 `fork-video-visibility` covers track buttons and cancellation, Undo/Redo,
 clipboard/save/reopen, visible source selection and decoded picture/audio exports.
 The focused `fork-video-selection`, `fork-video-edges`, `fork-video-clipboard`
@@ -215,6 +255,11 @@ pipes, so it can run alongside an installed copy of Audacity.
    project audio/video playback; preview controls do not interrupt recording or
    another project's stream. Video follows normal-speed playback, pause, stop,
    timeline seeks and loop jumps. Audio plays once through the editable tracks.
+   The preview timeline seeks picture and sound together, retaining playback or
+   pause. Dragging commits on release; **Escape** cancels an unfinished drag.
+   With preview focus, **Left/Right** step one source frame while stopped or
+   paused, or jump five seconds while playing. **Shift+Left/Right** always jump
+   five seconds. **Up/Down** adjust AuTopsy's playback volume.
 4. Closing the preview hides it. **View > Video Preview** shows it again, and
    starting playback also brings it back. Delete a video track using its normal
    close button or **Tracks > Remove Tracks**.

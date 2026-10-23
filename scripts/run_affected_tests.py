@@ -41,6 +41,13 @@ COMMON_INPUTS = (
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
+    CheckGroup("project-storage", ("libraries/lib-project-file-io/ConfigureProjectStorage.*",
+        "libraries/lib-project-file-io/tests/*", "lib-src/sqlite/sqlite3.c", "lib-src/sqlite/sqlite3.h"),
+        "project-storage-test"),
+    CheckGroup("cursor-recording", ("src/recording/PlanCursorRecording.*",
+        "src/recording/TestCursorRecording.cpp", "src/recording/CMakeLists.txt"), "cursor-recording-test"),
+    CheckGroup("track-groups", ("src/track-groups/EditTrackGroups.*", "src/track-groups/RenderGroupWaveform.*",
+        "src/track-groups/TestTrackGroups.cpp", "src/track-groups/CMakeLists.txt"), "track-groups-test"),
     CheckGroup("video-playback", TIMELINE_INPUTS + (
         "src/video/SyncVideoPlayback.h", "src/video/ChooseVideoExport.h",
         "src/video/RelinkVideoMedia.h", "src/video/TestVideoPlayback.cpp"), "video-playback-test"),
@@ -64,14 +71,23 @@ GROUPS = (
         "scripts/piped-work/test_fork_features.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
         "scripts/piped-work/test_video_clip_edits.py")),
+    CheckGroup("fork-audacity-consumer-runtime", (
+        "scripts/piped-work/run_audacity_consumer.py",
+        "scripts/piped-work/test_run_audacity_consumer.py",
+        "scripts/piped-work/test_fork_features.py")),
     CheckGroup("fork-audacity-consumer-cache", (
         "scripts/piped-work/prepare_audacity_consumer.py",
-        "scripts/piped-work/test_prepare_audacity_consumer.py",
-        "scripts/piped-work/run_fork_test_harness.py")),
+        "scripts/piped-work/test_prepare_audacity_consumer.py")),
 )
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/clip-groups/OpenClipActions.*", "src/ProjectAudioManager.cpp", "src/ProjectAudioManager.h",
+    "src/tracks/ui/EditCursorOverlay.cpp", "src/tracks/playabletrack/wavetrack/ui/WaveClipUIUtilities.cpp",
+    "scripts/piped-work/test_clip_actions.py",
+    "src/track-groups/CreateTrackGroup.*", "src/track-groups/ShowTrackGroups.*",
+    "scripts/piped-work/test_track_groups.py", "src/tracks/ui/ChannelView.cpp", "src/TrackPanel.cpp",
+    "src/TrackUtilities.cpp", "src/tracks/ui/CommonTrackControls.h",
     "libraries/lib-wave-track/WaveTrack.cpp",
     "scripts/piped-work/test_video_clip_edits.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
@@ -87,9 +103,10 @@ NATIVE_INPUTS = (
     "src/clip-groups/GroupAudioClips.cpp",
     "src/menus/*.cpp", "src/commands/GetInfoCommand.cpp",
     "src/tracks/ui/CommonTrackControls.cpp",
-    "libraries/lib-project-history/*", "libraries/lib-viewport/*", "CMakeLists.txt", "CMakePresets.json",
+    "libraries/lib-project-history/*", "libraries/lib-project-file-io/*", "libraries/lib-viewport/*",
+    "CMakeLists.txt", "CMakePresets.json",
 )
-OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "scripts/*.py", "scripts/build/windows/*")
+OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
 DOCUMENT_SUFFIXES = {".md", ".rst"}
 
 
@@ -234,7 +251,9 @@ class ReceiptStore:
         for group in self.root.iterdir():
             if not group.is_dir() or not re.fullmatch(r"[0-9a-f]{64}", group.name):
                 continue
-            records = sorted(group.glob("_result-*.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+            records = sorted(group.glob("_result-*.json"),
+                             key=lambda p: json.loads(p.read_text(encoding="utf-8"))["finished_ns"],
+                             reverse=True)
             for stale in records[3:]:
                 stale.unlink()
 
@@ -249,10 +268,14 @@ class ReceiptStore:
         return latest if latest and latest["result"] == "passed" else None
 
     def publish(self, name: str, identity: str, result: str, evidence: dict[str, Any]) -> dict[str, Any]:
-        record = {"id": uuid.uuid4().hex, "name": name, "input_identity": identity,
-                  "result": result, "finished_ns": time.time_ns(), "evidence": evidence}
         folder = self.root / digest(name)
         folder.mkdir(exist_ok=True)
+        # The exclusive owner orders results by publication, even when the wall
+        # clock stalls or goes backwards. File timestamps cannot supply that order.
+        previous = max((json.loads(path.read_text(encoding="utf-8"))["finished_ns"]
+                        for path in folder.glob("_result-*.json")), default=0)
+        record = {"id": uuid.uuid4().hex, "name": name, "input_identity": identity,
+                  "result": result, "finished_ns": max(time.time_ns(), previous + 1), "evidence": evidence}
         pending = self.root / f"_pending-{record['id']}.json"
         target = folder / f"_result-{record['id']}.json"
         try:

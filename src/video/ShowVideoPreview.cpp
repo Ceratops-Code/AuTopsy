@@ -53,6 +53,7 @@
 #include <wx/panel.h>
 #include <wx/progdlg.h>
 #include <wx/sizer.h>
+#include <wx/slider.h>
 #include <wx/stattext.h>
 #include <wx/stdpaths.h>
 #include <wx/stopwatch.h>
@@ -118,6 +119,27 @@ public:
       if (state.canControl && state.playing && !state.recording)
          ProjectAudioManager::Get(mProject).Stop();
    }
+   VideoPreview::PreviewNavigationState ReadNavigation() const {
+      const auto state = ReadState();
+      const auto cursor = ViewInfo::Get(mProject).selectedRegion.t0();
+      return {state, state.playing && ProjectAudioIO::Get(mProject).IsAudioActive()
+         ? AudioIO::Get()->GetStreamTime() : cursor, cursor,
+         std::max(0.0, TrackList::Get(mProject).GetEndTime())};
+   }
+   void SetProjectCursor(double position) {
+      ViewInfo::Get(mProject).selectedRegion.setTimes(position, position);
+      Viewport::Get(mProject).Redraw();
+   }
+   void SetNavigationPaused(bool paused) {
+      if (ReadState().paused != paused) ProjectAudioManager::Get(mProject).OnPause();
+   }
+   void StartPlaybackAtCursor() {
+      const auto state = ReadNavigation();
+      const auto options = ProjectAudioIO::GetDefaultOptions(mProject);
+      ProjectAudioManager::Get(mProject).PlayPlayRegion(
+         SelectedRegion(state.cursor, state.duration), options, PlayMode::normalPlay);
+      if (!ReadState().playing) throw std::runtime_error("Project playback could not start at the preview destination.");
+   }
 };
 
 
@@ -132,6 +154,8 @@ class VideoPreviewFrame final : public wxFrame {
    wxPanel *mSurface{};
    wxStaticText *mStatus{};
    wxButton *mPlayButton{}, *mPauseButton{}, *mStopButton{};
+   wxSlider *mTimeline{};
+   bool mDraggingTimeline{};
    std::unique_ptr<VideoPreview::VideoMediaPlayer> mPlayer;
    Observer::Subscription mProjectClosing;
    std::shared_ptr<const VideoPreview::PreparedMedia> mMedia;
@@ -157,6 +181,68 @@ class VideoPreviewFrame final : public wxFrame {
       mPlayButton->Enable(controls.play); mPauseButton->Enable(controls.pause); mStopButton->Enable(controls.stop);
       const auto label = state.playing && state.paused ? _("Resume") : _("Play");
       if (mPlayButton->GetLabel() != label) mPlayButton->SetLabel(label);
+      const auto navigation = NativePreviewTransport(project).ReadNavigation();
+      mTimeline->Enable(state.hasVideo && state.canControl && !state.recording && !state.stopping && navigation.duration > 0);
+      if (!mDraggingTimeline && std::isfinite(navigation.position))
+         mTimeline->SetValue(VideoPreview::PreviewTimelineValue(navigation.position, navigation.duration));
+   }
+
+   void SeekProject(double position)
+   {
+      if (const auto project = mProject.lock()) {
+         NativePreviewTransport transport(*project);
+         const auto state = transport.ReadNavigation();
+         const auto target = std::clamp(position, 0.0, state.duration);
+         VideoPreview::ApplyPreviewSeek(transport, {target, state.transport.playing, state.transport.paused});
+          if (!state.transport.playing || state.transport.paused) InspectOriginalFrames();
+         UpdateTransportControls(*project);
+      }
+   }
+
+   void CommitTimeline()
+   {
+      if (const auto project = mProject.lock()) try {
+         const auto state = NativePreviewTransport(*project).ReadNavigation();
+         SeekProject(VideoPreview::PreviewTimelineTime(mTimeline->GetValue(), state.duration));
+      }
+      catch (const std::exception &error) {
+         UpdateTransportControls(*project);
+         wxMessageBox(wxString::FromUTF8(error.what()), _("Video Preview"), wxOK | wxICON_ERROR, this);
+      }
+   }
+
+   void OnNavigationKey(wxKeyEvent &event)
+   {
+      const auto key = event.GetKeyCode();
+      if (mDraggingTimeline && key == WXK_ESCAPE) {
+         mDraggingTimeline = false;
+         if (const auto project = mProject.lock()) UpdateTransportControls(*project);
+         return;
+      }
+      if ((key != WXK_LEFT && key != WXK_RIGHT && key != WXK_UP && key != WXK_DOWN) ||
+          event.ControlDown() || event.AltDown() || event.MetaDown()) { event.Skip(); return; }
+      if (const auto project = mProject.lock()) try {
+         const auto state = NativePreviewTransport(*project).ReadNavigation();
+         if (!state.transport.canControl || state.transport.recording || state.transport.stopping) return;
+         if (key == WXK_UP || key == WXK_DOWN) {
+            auto &commands = CommandManager::Get(*project);
+            const CommandContext context(*project);
+            CommandDispatch::HandleTextualCommand(key == WXK_UP ? "OutputGainInc" : "OutputGainDec",
+               context, commands.GetUpdateFlags(), false);
+         }
+         else if ((state.transport.playing && !state.transport.paused) || event.ShiftDown())
+            SeekProject(state.position + (key == WXK_RIGHT ? 5.0 : -5.0));
+         else {
+            const auto timeline = VideoTimeline::GetProjectTimeline(*project);
+            const auto *clip = VideoTimeline::ClipAt(timeline, std::max(0.0, state.position - (key == WXK_LEFT ? 1e-7 : 0)));
+            const auto rate = clip ? VideoTimeline::SourceFor(timeline, *clip).frameRate : timeline.frameRate;
+            SeekProject(VideoPreview::AdjacentSourceFrame(state.position, clip ? clip->start : 0,
+               clip ? clip->sourceStart : 0, rate, key == WXK_RIGHT ? 1 : -1, clip ? clip->playbackRate : 1));
+         }
+      }
+      catch (const std::exception &error) {
+         wxMessageBox(wxString::FromUTF8(error.what()), _("Video Preview"), wxOK | wxICON_ERROR, this);
+      }
    }
 
    void OnClose(wxCloseEvent &event)
@@ -210,7 +296,8 @@ class VideoPreviewFrame final : public wxFrame {
           }
           // Playback keeps its low-cost proxy. Frame inspection reads the source
           // so a 30 fps proxy cannot hide frames from a 60 fps original.
-          if (transport.playing) mPreciseFrames = false;
+           // This snapshot's playing flag already excludes paused audio.
+           if (transport.playing) mPreciseFrames = false;
           const bool original = mPreciseFrames && mMedia && mMedia->lightweight;
           if (original != mUsingOriginalFrames) {
              mPlayer->OpenVideoFile(original ? mPath : mMedia->playbackPath);
@@ -281,6 +368,15 @@ public:
        mStatus = new wxStaticText{ this, wxID_ANY, _("Loading video...") };
        layout->Add(mVideoArea, 1, wxEXPAND);
        layout->Add(mStatus, 0, wxEXPAND | wxALL, 6);
+        mTimeline = new wxSlider(this, wxID_ANY, 0, 0, VideoPreview::PreviewTimelineSteps);
+        mTimeline->SetName(_("Preview timeline"));
+        mTimeline->SetToolTip(_("Seek project audio and video. Left/Right: frame when paused, five seconds when playing. Shift: five seconds. Up/Down: playback volume."));
+        layout->Add(mTimeline, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
+        mTimeline->Bind(wxEVT_SCROLL_THUMBTRACK, [this](wxScrollEvent &) { mDraggingTimeline = true; });
+        mTimeline->Bind(wxEVT_SCROLL_THUMBRELEASE, [this](wxScrollEvent &) {
+           mDraggingTimeline = false; CommitTimeline();
+        });
+        mTimeline->Bind(wxEVT_SLIDER, [this](wxCommandEvent &) { if (!mDraggingTimeline) CommitTimeline(); });
        auto *playback = new wxBoxSizer{wxHORIZONTAL};
        const auto addPlayback = [&](const wxString &label, VideoPreview::PreviewTransportAction action) {
           auto *button = new wxButton{this, wxID_ANY, label};
@@ -327,6 +423,7 @@ public:
       SetMinSize(wxSize{ 320, 200 });
       Bind(wxEVT_TIMER, &VideoPreviewFrame::OnTimer, this, mTimer.GetId());
       Bind(wxEVT_CLOSE_WINDOW, &VideoPreviewFrame::OnClose, this);
+       Bind(wxEVT_CHAR_HOOK, &VideoPreviewFrame::OnNavigationKey, this);
       // Shut down mpv while its HWND is still alive. A project closes its
       // children before releasing attachments, so attachment destruction alone
       // is too late for a renderer that owns native child windows.
@@ -427,6 +524,7 @@ public:
    }
    uintptr_t StatusHandle() const { return reinterpret_cast<uintptr_t>(mStatus->GetHandle()); }
    uintptr_t SurfaceHandle() const { return reinterpret_cast<uintptr_t>(mSurface->GetHandle()); }
+    uintptr_t TimelineHandle() const { return reinterpret_cast<uintptr_t>(mTimeline->GetHandle()); }
    bool PictureVisible() const { return mSurface->IsShown(); }
    double PlayerProperty(const char *name) { return mPlayer ? mPlayer->ReadNumericVideoProperty(name) : 0.0; }
    const auto &PlaybackSamples() const { return mPlaybackSamples; }
@@ -538,6 +636,9 @@ public:
       const auto state = frame ? frame->PlayerState() : VideoPreview::PlayerSnapshot{};
       const auto media = frame ? frame->Media() : nullptr;
       const auto strip = VideoTimeline::GetProjectVideoTrackStatus(context.project);
+       int inputDevice{};
+       float inputVolume{}, playbackVolume{};
+       AudioIO::Get()->GetMixer(&inputDevice, &inputVolume, &playbackVolume);
       rapidjson::StringBuffer buffer; rapidjson::Writer<rapidjson::StringBuffer> out(buffer);
       out.StartObject();
        out.Key("ready"); out.Bool(state.ready);
@@ -547,6 +648,8 @@ public:
        out.Key("previewFrameHandle"); out.Uint64(frame ? reinterpret_cast<uintptr_t>(frame->GetHandle()) : 0);
        out.Key("previewStatusHandle"); out.Uint64(frame ? frame->StatusHandle() : 0);
        out.Key("previewSurfaceHandle"); out.Uint64(frame ? frame->SurfaceHandle() : 0);
+        out.Key("previewTimelineHandle"); out.Uint64(frame ? frame->TimelineHandle() : 0);
+        out.Key("playbackVolume"); out.Double(playbackVolume);
        out.Key("pictureVisible"); out.Bool(frame && frame->PictureVisible());
        const auto picture = VideoTimeline::FindProjectPicture(context.project, ViewInfo::Get(context.project).selectedRegion.t0());
        out.Key("pictureSource"); out.String(picture.visible ? picture.source.path.c_str() : "");

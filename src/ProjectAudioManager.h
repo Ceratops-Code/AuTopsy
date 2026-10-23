@@ -109,7 +109,9 @@ public:
       const TransportSequences &transportSequences,
       double t0, double t1,
       bool altAppearance,
-      const AudioIOStartStreamOptions &options);
+      const AudioIOStartStreamOptions &options,
+      // Ordinary Record uses a new gap clip; punch-and-roll retains its contract.
+      bool createCaptureClipAtCursor = false);
 
    int PlayPlayRegion(const SelectedRegion &selectedRegion,
                       const AudioIOStartStreamOptions &options,

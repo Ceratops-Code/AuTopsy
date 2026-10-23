@@ -6,6 +6,7 @@
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
+#include "../clip-groups/OpenClipActions.h"
 #include "Project.h"
 #include "ProjectHistory.h"
 #include "ProjectAudioIO.h"
@@ -519,6 +520,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(9,_("Separate Joined Clip"));
          menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, mId != 0);
          menu.Append(11, _("Crop Picture...")); menu.Enable(11, mId != 0);
+         menu.AppendSeparator(); menu.Append(12, _("Export Clip...")); menu.Enable(12, mId != 0);
          for (int id : {7, 8, 9}) menu.Enable(id, mId != 0);
          for (int id : {1, 2, 4, 5, 6})
             menu.Enable(id, !ViewInfo::Get(*project).selectedRegion.isPoint());
@@ -537,6 +539,8 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],mId,found->start);
          }
+         else if (choice == 12)
+            ClipActions::ShowVideoClipExport(*project, *track, mId, parent);
          else if (choice == 11)
             VideoEditing::ShowVideoClipCropDialog(*project, *track, mId, parent);
          else if (choice == 10) {

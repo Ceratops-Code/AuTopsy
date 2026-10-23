@@ -16,5 +16,5 @@ bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *paren
    VideoTool tool = VideoTool::Encoder);
 bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline,
    double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent,
-   const ExportSettings &settings = {});
+   const ExportSettings &settings = {}, double projectAudioStart = 0.0);
 }

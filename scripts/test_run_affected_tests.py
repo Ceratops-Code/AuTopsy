@@ -18,6 +18,14 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_renumbered_displays_never_select_the_primary_screen(self) -> None:
+        primary = {"device": r"\\.\DISPLAY10", "primary": True, "work": [0, 0, 1280, 672]}
+        secondary = {"device": r"\\.\DISPLAY11", "primary": False, "work": [-1280, 113, 0, 785]}
+        for layout in ([primary, secondary], [secondary, primary]):
+            self.assertEqual(native.select_test_display(layout), secondary)
+        with self.assertRaises(RuntimeError):
+            native.select_test_display([primary, dict(secondary, primary=True)])
+
     def names(self, paths: list[str], all_checks: bool = False) -> set[str]:
         return {group.name for group in runner.select_groups(paths, all_checks)[0]}
 
@@ -38,6 +46,37 @@ class SelectionTests(unittest.TestCase):
     def test_portable_consumers_have_a_dedicated_check(self) -> None:
         for name in ("prepare_audacity_consumer.py", "test_prepare_audacity_consumer.py"):
             self.assertEqual(self.names(["scripts/piped-work/" + name]), {"fork-audacity-consumer-cache"})
+
+    def test_consumer_runtime_has_its_own_lifecycle_check(self) -> None:
+        for name in ("run_audacity_consumer.py", "test_run_audacity_consumer.py"):
+            self.assertEqual(self.names(["scripts/piped-work/" + name]), {"fork-audacity-consumer-runtime"})
+
+    def test_storage_policy_and_native_adapters_have_separate_scopes(self) -> None:
+        for path in ("libraries/lib-project-file-io/ConfigureProjectStorage.cpp",
+                     "libraries/lib-project-file-io/tests/TestProjectStorage.cpp",
+                     "lib-src/sqlite/sqlite3.c"):
+            self.assertEqual(self.names([path]), {"project-storage"})
+        groups, native_inputs = runner.select_groups(["libraries/lib-project-file-io/DBConnection.cpp"])
+        self.assertEqual(groups, [])
+        self.assertEqual(native_inputs, ["libraries/lib-project-file-io/DBConnection.cpp"])
+
+    def test_track_folder_policy_and_native_adapters_have_separate_scopes(self) -> None:
+        for path in ("src/track-groups/EditTrackGroups.cpp", "src/track-groups/RenderGroupWaveform.h",
+                     "src/track-groups/TestTrackGroups.cpp"):
+            self.assertEqual(self.names([path]), {"track-groups"})
+        for path in ("src/track-groups/CreateTrackGroup.cpp", "src/track-groups/ShowTrackGroups.cpp"):
+            groups, native = runner.select_groups([path])
+            self.assertEqual(groups, [])
+            self.assertEqual(native, [path])
+
+    def test_cursor_recording_policy_and_clip_adapters_have_separate_scopes(self) -> None:
+        for path in ("src/recording/PlanCursorRecording.cpp", "src/recording/TestCursorRecording.cpp"):
+            self.assertEqual(self.names([path]), {"cursor-recording"})
+        for path in ("src/clip-groups/OpenClipActions.cpp", "src/ProjectAudioManager.cpp",
+                     "src/tracks/ui/EditCursorOverlay.cpp", "scripts/piped-work/test_clip_actions.py"):
+            groups, native = runner.select_groups([path])
+            self.assertEqual(groups, [])
+            self.assertEqual(native, [path])
 
     def test_unknown_owned_executable_input_requires_a_scope_decision(self) -> None:
         for path in ("scripts/new_operation.py", "src/video/NewVideoOperation.cpp",
@@ -107,6 +146,25 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(len(list((root / runner.digest("one")).glob("*.json"))), 3)
         self.assertTrue(unrelated.exists())
         self.assertEqual((root / "_runner.lock").stat().st_size, 1)
+
+    def test_clock_ties_and_rollback_preserve_publication_order_across_reentry(self) -> None:
+        root = self.root / "_results"
+        finished = []
+        for result in ("passed", "failed", "passed", "failed", "passed"):
+            with runner.ReceiptStore(root) as store, patch.object(runner.time, "time_ns", return_value=10):
+                record = store.publish("one", "current", result, {})
+                finished.append(record["finished_ns"])
+                # Deliberately reverse filesystem age; retention and selection
+                # must both use the owner's publication order.
+                path = root / runner.digest("one") / f"_result-{record['id']}.json"
+                os.utime(path, ns=(1, 1))
+                self.assertEqual(store.accepted("one", "current"), record if result == "passed" else None)
+        with runner.ReceiptStore(root) as store, patch.object(runner.time, "time_ns", return_value=1):
+            newest = store.publish("one", "current", "passed", {})
+            self.assertGreater(newest["finished_ns"], finished[-1])
+            self.assertEqual(store.accepted("one", "current"), newest)
+            self.assertEqual(len(list((root / runner.digest("one")).glob("_result-*.json"))), 3)
+        self.assertEqual(finished, sorted(set(finished)))
 
     def test_interrupted_owner_leaves_a_reusable_lock_file_without_saved_progress(self) -> None:
         root = self.root / "_results"

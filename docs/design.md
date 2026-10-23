@@ -5,6 +5,8 @@ Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
 per-clip speed and picture crop are implemented in this branch. Embedded-layer
 geometry remains an independent foundation awaiting native controls, saved
 parent identities and pixel rendering.
+Collapsible track groups, compact transport controls and the preview timeline
+and keyboard controls are also implemented.
 Other later operations remain targets until their delivery status says otherwise.
 Owner: AuTopsy maintainers.
 
@@ -195,7 +197,9 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/EditVideoComposition.h/.cpp` | Native picture crop controls and history | Numeric margins, reset and one native history transaction |
 | `src/video/RenderVideoComposition.h/.cpp` | Host-free source geometry and encoder expressions | Oriented crop projection and FFmpeg crop translation |
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
-| `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan |
+| `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan and explicit project audio range |
+| `src/clip-groups/OpenClipActions.h/.cpp` | Clicked-clip targeting, native dB effect and export dialogs | Selection scope and cancellation stay at the host boundary |
+| `src/recording/PlanCursorRecording.h/.cpp` | Host-free cursor/gap/sample-edge policy | Reject occupied starts and choose the earliest stop across capture tracks |
 | `src/video/ChooseVideoExport.h/.cpp` | Export preset values and chooser | Explicit codec/size/FPS/quality policy |
 | `src/video/RelinkVideoMedia.h/.cpp` | Source replacement and native chooser | Catalog relinking through a complete edit plan |
 | `src/video/TestVideoPlayback.cpp` | Independent timing/playback/flags/export tests | Preserve current simple model contracts |
@@ -208,12 +212,125 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 The small native transport facade currently lives in `ShowVideoPreview.cpp`;
 its desired-state policy lives in `SyncVideoPlayback.h`. It uses the existing
 `ProjectAudioManager` API and introduces no separate transport engine.
+The main transport adapter in `src/toolbars/ControlToolBar.cpp` uses local scaled
+theme images for its 35-pixel buttons; shared theme resources and other toolbars
+keep their own sizing. Go to Cursor reads this project's active stream time,
+including pause, or its edit cursor while stopped. It calls the native viewport
+scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into
 `RenderVideoFrames.h/.cpp` after separate path approval.
+
+### Clip actions, recording gaps and cursor projection
+
+An audio clip's context pick resolves against the native temporary track/time
+selection, independent of older selected tracks. Clip Volume selects that entire
+visible clip and invokes the registered Amplify effect with its normal dB dialog,
+sample processing and Undo. Cancelling restores the prior selection. Audio
+Export Clip uses the existing export dialog in selection mode and restores
+selection after the dialog closes. Neither operation introduces project metadata.
+
+Video clip export freezes an owned `VideoClipExportPlan`: its flattened retained
+picture starts at output time zero, and its project start/duration identify the
+audio mix window. The native audio exporter mixes every audible project track
+over that window, preserving mute/solo, gain, pan and native effects. This is
+independent of which video track was selected or is covering the clicked picture.
+All retained media paths remain protected from output overwrite. The existing
+export workspace owns intermediate WAV/render files and removes them after
+success, cancellation or a failed attempt; the final output belongs to the user.
+
+Ordinary recording keeps native channel/rate/device selection but sends visible
+capture-track ranges to `PlanRecordingAtCursor` before modifying tracks or opening
+a device. A cursor inside an existing clip rejects the request. Otherwise the
+sample-aligned stop is the earliest following clip or earlier selection end.
+No following boundary means open-ended recording. A new capture interval is
+inserted only into the pending track copy; a device-start failure cannot insert
+an empty clip into the original. Punch-and-roll keeps its existing adapter path.
+Pure `cursor-recording::` cases exercise range/rate rejection, complete-sample
+boundaries, multiple capture tracks and repeated requests without a microphone.
+
+The edit cursor overlay uses the native time-to-pixel conversion and draws one
+vertical line across the entire track pane, including blank space. Its position
+is the time-selection start even when a whole clip or range is selected; native
+scrolling, zoom and overlay invalidation retain ownership of the view.
+
+### Track folders and summed waveforms
+
+The owned `src/track-groups/EditTrackGroups.*` model plans folder membership and
+whole-block ordering with opaque persistent identities. Groups are flat; a
+member cannot also be a header. The native adapter in `CreateTrackGroup.*` uses
+ordinary sibling tracks plus one `AuTopsyTrackGroup` header. Track attachments
+carry `autopsyTrackIdentity` and `autopsyTrackGroup`; the header uses an optional
+`autopsytrackgroup` element with `trackGroupSchema=1`, `folderId` and `collapsed`.
+No audio is nested inside optional XML. Stock readers may skip the header and
+attributes while retaining every supported audio track. Missing, duplicated or
+unsupported optional group metadata must leave audio visible rather than hide it.
+
+`ShowTrackGroups.cpp` owns pane controls, semantic menu entries, selection,
+dragging, preview generation and scripting. Collapsing is a projection: the
+native `ChannelView` adapter returns zero height for hidden members, and the
+pane omits zero-height rows. The native ruler adapter omits those rows before
+calculating channel proportions, including during partial history restoration.
+Membership attributes serialize their owned IDs even from saved history snapshots
+without a live project owner. Native audio, effects, editing and project storage
+continue to own the unchanged member tracks. Expanded heights/minimized states
+are retained. Header movement publishes one permutation of the whole block;
+canceling a drag restores the original order. The header's close action ungroups
+instead of deleting audio. Creation, collapse, movement and ungrouping use one
+native history commit and restore their previous layout if that commit fails.
+The host history API performs autosave before its no-fail history commit.
+Native track/history notifications queue one project-bound refresh rather than
+permuting inside a native iterator. That refresh reads the current complete list,
+arranges its members and updates the current history snapshot without adding a
+second Undo step. Project destruction discards the callback through a weak owner.
+
+A collapsed waveform is reduced from the actual summed mono mix, never from
+individual track peak envelopes. A narrow `Mixer` adapter applies member gain,
+pan, mute/solo, envelopes, sample rates and clip stretching to GUI-created track
+container snapshots. Real-time effect stages are excluded, matching the ordinary
+track waveform's role. `RenderGroupWaveform.*` bins the summed samples, preserving
+transients and destructive phase cancellation. It has no native types.
+
+The renderer writes no caches or diagnostic files. A view retains one completed
+summary and one running job; a new requested viewport replaces obsolete intent.
+Cancellation is checked between 4,096-sample blocks. A GUI timer collects complete
+results; workers never traverse live editable tracks or call UI APIs. Destruction
+cancels and joins work before the project storage closes. The view's single error
+string is cleared after success. Native track/history events increment the
+presentation generation, so sample/effect/gain edits cannot reuse a stale summary.
+Readiness compares the completed key with the current viewport and generation;
+an edit or zoom cannot expose an older result while waiting for the next paint.
+
+Independent named `track-groups::` cases cover layout, orphan metadata, movement,
+sum reduction, cancellation and failed readers. `fork-track-groups` owns native
+header/gesture/history/storage and portable Audacity consumer checks. Native
+current-candidate results are still required before releasing this feature.
 Extend existing adapters and extract coherent responsibilities when needed;
 do not create empty scaffolding or an all-purpose feature manager.
 
 ## 6. Owned data model and persistence
+
+The existing SQLite AUP3 schema remains the project store. The owned
+`libraries/lib-project-file-io/ConfigureProjectStorage.cpp` supplies its commit
+policy through narrow `DBConnection` adapters. Live writer and checkpoint
+connections use WAL with FULL synchronization, so an acknowledged transaction
+does not rely on a later background checkpoint to reach durable storage. The
+initial switch from a rollback journal to WAL uses EXTRA synchronization before
+settling on FULL. Standalone copies keep a DELETE rollback journal with EXTRA
+synchronization and batch their audio blocks and document in one transaction.
+`ProjectFileIO::CopyTo` checks BEGIN and COMMIT results; a failed commit cannot
+report a completed copy or allow Save As to discard the source's recovery data.
+These are connection policies, not new project tables or a format migration.
+
+The desired boundary is a readable previous or completed state after interruption,
+with every acknowledged edit durable when the filesystem and device honor flushes.
+Uncommitted edits may roll back. The `project-storage::` cases use generated data
+and a private SQLite VFS to discard unsynced bytes and interrupt writes, syncs,
+truncation and deletion, including checkpointing. A NORMAL-mode control exposes
+the earlier durability gap. The model does not prove real firmware behavior or
+make a live copy of only the main AUP3 file safe: committed data can still be in
+its WAL. Native save/reopen and supported-Audacity checks remain separate adapter
+evidence. Existing autosave, compaction and project-file cleanup retain their
+ownership; this change introduces no backup or diagnostic history producer.
 
 Clips have a track-local integer ID, project start, content-window start,
 duration, playback rate, optional source override, link group and content-relative flags. An
@@ -473,6 +590,21 @@ effect, and converges after an interrupted request. Controls are disabled during
 recording, stopping or a foreign project's stream. A decoder failure leaves the
 timer observing transport controls so the editor can still stop playback.
 
+The preview slider maps the whole project duration, including video gaps and
+audio tails. A drag publishes one absolute seek on release; Escape cancels the
+unpublished drag. Timer updates never overwrite a dragged thumb. The owned
+`ApplyPreviewSeek` policy reads native state between each effect, protects foreign
+streams/recording and retains the requested playback or pause mode. A changed
+destination stops the old stream, sets the project cursor and pause before
+starting the new stream at that cursor, preventing a paused seek from briefly
+emitting sound. Repeating an already satisfied destination has no effect.
+`OnNavigationKey` belongs to the preview window: Left/Right step source frames
+at rest or while paused, and seek five seconds during playback; Shift forces
+five seconds. Up/Down use the native playback-gain commands, never track gain.
+Core cases cover absolute mapping and interruption on both sides of every seek
+effect. `fork-preview-navigation` exercises the native slider and focused keys;
+live observations use its status label because configured scripting stops audio.
+
 Video track Mute/Solo uses the host's semantic button-row layout and ordinary
 button capture/cancellation. The owned `VisibleVideoLayers` policy feeds both
 `FindProjectPicture` and export's flattened timeline; the spatial evaluator uses
@@ -570,7 +702,7 @@ user's responsibility; the product must not delete them to repair a cache.
 | `.build/_core` | CMake/CTest: portable checks and generated executables | Updated in place on each normal test call; disposable build cache, not an install or product version |
 | `.build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
 | Installer build `package` | `build_video_installer.py`: completed installer and build manifest | Deterministic builder retains its accepted matching output, cleans pending owned build work; a new candidate receives its own content identity |
-| Test work roots | `run_fork_test_harness.py`: owned processes, generated neutral footage and result records | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
+| Test work roots | `test_fork_features.py`: generated fixtures and bounded immutable stage receipts; `run_audacity_consumer.py`: private stock process trees and scratch | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
 | Failure diagnostic payloads, target lifecycle | Each operation's existing owner: evidence for a named unresolved question | Default: persist none; when needed, one unresolved report per operation/target, seven-day expiry, declared finite byte/group limits; matching success removes obsolete failure payloads |
 | Future complex-preview chunks | `PrepareVideoPreview` orchestration with renderer | Same source/plan version grouping and leases; finite cache bound before enabling; no unbounded per-play history |
 
@@ -706,13 +838,22 @@ with video, linked/grouped audio and a label, plus one containing only video.
 Pinned portable Audacity 3.7.8 and 3.7.9 consumers each open, save/copy and reopen
 both twice. Standard track/clip/label data must match; decoded five-second audio
 mixes must agree within 0.0005 per sample. Original AuTopsy files remain unchanged.
-The receipt records both application identities and test versions. The harness
-owns the private copied consumer, portable preferences and working files, and
-removes them after the check; it never uses a personal project. Consumer shutdown
-uses owned-process termination after saved-copy acknowledgements, because the
-stock scripting Close path can destroy GUI objects on its worker thread. That
-upstream scripting behavior is outside the format contract. Native AuTopsy tests
-still require their normal application exit.
+The native application and stock consumer stages have separate immutable
+receipts. The first stage retains the descriptor and hashes of its current
+generated project/audio fixtures. A failed consumer leaves that acceptance intact;
+a fresh call checks fixture integrity and runs only missing consumer work.
+Changed or missing accepted fixtures block instead of silently replaying the GUI.
+
+`run_audacity_consumer.py` owns the copied consumers, private portable preferences,
+working files and both child output streams. Each input and saved copy opens by
+normal application startup, avoiding scripted project-window creation or
+destruction. A Windows job owns the process and descendants atomically from
+creation, including crash reporters; worker interruption closes that ownership
+and ends its tree. Session exit ends descendants before removing copied files.
+Primary errors and cleanup errors are reported together. No personal project or
+installed editor participates. Native AuTopsy tests still require normal exit.
+The focused `fork-audacity-consumer-runtime` cases cover process/worker
+interruption, repeated round trips, scratch ownership/cleanup and app-pass reuse.
 
 Dedicated `TestVideoEdits.cpp` cases cover all-or-nothing plans, stale expected
 states, interruption before/after publication, repeated absolute requests, bound

@@ -1,6 +1,7 @@
 """Focused native video editing, transport and visibility cases with neutral media."""
 import ctypes
 import json
+import math
 import os
 import re
 import shutil
@@ -33,7 +34,7 @@ def crop_pixel_counts(rgb):
     return counts
 
 
-def expect_preview_crop_pixels(client, root, ffmpeg, expected):
+def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=None):
     """Read only the owned preview surface on its required display.
 
     The bundled FFmpeg GDI input reads the decoder's GPU output without adding
@@ -43,7 +44,9 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected):
     """
     from ctypes import wintypes as w
 
-    info = ready_video_preview(client)
+    # A caller observing a live/paused transport supplies its previously read
+    # handles: a fresh configured script command would stop that transport.
+    info = ready_video_preview(client) if preview_info is None else preview_info
     surface = int(info["previewSurfaceHandle"])
     native = PreviewNativeWindows()
     pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
@@ -379,6 +382,169 @@ class PreviewNativeWindows:
             raise RuntimeError(f"Native BM_CLICK failed for HWND={handle}: {ctypes.WinError()}")
 
 
+def check_transport_toolbar(client, root):
+    """Exercise compact native controls and cursor visibility without shared input.
+
+    Window identity comes from the owned button's caption and parent, never
+    toolbar positions or upstream numeric IDs. Native mouse messages traverse
+    AButton's normal press/release path, including cancellation before release.
+    The worker owns its generated audio and saves before its normal shutdown.
+    """
+    import wave
+    from ctypes import wintypes as w
+
+    native = PreviewNativeWindows()
+    user = native.api
+    pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    callback_type = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, w.LPARAM]
+    user.EnumChildWindows.argtypes = [w.HWND, callback_type, w.LPARAM]
+    user.GetParent.argtypes, user.GetParent.restype = [w.HWND], w.HWND
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetWindowDpiAwarenessContext.argtypes = [w.HWND]
+    user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    matches = []
+
+    @callback_type
+    def visit_child(handle, parent):
+        if native.caption(handle) == "Go to Cursor":
+            matches.append((parent, handle))
+        return True
+
+    @callback_type
+    def visit_window(handle, _):
+        if native.owner(handle) == pid and native.visible(handle):
+            user.EnumChildWindows(handle, visit_child, handle)
+        return True
+
+    user.EnumWindows(visit_window, 0)
+    assert len(matches) == 1, matches
+    main, cursor_button = matches[0]
+    assert_owned_test_display(pid, main)
+    toolbar = user.GetParent(cursor_button)
+    buttons = {}
+
+    @callback_type
+    def visit_button(handle, _):
+        if user.GetParent(handle) == toolbar:
+            caption = native.caption(handle)
+            if caption:
+                assert caption not in buttons, caption
+                buttons[caption] = handle
+        return True
+
+    user.EnumChildWindows(toolbar, visit_button, 0)
+    expected = {"Pause", "Play", "Stop", "Skip to Start", "Skip to End", "Record", "Enable Looping", "Go to Cursor"}
+    assert expected <= set(buttons), buttons
+    previous_dpi = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(toolbar))
+    try:
+        for label in expected:
+            handle = buttons[label]
+            assert native.owner(handle) == pid
+            rectangle = w.RECT()
+            assert user.GetWindowRect(handle, ctypes.byref(rectangle))
+            assert (rectangle.right - rectangle.left, rectangle.bottom - rectangle.top) == (35, 35), (label, rectangle)
+    finally:
+        if previous_dpi:
+            user.SetThreadDpiAwarenessContext(previous_dpi)
+    def press(handle, cancel=False):
+        assert native.owner(handle) == pid and native.enabled(handle)
+        reply = ctypes.c_size_t()
+
+        def send(message, flags, position):
+            if not user.SendMessageTimeoutW(handle, message, flags, position, 2, 2000, ctypes.byref(reply)):
+                raise RuntimeError(f"Owned transport button message {message:#x} failed: {ctypes.WinError()}")
+
+        # Every button has the same logical client size. The outside release
+        # cancels a press through the same native path as a user's cancelled click.
+        centre = 17 | (17 << 16)
+        send(0x201, 1, centre)
+        try:
+            send(0x202, 0, 0xFFFFFFFF if cancel else centre)
+        finally:
+            send(0x202, 0, 0xFFFFFFFF)
+
+    # AButton deliberately leaves its Windows HWND enabled for tooltips even
+    # when its application state is disabled. Check the resulting behavior,
+    # rather than mistaking IsWindowEnabled for the custom button's state.
+    empty_view = client.data("GetInfo: Type=View Format=JSON")
+    press(cursor_button)
+    assert client.data("GetInfo: Type=View Format=JSON") == empty_view
+    assert not client.data("GetInfo: Type=Tracks Format=JSON")
+
+    client.file("ImportVideo", root / "source.mp4")
+    initial_content = client.data("GetInfo: Type=Clips Format=JSON")
+    preview, preview_buttons = owned_preview_controls(client)
+    status = int(preview["previewStatusHandle"])
+    source = root / "_toolbar-tone.wav"
+    with wave.open(str(root / "tone-a.wav"), "rb") as original:
+        parameters, audio = original.getparams(), original.readframes(original.getnframes())
+    with wave.open(str(source), "wb") as output:
+        output.setparams(parameters)
+        output.writeframes(audio * 4)
+    client.file("Import2", source)
+    content = client.data("GetInfo: Type=Clips Format=JSON")
+
+    def viewport():
+        view = client.data("GetInfo: Type=View Format=JSON")
+        view["horizontalEnd"] = client.data("GetVideoPreviewInfo")["viewEnd"]
+        return view
+
+    for target, view_start in ((18, 1), (1, 18)):
+        client.send(f"SelectTime: Start={view_start} End={view_start + 0.5}")
+        client.send("ZoomSel")
+        client.send(f"SelectTime: Start={target} End={target + 0.25}")
+        before = viewport()
+        selection = client.data("GetInfo: Type=Selection Format=JSON")
+        assert not before["horizontalStart"] <= target <= before["horizontalEnd"], before
+        press(cursor_button, cancel=True)
+        assert viewport() == before
+        for _ in range(2):
+            press(cursor_button)
+            view = viewport()
+            assert view["horizontalStart"] <= target <= view["horizontalEnd"], view
+            assert view["pixelsPerSecond"] == before["pixelsPerSecond"]
+            assert client.data("GetInfo: Type=Selection Format=JSON") == selection
+            assert client.data("GetInfo: Type=Clips Format=JSON") == content
+
+    # Scripted data commands stop transport before their handler runs. Read the
+    # live preview label during playback, and query project data only after Stop.
+    for paused in (False, True):
+        client.send("SelectTime: Start=18 End=18.5")
+        client.send("ZoomSel")
+        before = viewport()
+        client.send("SelectTime: Start=1 End=19")
+        press(buttons["Play"])
+        wait_for_native_state(lambda: preview_project_seconds(status) > 1.15,
+                              "native toolbar playback clock")
+        if paused:
+            press(buttons["Pause"])
+            wait_for_native_state(lambda: native.enabled(preview_buttons["play"]),
+                                  "native toolbar paused")
+        position = preview_project_seconds(status)
+        press(cursor_button)
+        if paused:
+            time.sleep(0.15)
+            assert abs(preview_project_seconds(status) - position) < 0.05
+        else:
+            wait_for_native_state(lambda position=position: preview_project_seconds(status) > position + 0.08,
+                                  "cursor navigation preserves playback")
+        press(buttons["Stop"])
+        wait_for_native_state(lambda: not native.enabled(preview_buttons["stop"]),
+                              "native toolbar stopped")
+        view = viewport()
+        assert view["horizontalStart"] - 0.2 <= position <= view["horizontalEnd"] + 0.2, (position, view)
+        assert view["pixelsPerSecond"] == before["pixelsPerSecond"]
+        assert client.data("GetInfo: Type=Selection Format=JSON") == {"Start": 1, "End": 19}
+    client.send("Undo")
+    assert client.data("GetInfo: Type=Clips Format=JSON") == initial_content, "Cursor navigation added a history entry."
+    client.send("Redo")
+    assert client.data("GetInfo: Type=Clips Format=JSON") == content
+    client.file("SaveProject2", root / "_transport-toolbar.aup3")
+
+
 def owned_preview_controls(client):
     """Use real native button HWNDs, bound to this test PID and second display."""
     windows = PreviewNativeWindows()
@@ -391,6 +557,9 @@ def owned_preview_controls(client):
     handles = {item["action"]: int(item["handle"]) for item in info["transportControls"]}
     for handle in handles.values():
         assert handle and windows.owner(handle) == owner
+    status = int(info["previewStatusHandle"])
+    wait_for_native_state(lambda: bool(re.search(r"\|\s+(-?\d+(?:\.\d+)?) s", windows.control_text(status))),
+                          lambda: "preview timeline label: " + windows.control_text(status))
     return info, handles
 
 
@@ -400,7 +569,11 @@ def press_preview_button(handle):
 
 
 def preview_project_seconds(status):
-    caption = PreviewNativeWindows().caption(status)
+    caption = PreviewNativeWindows().control_text(status)
+    # Frame inspection may switch from a proxy to the original source. Its
+    # transient loading label is an unavailable observation, never time zero.
+    if caption == "Loading video...":
+        return float("nan")
     match = re.search(r"\|\s+(-?\d+(?:\.\d+)?) s", caption)
     assert match, caption
     return float(match[1])
@@ -472,6 +645,175 @@ def check_video_transport(client, root):
     press_preview_button(second["stop"])
     wait_for_native_state(lambda: windows.enabled(first["play"]), "first project regains controls")
     client.file("SaveProject2", root / "_transport-second.aup3")
+
+
+def check_preview_navigation(client, root, ffmpeg):
+    """Exercise focused preview keys and the real slider without live script queries.
+
+    The preview's status is the clock observer. Scripted commands would stop the
+    stream before returning their data, so content/volume are read only at rest.
+    Every message is bound to the test PID and its guarded preview window.
+    """
+    from ctypes import wintypes as w
+
+    # The 120-fps source forces a 30-fps lightweight proxy. One blue source frame
+    # in each four-frame block makes a missed paused frame step observable in
+    # actual displayed pixels, independently of its timecode label.
+    source = root / "_frame-navigation.mp4"
+    run_process([
+        ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+        "color=c=red:s=320x180:r=120:d=16,drawbox=color=blue:t=fill:enable='eq(mod(n,4),1)'",
+        "-i", root / "source.mp4", "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "0", "-c:a", "copy", source,
+    ], timeout=60)
+    client.file("ImportVideo", source)
+    client.send("FitInWindow")
+    original = client.data("GetLinkedMediaClips")
+    info, buttons = owned_preview_controls(client)
+    assert info["lightweight"], info
+    frame, slider, status = (int(info[key]) for key in
+                             ("previewFrameHandle", "previewTimelineHandle", "previewStatusHandle"))
+    windows = PreviewNativeWindows()
+    assert windows.owner(slider) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    user = windows.api
+    class Mouse(ctypes.Structure):
+        _fields_ = [("x", w.LONG), ("y", w.LONG), ("data", w.DWORD), ("flags", w.DWORD),
+                    ("time", w.DWORD), ("extra", ctypes.c_size_t)]
+
+    class Keyboard(ctypes.Structure):
+        _fields_ = [("code", w.WORD), ("scan", w.WORD), ("flags", w.DWORD),
+                    ("time", w.DWORD), ("extra", ctypes.c_size_t)]
+
+    class Payload(ctypes.Union):
+        _fields_ = [("mouse", Mouse), ("keyboard", Keyboard)]
+
+    class Input(ctypes.Structure):
+        _fields_ = [("kind", w.DWORD), ("payload", Payload)]
+
+    user.SendInput.argtypes = [w.UINT, ctypes.POINTER(Input), ctypes.c_int]
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetCursorPos.argtypes = [ctypes.POINTER(w.POINT)]
+    user.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user.GetForegroundWindow.restype = w.HWND
+    user.WindowFromPoint.argtypes, user.WindowFromPoint.restype = [w.POINT], w.HWND
+    user.GetAsyncKeyState.argtypes, user.GetAsyncKeyState.restype = [ctypes.c_int], ctypes.c_short
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+
+    def message(handle, code, first=0, second=0):
+        assert windows.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+        reply = ctypes.c_size_t()
+        if not user.SendMessageTimeoutW(handle, code, first, second, 2, 10000, ctypes.byref(reply)):
+            raise RuntimeError(f"Preview navigation message {code:#x} to HWND={handle} failed: {ctypes.WinError()}")
+        return reply.value
+
+    def key(value):
+        # wx routes CharHook through the focused window before dispatching a
+        # keyboard message. Posting to an unfocused control does not reproduce
+        # that path. A real click on the owned status label focuses the preview
+        # without changing its timeline or project, then real input uses that path.
+        assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), include_window=frame)
+        held = [code for code in (1, 2, 4, 0x10, 0x11, 0x12, 0x5B, 0x5C, value)
+                if user.GetAsyncKeyState(code) & 0x8000]
+        if held:
+            raise RuntimeError(f"Release shared input before preview key input: {held}")
+        previous_dpi = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        previous, bounds = w.POINT(), w.RECT()
+        user.GetCursorPos(ctypes.byref(previous))
+
+        def send(kind, payload):
+            event = Input(kind=kind, payload=payload)
+            if user.SendInput(1, ctypes.byref(event), ctypes.sizeof(event)) != 1:
+                raise RuntimeError(f"Preview input {value} failed: {ctypes.WinError()}")
+
+        try:
+            assert user.GetWindowRect(status, ctypes.byref(bounds))
+            point = w.POINT((bounds.left + bounds.right) // 2, (bounds.top + bounds.bottom) // 2)
+            assert user.SetCursorPos(point.x, point.y)
+            hit = user.WindowFromPoint(point)
+            assert hit and windows.owner(hit) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+            send(0, Payload(mouse=Mouse(flags=2)))
+            send(0, Payload(mouse=Mouse(flags=4)))
+            wait_for_native_state(lambda: user.GetForegroundWindow() == frame, "owned preview focus")
+            send(1, Payload(keyboard=Keyboard(code=value, flags=1)))
+            send(1, Payload(keyboard=Keyboard(code=value, flags=3)))
+            time.sleep(0.1)
+        finally:
+            send(1, Payload(keyboard=Keyboard(code=value, flags=3)))
+            send(0, Payload(mouse=Mouse(flags=4)))
+            user.SetCursorPos(previous.x, previous.y)
+            if previous_dpi:
+                user.SetThreadDpiAwarenessContext(previous_dpi)
+
+    def seek(value, release=True):
+        message(slider, 0x405, 1, value)  # TBM_SETPOS, real native slider state
+        message(frame, 0x114, 5, slider)  # SB_THUMBTRACK, no seek until release
+        if release:
+            message(frame, 0x114, 4, slider)  # SB_THUMBPOSITION
+
+    def settled_seconds():
+        wait_for_native_state(lambda: math.isfinite(preview_project_seconds(status)),
+                              lambda: "preview source ready: " + windows.control_text(status))
+        return preview_project_seconds(status)
+
+    for _ in range(2):
+        seek(500000, release=False)
+        time.sleep(0.08)
+        assert abs(preview_project_seconds(status)) < 0.01
+        key(0x1B)  # Escape cancels the unpublished drag
+        wait_for_native_state(lambda: message(slider, 0x400) == 0, "canceled preview drag")
+    for value in (500000, 500000, 250000):
+        seek(value)
+        expected = 16 * value / 1000000
+        wait_for_native_state(lambda expected=expected: abs(preview_project_seconds(status) - expected) < 0.015,
+                              f"preview seek to {expected}")
+        assert abs(client.data("GetInfo: Type=Selection Format=JSON")["Start"] - expected) < 0.0001
+
+    for direction, virtual_key in ((1, 0x27), (-1, 0x25)):
+        before = settled_seconds()
+        key(virtual_key)
+        wait_for_native_state(lambda before=before, direction=direction: abs(preview_project_seconds(status) - before - direction / 120) < 0.003,
+                              "stopped preview frame key")
+    volume = client.data("GetVideoPreviewInfo")["playbackVolume"]
+    for _ in range(2):
+        key(0x28)
+        time.sleep(0.1)
+    lower = client.data("GetVideoPreviewInfo")["playbackVolume"]
+    assert lower < volume, (volume, lower)
+    for _ in range(2):
+        key(0x26)
+        time.sleep(0.1)
+    assert abs(client.data("GetVideoPreviewInfo")["playbackVolume"] - volume) < 0.001
+
+    press_preview_button(buttons["play"])
+    wait_for_native_state(lambda: windows.enabled(buttons["pause"]), "preview navigation playback")
+    before = settled_seconds()
+    key(0x27)
+    wait_for_native_state(lambda: preview_project_seconds(status) > before + 4.8, "live five-second preview seek")
+    assert windows.enabled(buttons["pause"])
+    seek(125000)
+    wait_for_native_state(lambda: 1.9 <= preview_project_seconds(status) < 3.5, "live preview timeline seek")
+    press_preview_button(buttons["pause"])
+    wait_for_native_state(lambda: windows.enabled(buttons["play"]), "preview paused before navigation")
+    seek(750000)
+    wait_for_native_state(lambda: abs(preview_project_seconds(status) - 12) < 0.015,
+                          lambda: "paused preview timeline seek: " + windows.control_text(status))
+    time.sleep(0.15)
+    assert abs(preview_project_seconds(status) - 12) < 0.015
+    # Start at a known frame boundary. A paused live clock can fall between
+    # source frames, where a next-frame step is shorter than one full frame.
+    for target, virtual_key, colour in ((12 + 1 / 120, 0x27, "blue"), (12, 0x25, "red")):
+        key(virtual_key)
+        wait_for_native_state(lambda target=target: abs(preview_project_seconds(status) - target) < 0.003,
+                              lambda: "paused preview frame key: " + windows.control_text(status))
+        assert windows.enabled(buttons["play"]) and not windows.enabled(buttons["pause"])
+        expect_preview_crop_pixels(client, root, ffmpeg, {colour}, preview_info=info)
+    press_preview_button(buttons["play"])
+    wait_for_native_state(lambda: preview_project_seconds(status) > 12.15, "resume at the paused destination")
+    press_preview_button(buttons["stop"])
+    wait_for_native_state(lambda: not windows.enabled(buttons["stop"]), "preview navigation stopped")
+    assert client.data("GetLinkedMediaClips") == original
+    client.file("SaveProject2", root / "_preview-navigation.aup3")
 
 
 def check_video_speed(client, root, ffmpeg, ffprobe, storage_only=False):

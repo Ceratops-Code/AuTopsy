@@ -1,0 +1,258 @@
+"""Native folder, phase-aware waveform and stock-Audacity project contracts.
+
+The main harness owns generated media, process/window leases and finite result
+retention. This module never touches an installed editor or personal project.
+"""
+import ctypes
+import json
+import os
+import threading
+import time
+from typing import TypedDict
+
+from run_audacity_consumer import read_audio_project_state, select_audio_project_tracks
+from run_fork_test_harness import save_reopen
+
+
+class OwnedWindowText(TypedDict):
+    title: str
+    controls: list[str]
+
+
+def read_group(client, group_id):
+    info = client.data("GetTrackGroups")
+    group = next(item for item in info["groups"] if item["id"] == group_id)
+    return info, group
+
+
+def history_command(client, command):
+    """Report owned modal text if history blocks, without dismissing anything."""
+    finished = threading.Event()
+
+    def observe():
+        if finished.wait(5):
+            return
+        from ctypes import wintypes as w
+
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        callback = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+        user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+        user.IsWindowVisible.argtypes = [w.HWND]
+        user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+        user.EnumWindows.argtypes = [callback, w.LPARAM]
+        user.EnumChildWindows.argtypes = [w.HWND, callback, w.LPARAM]
+        user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
+                                           w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
+        user.SendMessageTimeoutW.restype = ctypes.c_size_t
+        rows: list[OwnedWindowText] = []
+
+        def owner(handle):
+            pid = w.DWORD()
+            user.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+            return pid.value == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+
+        @callback
+        def window(handle, _):
+            if len(rows) >= 8 or not owner(handle) or not user.IsWindowVisible(handle):
+                return True
+            text = ctypes.create_unicode_buffer(256)
+            user.GetWindowTextW(handle, text, len(text))
+            row: OwnedWindowText = {"title": text.value, "controls": []}
+
+            @callback
+            def child(control, _):
+                if len(row["controls"]) < 20 and owner(control) and user.IsWindowVisible(control):
+                    reply = ctypes.c_size_t()
+                    content = ctypes.create_unicode_buffer(256)
+                    if user.SendMessageTimeoutW(control, 0xD, len(content), ctypes.addressof(content),
+                                                2, 100, ctypes.byref(reply)) and content.value:
+                        row["controls"].append(content.value)
+                return True
+
+            user.EnumChildWindows(handle, child, 0)
+            rows.append(row)
+            return True
+
+        user.EnumWindows(window, 0)
+        print(json.dumps({"blocked_history": command, "owned_windows": rows}), flush=True)
+
+    observer = threading.Thread(target=observe, daemon=True)
+    observer.start()
+    try:
+        return client.send(command)
+    finally:
+        finished.set()
+        observer.join(timeout=2)
+
+
+def settled_summary(client, group_id):
+    deadline = time.monotonic() + 20
+    while True:
+        info, group = read_group(client, group_id)
+        if group["summaryError"]:
+            raise AssertionError(group)
+        if group["summaryReady"]:
+            assert group["summaryColumns"] > 0, group
+            return info, group
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"Group waveform did not finish: {group}")
+        time.sleep(0.05)
+
+
+def click_group_toggle(client, group_id, cancel=False):
+    """Use real guarded pointer events and the currently painted group control."""
+    from run_fork_test_harness import operate_owned_video_track
+
+    deadline = time.monotonic() + 8
+    while True:
+        info, group = read_group(client, group_id)
+        if group["toggle"]["width"] > 0 and group["toggle"]["height"] > 0:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"The group header has not been painted: {group}")
+        time.sleep(0.025)
+    native = client.data("GetVideoPreviewInfo")
+    # Both feature adapters report native pane coordinates. The common gesture
+    # owner supplies physical input, idle/focus checks and display containment.
+    assert int(native["videoTrackPanelHandle"]) == int(info["panelHandle"])
+    native["videoTrackRows"] = [{"index": group["index"], "toggle": group["toggle"]}]
+    operate_owned_video_track(client, native["viewStart"], track=group["index"],
+                              gesture="drag" if cancel else "click", area="toggle",
+                              cancel=cancel, painted=native)
+
+
+def check_track_groups(client, root):
+    for name in ("tone-a.wav", "tone-b.wav", "tone-a.wav"):
+        client.file("Import2", root / name)
+    # Equal and opposite members must cancel in a summed waveform. Independent
+    # peak envelopes or stacked shapes would fail this case.
+    client.send("SelectTracks: Track=2 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=0 End=5")
+    client.send("Invert")
+    original = read_audio_project_state(client.data)
+    client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+    client.send("SelectTracks: Track=2 TrackCount=1 Mode=Add")
+    client.send('GroupTracks: Name="Dialogue"')
+    initial = client.data("GetTrackGroups")
+    assert len(initial["groups"]) == 1 and len(initial["tracks"]) == 4, initial
+    group_id = initial["groups"][0]["id"]
+    assert initial["groups"][0]["members"] == [1, 2], initial
+    assert initial["groups"][0]["name"] == "Dialogue", initial
+    members = {row["id"] for row in initial["tracks"] if row["group"] == group_id}
+    expected_audio = original.copy()
+    expected_audio["tracks"] = [original["tracks"][index] for index in (0, 2, 1)]
+    expected_audio["clips"] = [original["clips"][index] for index in (0, 2, 1)]
+    assert read_audio_project_state(client.data) == expected_audio
+    client.send('GroupTracks: Name="Dialogue"')
+    assert len(client.data("GetTrackGroups")["groups"]) == 1
+    client.send("TrackMoveBottom")
+    assert read_group(client, group_id)[1]["index"] == 1
+    assert read_group(client, group_id)[1]["members"] == [2, 3]
+    client.send("TrackMoveTop")
+    assert read_group(client, group_id)[1]["index"] == 0
+
+    # Native Duplicate appends while iterating the selected TrackList. Group
+    # projection must wait until that operation ends, then preserve its history.
+    for _ in range(2):
+        client.send("SelectTracks: Track=1 TrackCount=2 Mode=Set")
+        client.send("SelectTime: Start=0 End=5")
+        client.send("Duplicate")
+        duplicated, group = read_group(client, group_id)
+        assert len(duplicated["tracks"]) == 6 and group["members"] == [1, 2, 3, 4], duplicated
+        assert len({row["id"] for row in duplicated["tracks"]}) == 6, duplicated
+        history_command(client, "Undo")
+        restored, group = read_group(client, group_id)
+        assert len(restored["tracks"]) == 4 and group["members"] == [1, 2], restored
+        assert {row["id"] for row in restored["tracks"] if row["group"] == group_id} == members, restored
+        history_command(client, "Redo")
+        assert read_group(client, group_id)[1]["members"] == [1, 2, 3, 4]
+        history_command(client, "Undo")
+
+    def collapse(value):
+        client.send(f'SetTrackGroup: Id="{group_id}" Collapsed={int(value)}')
+        info, group = read_group(client, group_id)
+        assert group["collapsed"] == value
+        for row in info["tracks"]:
+            hidden = row["group"] == group_id and value
+            assert row["hidden"] == hidden, row
+            assert (row["height"] == 0) == hidden, row
+            assert not hidden or row["bounds"]["height"] == 0, row
+        return info, group
+
+    collapse(True)
+    collapse(True)
+    _, group = settled_summary(client, group_id)
+    assert abs(group["minimum"]) < 0.00001 and abs(group["maximum"]) < 0.00001, group
+    # Repeated collapse requests must not add extra history transitions.
+    # Each restore emits resize events while rebuilding the native track list.
+    # Repeat both directions: hidden members must never enter ruler geometry,
+    # and neither direction may replace their persistent identities.
+    for _ in range(3):
+        history_command(client, "Undo")
+        undone, group = read_group(client, group_id)
+        assert not group["collapsed"]
+        assert {row["id"] for row in undone["tracks"] if row["group"] == group_id} == members
+        history_command(client, "Redo")
+        redone, group = read_group(client, group_id)
+        assert group["collapsed"]
+        assert {row["id"] for row in redone["tracks"] if row["group"] == group_id} == members
+        assert all(row["height"] == 0 for row in redone["tracks"] if row["group"] == group_id)
+    collapse(False)
+    click_group_toggle(client, group_id, cancel=True)
+    assert not read_group(client, group_id)[1]["collapsed"]
+    click_group_toggle(client, group_id)
+    assert read_group(client, group_id)[1]["collapsed"]
+    click_group_toggle(client, group_id)
+    assert not read_group(client, group_id)[1]["collapsed"]
+
+    client.send("SelectTracks: Track=2 TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=0 End=5")
+    client.send("Invert")
+    collapse(True)
+    _, group = settled_summary(client, group_id)
+    assert group["maximum"] > 0.4 and group["minimum"] < -0.4, group
+    for _ in range(2):
+        client.send("SelectTime: Start=7 End=9")
+        client.send("ZoomSel")
+        _, empty = settled_summary(client, group_id)
+        assert empty["minimum"] == 0 and empty["maximum"] == 0, empty
+        client.send("SelectTime: Start=0 End=2")
+        client.send("ZoomSel")
+        _, group = settled_summary(client, group_id)
+        assert group["maximum"] > 0.4, group
+    # Gain/mute/effect edits refresh the summary without flattening any member.
+    def clip_content():
+        return [{key: value for key, value in item.items() if key != "track"}
+                for item in client.data("GetInfo: Type=Clips Format=JSON")]
+
+    clips = clip_content()
+    assert len(clips) == 3
+    expected = []
+    for collapsed, name in ((True, "_collapsed-folders.aup3"), (False, "_expanded-folders.aup3")):
+        collapse(collapsed)
+        project = root / name
+        client.file("SaveProject2", project)
+        state = read_audio_project_state(client.data)
+        select_audio_project_tracks(client.send, client.data)
+        client.send("SelectTime: Start=0 End=5")
+        audio = root / (project.stem + ".wav")
+        client.file("Export2", audio, "NumChannels=2")
+        expected.append({"project": project.name, "state": state, "audio": audio.name})
+    collapse(True)
+    saved = root / "_group-roundtrip.aup3"
+    save_reopen(client, saved)
+    info, group = read_group(client, group_id)
+    assert group["collapsed"] and {row["id"] for row in info["tracks"] if row["group"] == group_id} == members, info
+    assert all(row["height"] == 0 for row in info["tracks"] if row["group"] == group_id)
+    _, group = settled_summary(client, group_id)
+    assert group["maximum"] > 0.4, group
+    for _ in range(2):
+        client.send(f'SetTrackGroup: Id="{group_id}" Ungroup=1')
+        assert not client.data("GetTrackGroups")["groups"]
+    assert clip_content() == clips
+    history_command(client, "Undo")
+    assert read_group(client, group_id)[1]["collapsed"]
+    history_command(client, "Redo")
+    assert not client.data("GetTrackGroups")["groups"]
+    client.file("SaveProject2", root / "_ungrouped.aup3")
+    (root / "_compatibility-expected.json").write_text(json.dumps(expected), encoding="utf-8")
