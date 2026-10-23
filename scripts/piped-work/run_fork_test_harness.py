@@ -457,13 +457,13 @@ def executable_version(executable):
 
 
 def select_test_display(displays):
-    """Choose by Windows device identity, never enumeration order or coordinates."""
+    """Prefer screen 2; renumbered GDI names must never fall back to the primary."""
     if not displays or len({row["device"] for row in displays}) != len(displays):
         raise RuntimeError("Connected test displays are missing or ambiguous.")
     candidates = (
         displays
         if len(displays) == 1
-        else [row for row in displays if row["device"] != r"\\.\DISPLAY1"]
+        else [row for row in displays if row["device"] != r"\\.\DISPLAY1" and (row["device"] == r"\\.\DISPLAY2" or not row["primary"])]
     )
     if not candidates:
         raise RuntimeError("No test display other than screen 1 is available.")

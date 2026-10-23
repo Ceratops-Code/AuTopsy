@@ -18,6 +18,14 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_renumbered_displays_never_select_the_primary_screen(self) -> None:
+        primary = {"device": r"\\.\DISPLAY10", "primary": True, "work": [0, 0, 1280, 672]}
+        secondary = {"device": r"\\.\DISPLAY11", "primary": False, "work": [-1280, 113, 0, 785]}
+        for layout in ([primary, secondary], [secondary, primary]):
+            self.assertEqual(native.select_test_display(layout), secondary)
+        with self.assertRaises(RuntimeError):
+            native.select_test_display([primary, dict(secondary, primary=True)])
+
     def names(self, paths: list[str], all_checks: bool = False) -> set[str]:
         return {group.name for group in runner.select_groups(paths, all_checks)[0]}
 

@@ -109,7 +109,7 @@ class ClipDialogWindows(PreviewNativeWindows):
         wait_for_native_state(lambda: self.api.GetForegroundWindow() == dialog, "owned clip dialog active")
 
 
-def with_native_dialog(operation, title, handle_dialog):
+def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False):
     """Run a normal menu/command while handling its modal window on this worker."""
     windows = ClipDialogWindows()
     errors = []
@@ -130,6 +130,13 @@ def with_native_dialog(operation, title, handle_dialog):
                 raise errors[0]
             assert time.monotonic() < deadline, f"Owned dialog {title!r} did not appear."
             time.sleep(0.025)
+        if menu_gesture:
+            # The common menu driver restores its previous focus after the item
+            # opens a modal window. Finish that restoration before dialog input.
+            worker.join(timeout=10)
+            assert not worker.is_alive(), "The owned context-menu gesture did not finish."
+            if errors:
+                raise errors[0]
         windows.activate(dialog)
         handle_dialog(windows, dialog)
         wait_for_native_state(lambda: not windows.visible(dialog), f"owned {title} closed")
@@ -189,7 +196,7 @@ def check_audio_clip_actions(client, root, ffmpeg):
             windows.click(windows.button(dialog, "Apply" if commit else "Cancel"))
 
         with_native_dialog(lambda: audio_context(client, 0.75, 0, "Clip Volume...") if context
-                           else client.send("ChangeAudioClipVolume"), "Amplify", fill)
+                           else client.send("ChangeAudioClipVolume"), "Amplify", fill, menu_gesture=context)
 
     for repeat in range(2):
         change(-6, False, context=repeat == 0)
@@ -214,11 +221,19 @@ def check_audio_clip_actions(client, root, ffmpeg):
         client.send(f"SelectTime: Start=0 End={end}")
 
         def export_dialog(windows, dialog):
-            assert windows.message(windows.button(dialog, "Export current selection"), 0xF0) == 1
-            windows.click(windows.button(dialog, "Cancel"))
+            assert windows.message(windows.button(dialog, "Current Selection"), 0xF0) == 1
+            if repeat:
+                windows.text(windows.field(dialog, "File Name:"), "_audio-clip.wav")
+                windows.text(windows.field(dialog, "Folder:"), root)
+            windows.click(windows.button(dialog, "Export" if repeat else "Cancel"))
 
         with_native_dialog(lambda: audio_context(client, 0.75, 0, "Export Clip..."),
-                           "Export Audio", export_dialog)
+                           "Export Audio", export_dialog, menu_gesture=True)
+    exported = array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(root / "_audio-clip.wav"),
+                                            "-ar", "8000", "-ac", "1", "-f", "f32le", "pipe:1"], timeout=30))
+    expected = baseline[4000:]
+    assert abs(len(exported) - len(expected)) < 8
+    assert max(abs(a - b) for a, b in zip(exported[32:-32], expected[32:-32], strict=True)) < 0.002
     client.file("SaveProject2", root / "_audio-clip-actions.aup3")
 
 
@@ -256,17 +271,21 @@ def check_video_clip_export(client, root, ffmpeg, ffprobe):
                 dialog = windows.dialog("Video Export Settings")
                 windows.activate(dialog)
                 windows.click(windows.button(dialog, "OK" if commit else "Cancel"))
+                wait_for_native_state(lambda: not windows.visible(dialog), "clip export settings closed")
             except BaseException as error:
                 errors.append(error)
 
         worker = threading.Thread(target=handle_settings, daemon=True)
         worker.start()
-        with_native_dialog(export_menu, "Export Video Clip with Audio Mix", save_file)
+        with_native_dialog(export_menu, "Export Video Clip with Audio Mix", save_file, menu_gesture=True)
         worker.join(timeout=20)
         assert not worker.is_alive()
         if errors:
             raise errors[0]
-        assert output.exists() == commit
+        if commit:
+            wait_for_native_state(lambda: output.is_file(), "video clip export committed")
+        else:
+            assert not output.exists()
     metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-of", "json", str(output)], timeout=30))
     assert abs(float(metadata["format"]["duration"]) - 2) < 0.08, metadata
     pixel = run_process([ffmpeg, "-v", "error", "-ss", "0.5", "-i", str(output), "-frames:v", "1",
