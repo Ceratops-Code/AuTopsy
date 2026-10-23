@@ -34,6 +34,8 @@ class ClipDialogWindows(PreviewNativeWindows):
             "GetDlgCtrlID": ([w.HWND], ctypes.c_int),
             "PostMessageW": ([w.HWND, w.UINT, w.WPARAM, w.LPARAM], w.BOOL),
             "SetForegroundWindow": ([w.HWND], w.BOOL),
+            "SetActiveWindow": ([w.HWND], w.HWND),
+            "AttachThreadInput": ([w.DWORD, w.DWORD, w.BOOL], w.BOOL),
             "GetForegroundWindow": ([], w.HWND),
         }
         for name, (arguments, result) in signatures.items():
@@ -105,8 +107,25 @@ class ClipDialogWindows(PreviewNativeWindows):
 
     def activate(self, dialog):
         assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
-        self.api.SetForegroundWindow(dialog)
-        wait_for_native_state(lambda: self.api.GetForegroundWindow() == dialog, "owned clip dialog active")
+        wait_for_native_state(lambda: self.visible(dialog) and self.enabled(dialog), "owned clip dialog ready")
+        # Native BM_CLICK requires an active dialog. Join only the owned app's
+        # input queue while activating it, then detach even if activation fails.
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetCurrentThreadId.restype = w.DWORD
+        current = kernel.GetCurrentThreadId()
+        target = self.api.GetWindowThreadProcessId(dialog, None)
+        attached = current != target
+        if attached and not self.api.AttachThreadInput(current, target, True):
+            raise RuntimeError(f"Cannot attach owned dialog input: {ctypes.WinError()}")
+        try:
+            self.api.SetForegroundWindow(dialog)
+            self.api.SetActiveWindow(dialog)
+            wait_for_native_state(lambda: self.api.GetForegroundWindow() == dialog,
+                                  lambda: f"owned clip dialog {dialog} active; foreground="
+                                  f"{self.api.GetForegroundWindow()} ({self.caption(self.api.GetForegroundWindow())!r})")
+        finally:
+            if attached and not self.api.AttachThreadInput(current, target, False):
+                raise RuntimeError(f"Cannot detach owned dialog input: {ctypes.WinError()}")
 
 
 def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False):

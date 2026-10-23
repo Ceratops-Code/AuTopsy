@@ -876,10 +876,13 @@ UIHandle::Result TimeShiftHandle::Drag
       ? dynamic_cast<Track *>(&pChannel->GetChannelGroup())
       : nullptr;
 
-   // Uncommenting this permits drag to continue to work even over the controls area
-   /*
-   track = static_cast<CommonTrackPanelCell*>(evt.pCell)->FindTrack().get();
-   */
+   // Audio clip headers are track cells rather than channel views. Resolve the
+   // destination through their shared track boundary, while retaining the
+   // existing exclusion of controls and rulers to the left of the data area.
+   if (!track && event.m_x >= mRect.GetX() &&
+       event.m_x < mRect.GetX() + mRect.GetWidth())
+      if (auto *cell = dynamic_cast<CommonTrackPanelCell*>(evt.pCell.get()))
+         track = cell->FindTrack().get();
 
    if (!track) {
       // Allow sliding if the pointer is not over any track, but only if x is
