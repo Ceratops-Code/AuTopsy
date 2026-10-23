@@ -10,7 +10,7 @@ import math
 import struct
 import wave
 
-from run_fork_test_harness import run_process
+from run_fork_test_harness import ready_video_preview, run_process
 
 
 def write_sync_source(root, ffmpeg):
@@ -113,6 +113,7 @@ def check_low_rate_export(client, root, ffmpeg, ffprobe):
     client.file("ImportVideo", source)
     clip = client.data("GetVideoClips")["clips"][0]
     client.send(f'SetVideoClipCrop: Track=0 Id="{clip["id"]}" Top=0.2')
+    assert ready_video_preview(client)["ready"], "Timelapse preview did not become ready."
     output = root / "_timelapse-export.mp4"
     for _ in range(2):
         client.file("ExportVideoMix", output, "Overwrite=1")

@@ -97,6 +97,21 @@ TEST_CASE("Frame timecode keeps fractional source rates and rejects malformed in
    REQUIRE_THROWS(ParseFrameTimecode("00:00:00:00", 0));
 }
 
+TEST_CASE("Timelapse timecode shows elapsed seconds and frame steps retain the source rate")
+{
+   for (const auto rate : {0.5, 0.125, 0.75}) {
+      for (int repeat = 0; repeat < 2; ++repeat) {
+         REQUIRE(FormatFrameTimecode(10.1, rate) == "00:00:10:00");
+         REQUIRE(ParseFrameTimecode("00:00:10:00", rate) == 10);
+         REQUIRE_THROWS(ParseFrameTimecode("00:00:10:01", rate));
+         REQUIRE(AdjacentSourceFrame(0, 0, 0, rate, 1) == Approx(1 / rate));
+         REQUIRE(AdjacentSourceFrame(1 / rate, 0, 0, rate, -1) == Approx(0));
+      }
+   }
+   REQUIRE_THROWS(FormatFrameTimecode(0, 0));
+   REQUIRE_THROWS(AdjacentSourceFrame(0, 0, 0, 0, 1));
+}
+
 TEST_CASE("Preview timeline maps the whole project including gaps and audio tails")
 {
    REQUIRE(PreviewTimelineTime(0, 24) == 0);

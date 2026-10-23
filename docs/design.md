@@ -738,6 +738,10 @@ The FFmpeg adapter emits exactly each window's frame count and supplies final
 timestamps from the global clock. The native mixer remains the authority for
 audio timing and content. Planning is a pure value operation and produces no
 files or recovery state.
+Automatic output accepts every supported positive source frame rate. Sources
+below 1 fps use elapsed-second preview timecode with a zero frame field, while
+frame stepping retains their actual source rate; a valid source must not open an
+error dialog from the preview timer during an export.
 
 With automatic export dimensions, the first rendered picture's oriented original
 size and retained crop choose the canvas. Encoder parity may remove at most one

@@ -445,7 +445,11 @@ absence of added black borders. `fork-video-export-timing` generates independent
 NTSC-rate flashes and stationary 48-kHz clicks, splits the picture into many
 pieces and exports twice at 30 fps. Decoded cue positions must remain within one
 output frame without accumulated drift, while the original audio clips stay
-unchanged. Its generated media belongs to the native case's existing scratch
+unchanged. It also imports a generated 0.5-fps timelapse, checks preview readiness
+and repeats cropped exports with automatic frame-rate settings. Below 1 fps,
+preview timecode shows elapsed seconds with a zero frame field; source-frame
+stepping continues to use the original rate.
+Its generated media belongs to the native case's existing scratch
 directory and is removed by that owner.
 `fork-video-crop-controls` checks the real
 clip menu, Reset, Cancel and history with idle shared input. Each case saves its
