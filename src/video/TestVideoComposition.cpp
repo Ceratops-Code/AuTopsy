@@ -312,3 +312,20 @@ TEST_CASE("Export spans share a global frame clock across cuts gaps and rate cha
    REQUIRE_THROWS(VideoExport::PlanVideoExportFrames(timeline, 0.5, 30));
    REQUIRE_THROWS(VideoExport::PlanVideoExportFrames(timeline, std::numeric_limits<double>::max(), 30));
 }
+
+TEST_CASE("Automatic export retains positive source rates below one frame per second", "[video-composition][video-export-timing]")
+{
+   for (const auto rate : {0.5, 0.125, 1e-12}) {
+      auto timeline = VideoTimeline::CreateVideoTimeline("timelapse.mp4", 10, rate);
+      timeline.clips[0].crop.top = 0.2;
+      for (int repeat = 0; repeat < 2; ++repeat) {
+         const auto plan = VideoExport::PlanVideoExportFrames(timeline, 10, rate);
+         REQUIRE(plan.size() == 1);
+         REQUIRE(plan[0].clipId == timeline.clips[0].id);
+         REQUIRE(plan[0].firstFrame == 0);
+         REQUIRE(plan[0].frameCount == static_cast<int64_t>(std::ceil(10 * rate)));
+         REQUIRE(plan[0].sourceStart == 0);
+         REQUIRE(plan[0].sourceEnd == 10);
+      }
+   }
+}

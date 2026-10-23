@@ -16,10 +16,12 @@ std::vector<VideoExportFrameSpan> PlanVideoExportFrames(
 {
    VideoTimeline::RequireWellFormedTimeline(timeline, VideoTimeline::MaximumVideoRenderSegments);
    if (!std::isfinite(duration) || duration <= 0 || duration + 1e-7 < timeline.End() ||
-       !std::isfinite(frameRate) || frameRate < 1 || frameRate > 1000)
+       !std::isfinite(frameRate) || frameRate <= 0 || frameRate > 1000)
       throw std::runtime_error("Video export requires a usable duration and frame rate.");
    const auto boundary = [frameRate](double seconds) {
-      const auto frames = std::ceil(static_cast<long double>(seconds) * frameRate - 1e-7L);
+      const auto exact = static_cast<long double>(seconds) * frameRate;
+      // Grid tolerance must not erase the only frame of a very slow source.
+      const auto frames = std::ceil(exact - std::min(1e-7L, exact / 2));
       // Beyond this range double project times cannot distinguish frame edges.
       if (!std::isfinite(frames) || frames < 0 || frames > 4503599627370495.0L)
          throw std::runtime_error("The video export frame count is outside supported bounds.");

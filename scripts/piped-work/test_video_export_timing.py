@@ -98,3 +98,28 @@ def check_video_export_timing(client, root, ffmpeg, ffprobe):
         else:
             first = observed
     client.file("SaveProject2", root / "_sync.aup3")
+    check_low_rate_export(client, root, ffmpeg, ffprobe)
+
+
+def check_low_rate_export(client, root, ffmpeg, ffprobe):
+    """Keeping a valid timelapse source rate must also work after picture edits."""
+    source = root / "_timelapse.mp4"
+    run_process([ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+                 "color=c=0x404040:s=160x100:r=1/2:d=6", "-i", str(root / "_sync.wav"),
+                 "-t", "6", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "0",
+                 "-c:a", "aac", str(source)], timeout=30)
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    client.file("ImportVideo", source)
+    clip = client.data("GetVideoClips")["clips"][0]
+    client.send(f'SetVideoClipCrop: Track=0 Id="{clip["id"]}" Top=0.2')
+    output = root / "_timelapse-export.mp4"
+    for _ in range(2):
+        client.file("ExportVideoMix", output, "Overwrite=1")
+        data = json.loads(run_process([ffprobe, "-v", "error", "-show_streams", "-of", "json", str(output)]))
+        video = next(stream for stream in data["streams"] if stream["codec_type"] == "video")
+        assert (video["width"], video["height"]) == (160, 80), video
+        numerator, denominator = map(int, video["avg_frame_rate"].split("/"))
+        assert numerator / denominator == 0.5 and int(video["nb_frames"]) == 3, video
+        assert abs(float(video["duration"]) - 6) < 0.01, video
+    client.send("Save")
