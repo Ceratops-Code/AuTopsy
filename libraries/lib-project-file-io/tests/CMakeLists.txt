@@ -1,6 +1,9 @@
 # The same SQLite configuration code runs in the application and these tests.
 # A private in-memory VFS models a power cut without files, windows, or devices.
-if(TARGET Catch2::Catch2)
+if(COMMAND add_unit_test)
+   add_unit_test(NAME project-storage SOURCES ../ConfigureProjectStorage.cpp
+      TestProjectStorage.cpp LIBRARIES lib-sqlite-helpers-interface)
+else()
    enable_language(C)
    add_library(project-storage-sqlite STATIC ../../../lib-src/sqlite/sqlite3.c)
    target_include_directories(project-storage-sqlite PUBLIC ../../../lib-src/sqlite)
@@ -12,7 +15,4 @@ if(TARGET Catch2::Catch2)
    target_link_libraries(project-storage-test PRIVATE Catch2::Catch2 project-storage-sqlite)
    catch_discover_tests(project-storage-test TEST_PREFIX "project-storage::"
       PROPERTIES TIMEOUT 60)
-else()
-   add_unit_test(NAME project-storage SOURCES ../ConfigureProjectStorage.cpp
-      TestProjectStorage.cpp LIBRARIES lib-sqlite-helpers-interface)
 endif()
