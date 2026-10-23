@@ -529,7 +529,10 @@ The existing per-architecture installer retention remains current plus two
 predecessors. Building never installs or publishes an application.
 
 GitHub's `Validate` workflow builds on `windows-2022` when manually
-dispatched, or when a pull request has the `build-windows-installer` label.
+dispatched with **Build the unsigned Windows installer after the checks**
+enabled (the default), or when a pull request has the `build-windows-installer` label.
+Disable that input for a checks-only manual run, for example
+`gh workflow run validate.yml --ref release/local -f build_installer=false`.
 Its repository checks precede the installer job. After building, it runs the
 same focused native project-compatibility case used locally, against pinned
 portable Audacity consumers. The uploaded unsigned installer and source manifest
