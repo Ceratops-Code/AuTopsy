@@ -674,7 +674,10 @@ retains child flags; Separate propagates a muted parent to its children. Heal
 rejects differing flags rather than silently changing visibility. Clipboard and
 split copies retain the flag. The adapter publishes one ordinary history state
 only for a changed property and restores the previous timeline if history fails.
-Native clip commands require playback/recording to be stopped. Optional
+Native clip commands require playback/recording to be stopped. A context gesture
+resolves its current painted clip at mouse-down and retains that semantic identity
+across the popup event loop; later hover refresh cannot redirect an action to a
+neighbor. Optional
 `videoMuted` XML attributes live inside the existing optional video extension;
 older projects default to false, and stock Audacity still skips that extension.
 The header keeps recognizable thumbnails and marks the occurrence `[Muted]`.

@@ -491,7 +491,18 @@ UIHandle::Result VideoClipHandle::Click(const TrackPanelMouseEvent &event,Audaci
    if (!track || !project || ProjectAudioIO::Get(*project).IsAudioActive()) return RefreshCode::Cancelled;
    mContext = event.event.RightDown(); mOriginal = track->Timeline();
    mCandidate.reset(); mEditedId = mId; mOrigin = event.rect.x;
-   mClickTime = ViewInfo::Get(*project).PositionToTime(event.event.GetX(), mOrigin);
+   const auto &view = ViewInfo::Get(*project);
+   mClickTime = view.PositionToTime(event.event.GetX(), mOrigin);
+   if (mContext) {
+      // A retained hover handle can outlive a different hit after a popup.
+      // Bind this gesture to the current painted, half-open clip bounds.
+      mId = 0;
+      for (const auto &clip : mOriginal.clips)
+         if (view.TimeToPosition(clip.start, mOrigin) <= event.event.GetX() &&
+             event.event.GetX() < view.TimeToPosition(clip.End(), mOrigin)) {
+            mId = clip.id; break;
+         }
+   }
    const auto found = std::find_if(mOriginal.clips.begin(),mOriginal.clips.end(),
       [&](const auto &clip) { return clip.id == mId; });
    auto &selection = ViewInfo::Get(*project).selectedRegion;
@@ -543,56 +554,60 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          if (const auto view = mView.lock()) view->SetGhost({});
       }
       if (mContext) {
+         // Native popup dispatch runs a nested event loop. Hover refresh may
+         // overwrite this shared handle; the menu keeps its original identity.
+         const auto clipId = mId;
+         const auto clickTime = mClickTime;
          wxMenu menu;
          menu.Append(1,_("Cut")); menu.Append(2,_("Copy")); menu.Append(3,_("Paste"));
          menu.AppendSeparator(); menu.Append(4,_("Split at Cursor")); menu.Append(5,_("Delete and Leave Gap"));
          menu.Append(6,_("Trim to Selection"));
          menu.AppendSeparator(); menu.Append(7,_("Heal Split")); menu.Append(8,_("Join"));
          menu.Append(9,_("Separate Joined Clip"));
-         menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, mId != 0);
-         menu.Append(11, _("Crop Picture...")); menu.Enable(11, mId != 0);
-         menu.AppendCheckItem(13, _("Mute Clip")); menu.Enable(13, mId != 0);
+         menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, clipId != 0);
+         menu.Append(11, _("Crop Picture...")); menu.Enable(11, clipId != 0);
+         menu.AppendCheckItem(13, _("Mute Clip")); menu.Enable(13, clipId != 0);
          for (const auto &clip : track->Timeline().clips)
-            if (clip.id == mId) menu.Check(13, clip.muted);
-         menu.AppendSeparator(); menu.Append(12, _("Export Clip...")); menu.Enable(12, mId != 0);
-         for (int id : {7, 8, 9}) menu.Enable(id, mId != 0);
+            if (clip.id == clipId) menu.Check(13, clip.muted);
+         menu.AppendSeparator(); menu.Append(12, _("Export Clip...")); menu.Enable(12, clipId != 0);
+         for (int id : {7, 8, 9}) menu.Enable(id, clipId != 0);
          for (int id : {1, 2, 4, 5, 6})
             menu.Enable(id, !ViewInfo::Get(*project).selectedRegion.isPoint());
          menu.Enable(3, !Clipboard::Get().GetTracks().Any<const AuTopsyVideoTrack>().empty());
-         menu.Enable(4, mId != 0);
+         menu.Enable(4, clipId != 0);
          auto *moves = new wxMenu;
          std::vector<AuTopsyVideoTrack*> targets;
          for (auto *candidate : ProjectVideoTracks(*project)) if (candidate != track.get()) {
             targets.push_back(candidate); moves->Append(100+int(targets.size())-1,candidate->GetName());
          }
-         if (mId && !targets.empty()) menu.AppendSubMenu(moves,_("Move Clip to Track")); else delete moves;
+         if (clipId && !targets.empty()) menu.AppendSubMenu(moves,_("Move Clip to Track")); else delete moves;
          const auto choice = parent->GetPopupMenuSelectionFromUser(menu);
          if (choice >= 100 && size_t(choice-100) < targets.size()) {
             const auto found = std::find_if(track->Timeline().clips.begin(),track->Timeline().clips.end(),
-               [&](const auto &clip) { return clip.id == mId; });
+               [&](const auto &clip) { return clip.id == clipId; });
             if (found != track->Timeline().clips.end())
-               MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],mId,found->start);
+               MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],clipId,found->start);
          }
          else if (choice == 13) {
             const auto found = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
-               [&](const auto &clip) { return clip.id == mId; });
+               [&](const auto &clip) { return clip.id == clipId; });
             if (found == track->Timeline().clips.end()) throw std::runtime_error("The video clip was removed.");
-            VideoEditing::ChangeProjectVideoClipMute(*project, *track, mId, !found->muted);
+            VideoEditing::ChangeProjectVideoClipMute(*project, *track, clipId, !found->muted);
          }
          else if (choice == 12)
-            ClipActions::ShowVideoClipExport(*project, *track, mId, parent);
+            ClipActions::ShowVideoClipExport(*project, *track, clipId, parent);
          else if (choice == 11)
-            VideoEditing::ShowVideoClipCropDialog(*project, *track, mId, parent);
+            VideoEditing::ShowVideoClipCropDialog(*project, *track, clipId, parent);
          else if (choice == 10) {
             const auto found = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
-               [&](const auto &clip) { return clip.id == mId; });
+               [&](const auto &clip) { return clip.id == clipId; });
             if (found == track->Timeline().clips.end()) throw std::runtime_error("The video clip was removed.");
             wxTextEntryDialog dialog{parent, _("Speed (%; 100 is normal). Linked media changes together."),
                _("Video Clip Speed"), wxString::Format("%.8g", found->playbackRate * 100)};
             if (dialog.ShowModal() == wxID_OK) {
                double percent{};
                if (!dialog.GetValue().ToDouble(&percent)) throw std::runtime_error("Enter a numeric speed percentage.");
-               ClipGroups::ChangeLinkedVideoClipSpeed(*project, *track, mId, percent / 100);
+               ClipGroups::ChangeLinkedVideoClipSpeed(*project, *track, clipId, percent / 100);
             }
          }
          else if (choice >= 7 && choice <= 9) {
@@ -605,7 +620,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             const wxString commands[]{"","Cut","Copy","Paste","Split","SplitDelete","Trim"};
             if (choice > 0 && choice < 7) {
                if (choice == 4)
-                  ViewInfo::Get(*project).selectedRegion.setTimes(mClickTime, mClickTime);
+                  ViewInfo::Get(*project).selectedRegion.setTimes(clickTime, clickTime);
                CommandManager::Get(*project).HandleTextualCommand(commands[choice],
                   CommandContext{*project},AlwaysEnabledFlag,false);
             }

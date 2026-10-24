@@ -1003,7 +1003,8 @@ def check_video_clip_mute(client, root, ffmpeg, ffprobe):
         assert next(row for row in clip_rows(client) if row["track"] == front and row["id"] == clip_id)["muted"]
         for expected in (False, True):
             operate_owned_video_track(client, 1, track=front, gesture="context", menu_path=("Mute Clip",))
-            assert next(row for row in clip_rows(client) if row["track"] == front and row["id"] == clip_id)["muted"] == expected
+            current = [row for row in clip_rows(client) if row["track"] == front]
+            assert [row["muted"] for row in current] == [expected, False], current
         assert client.data("GetLinkedMediaClips") == linked
         assert client.data("GetInfo: Type=Clips Format=JSON") == audio_clips
         client.send(f'SetVideoClipMute: Track={front} Id="{clip_id}" Muted=0')
