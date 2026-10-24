@@ -437,16 +437,19 @@ public:
          const auto source = SourceFor(timeline,clip);
          dc.SetClippingRegion(left,rect.y,right-left,rect.height);
          dc.SetPen(*wxTRANSPARENT_PEN);
-         dc.SetBrush(wxBrush(track->VideoVisible() ? wxColour(57,105,143) : wxColour(69,72,77)));
+         dc.SetBrush(wxBrush(track->VideoVisible() && !clip.muted ? wxColour(57,105,143) : wxColour(69,72,77)));
          dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
          const int pictureHeight = std::max(0,std::min(FrameHeight,rect.height-30));
+         // A muted occurrence remains recognizable in the editing pane. This
+         // thumbnail-only copy does not alter playback or the retained content.
+         auto thumbnailClip = clip; thumbnailClip.muted = false;
          if (pictureHeight) {
             dc.SetClippingRegion(left,rect.y+25,right-left,pictureHeight);
             int cell = from+int(std::floor(double(left-from)/FrameWidth))*FrameWidth;
             for (; cell < right; cell += FrameWidth) {
                const auto time = std::clamp(view.PositionToTime(cell+FrameWidth/2,rect.x),
                   clip.start, std::nextafter(clip.End(), clip.start));
-               const auto sample = SampleVideoContent(clip, source, clip.ContentTimeAtProjectTime(time));
+               const auto sample = SampleVideoContent(thumbnailClip, source, clip.ContentTimeAtProjectTime(time));
                if (sample) {
                   auto &frames = Frames(sample.source,&ProjectWindow::Get(*project)).frames;
                   if (!frames.empty()) {
@@ -469,6 +472,7 @@ public:
          auto title = clip.content ? wxString::Format(_("Joined video (%zu pieces)"), clip.content->parts.size())
              : wxFileName(wxString::FromUTF8(source.path)).GetFullName();
          if (clip.playbackRate != 1) title = wxString::Format("%.8g%%  ", clip.playbackRate * 100) + title;
+         if (clip.muted) title = _("[Muted] ") + title;
          dc.DrawText(title,left+5,rect.y+5);
          {
             wxDCClipper clipFlags{dc, wxRect{left, rect.y, right-left, 24}};
@@ -547,6 +551,9 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(9,_("Separate Joined Clip"));
          menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, mId != 0);
          menu.Append(11, _("Crop Picture...")); menu.Enable(11, mId != 0);
+         menu.AppendCheckItem(13, _("Mute Clip")); menu.Enable(13, mId != 0);
+         for (const auto &clip : track->Timeline().clips)
+            if (clip.id == mId) menu.Check(13, clip.muted);
          menu.AppendSeparator(); menu.Append(12, _("Export Clip...")); menu.Enable(12, mId != 0);
          for (int id : {7, 8, 9}) menu.Enable(id, mId != 0);
          for (int id : {1, 2, 4, 5, 6})
@@ -565,6 +572,12 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
                [&](const auto &clip) { return clip.id == mId; });
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],mId,found->start);
+         }
+         else if (choice == 13) {
+            const auto found = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
+               [&](const auto &clip) { return clip.id == mId; });
+            if (found == track->Timeline().clips.end()) throw std::runtime_error("The video clip was removed.");
+            VideoEditing::ChangeProjectVideoClipMute(*project, *track, mId, !found->muted);
          }
          else if (choice == 12)
             ClipActions::ShowVideoClipExport(*project, *track, mId, parent);

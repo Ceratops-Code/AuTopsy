@@ -1,4 +1,5 @@
 """Focused native video editing, transport and visibility cases with neutral media."""
+import array
 import ctypes
 import json
 import math
@@ -8,6 +9,7 @@ import shutil
 import time
 from pathlib import Path
 
+from run_audacity_consumer import read_audio_project_state, select_audio_project_tracks
 from run_fork_test_harness import (
     assert_owned_test_display,
     operate_owned_video_track,
@@ -948,6 +950,106 @@ def check_video_speed(client, root, ffmpeg, ffprobe, storage_only=False):
     client.send("SeparateVideoClips")
     assert all(row["playbackRate"] == 2 for row in clip_rows(client))
     client.file("SaveProject2", root / "_retimed-split.aup3")
+
+
+def check_video_clip_mute(client, root, ffmpeg, ffprobe):
+    """One retained picture occurrence hides independently of its linked sound.
+
+    The marked case owner owns generated media and the retained compatibility
+    descriptor. Its normal lifecycle removes scratch exports and private apps.
+    """
+    for colour, frequency in (("red", 440), ("blue", 880)):
+        source = root / f"_{colour}.mp4"
+        run_process([ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+                     f"color=c={colour}:s=240x120:r=30:d=4", "-f", "lavfi", "-i",
+                     f"sine=frequency={frequency}:sample_rate=48000:duration=4",
+                     "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(source)], timeout=30)
+        client.file("ImportVideo", source)
+    rows = clip_rows(client)
+    front = next(row["track"] for row in rows if Path(row["source"]).stem == "_red")
+    select_clip_range(client, 0, 4, front)
+    client.send("SetTrackStatus: Focused=1")
+    client.send("TrackMoveTop")
+    rows = clip_rows(client)
+    front = next(row["track"] for row in rows if Path(row["source"]).stem == "_red")
+    select_clip_range(client, 2, 2, front)
+    client.send("Split")
+    client.send("FitInWindow")
+    client.send("FitV")
+    clips = [row for row in clip_rows(client) if row["track"] == front]
+    clip_id = clips[0]["id"]
+    linked = client.data("GetLinkedMediaClips")
+    audio_clips = client.data("GetInfo: Type=Clips Format=JSON")
+
+    def sound(name):
+        select_audio_project_tracks(client.send, client.data)
+        client.send("SelectTime: Start=0 End=4")
+        output = root / name
+        client.file("Export2", output, "NumChannels=2")
+        return array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(output),
+                                            "-f", "f32le", "pipe:1"], timeout=30))
+
+    baseline = sound("_before-mute.wav")
+    for _ in range(2):
+        for _ in range(2):
+            client.send(f'SetVideoClipMute: Track={front} Id="{clip_id}" Muted=1')
+        assert [row["muted"] for row in clip_rows(client) if row["track"] == front] == [True, False]
+        client.send("Undo")
+        assert not any(row["muted"] for row in clip_rows(client))
+        client.send("Redo")
+        assert next(row for row in clip_rows(client) if row["track"] == front and row["id"] == clip_id)["muted"]
+        client.send(f'SetVideoClipMute: Track={front} Id="999999" Muted=0', success=False)
+        operate_owned_video_track(client, 1, track=front, gesture="context")
+        assert next(row for row in clip_rows(client) if row["track"] == front and row["id"] == clip_id)["muted"]
+        for expected in (False, True):
+            operate_owned_video_track(client, 1, track=front, gesture="context", menu_path=("Mute Clip",))
+            assert next(row for row in clip_rows(client) if row["track"] == front and row["id"] == clip_id)["muted"] == expected
+        assert client.data("GetLinkedMediaClips") == linked
+        assert client.data("GetInfo: Type=Clips Format=JSON") == audio_clips
+        client.send(f'SetVideoClipMute: Track={front} Id="{clip_id}" Muted=0')
+    client.send(f'SetVideoClipMute: Track={front} Id="{clip_id}" Muted=1')
+
+    def picture(at, colour):
+        client.send(f"SelectTime: Start={at} End={at}")
+        expect_preview_crop_pixels(client, root, ffmpeg, {colour})
+
+    def exported(name, colours):
+        output = root / name
+        client.file("ExportVideoMix", output, "Overwrite=1")
+        metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-of", "json", str(output)]))
+        assert abs(float(metadata["format"]["duration"]) - 4) < 0.08, metadata
+        for at, colour in colours:
+            pixel = run_process([ffmpeg, "-v", "error", "-ss", str(at), "-i", str(output), "-frames:v", "1",
+                                 "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
+            assert max(range(3), key=lambda i: pixel[i]) == (2 if colour == "blue" else 0), (at, colour, pixel)
+
+    picture(1, "blue")
+    picture(3, "red")
+    for _ in range(2):
+        exported("_clip-mute.mp4", [(1, "blue"), (3, "red")])
+    saved = clip_rows(client)
+    project = root / "_clip-mute.aup3"
+    save_reopen(client, project)
+    assert clip_rows(client) == saved
+    select_clip_range(client, 0, 4, front)
+    client.send("JoinVideoClips")
+    saved = clip_rows(client)
+    save_reopen(client, project, save_existing=True)
+    assert clip_rows(client) == saved
+    exported("_joined-mute.mp4", [(1, "blue"), (3, "red")])
+    client.send("SeparateVideoClips")
+    assert [row["muted"] for row in clip_rows(client) if row["track"] == front] == [True, False]
+    client.send("JoinVideoClips")
+    joined = next(row for row in clip_rows(client) if row["track"] == front)
+    client.send(f'SetVideoClipMute: Track={front} Id="{joined["id"]}" Muted=1')
+    exported("_parent-mute.mp4", [(1, "blue"), (3, "blue")])
+    after = sound("_clip-mute.wav")
+    assert len(after) == len(baseline) and max(abs(a - b) for a, b in zip(after, baseline, strict=True)) < 0.0001
+    client.send("Save")
+    expected_projects = [{"project": project.name, "state": read_audio_project_state(client.data), "audio": "_clip-mute.wav"}]
+    (root / "_compatibility-expected.json").write_text(json.dumps(expected_projects), encoding="utf-8")
+    for scratch in ("_before-mute.wav", "_clip-mute.mp4", "_joined-mute.mp4", "_parent-mute.mp4"):
+        (root / scratch).unlink(missing_ok=True)
 
 
 def check_video_visibility(client, root, ffmpeg, ffprobe):

@@ -178,7 +178,8 @@ The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` dispatches the feature scenarios and owns result records.
 `test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate,
-transport-button, video Mute/Solo and multi-source rendering/relinking cases. Native result identities include this
+transport-button, video track Mute/Solo, individual clip picture mute and
+multi-source rendering/relinking cases. Native result identities include this
 module when those cases run. `fork-video-speed` covers linked retiming, repeat
 requests, Undo/Redo, canceled edge gestures, source handles, flags, joins, native
 audio pitch and decoded preview/export timing. Project interoperability includes
@@ -302,6 +303,12 @@ solo track supplies picture there. Visibility changes support Undo/Redo and
 save/reopen. Hiding the final picture leaves a black tail; hiding every video
 exports black for the full video duration with the edited audio mix. Export does
 not need to open muted sources.
+Right-click an individual video clip and choose **Mute Clip** to hide only its
+picture. Its grey header shows **[Muted]**; lower video layers show through and
+its separate audio keeps playing. Stop playback before changing this clip property.
+Copy, split, Join/Separate, Undo/Redo and save/reopen retain the setting. Muting a
+joined clip hides all its pieces; separating it keeps those pieces muted.
+
 New imports retain their original display size, including quarter-turn rotation.
 For an older project without saved dimensions, choose an explicit export resolution
 when all video is hidden.

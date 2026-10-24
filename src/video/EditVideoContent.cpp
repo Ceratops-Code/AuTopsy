@@ -120,6 +120,7 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
    double playbackRate = clip.playbackRate;
    auto crop = clip.crop;
    for (size_t depth{}; depth <= MaximumVideoContentDepth; ++depth) {
+      if (current->muted) return {};
       if (!current->content) return {current, Source(*current, current == &clip ? fallback : MediaSource{}), time, playbackRate, crop};
       const auto &parts = current->content->parts;
       const auto found = std::upper_bound(parts.begin(), parts.end(), time,
@@ -176,7 +177,7 @@ void RemapVideoContentLinks(Clip &clip, const std::vector<std::pair<std::string,
 }
 bool SameVideoContent(const Clip &a, const Clip &b)
 {
-   if (!(a.crop == b.crop) || a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
+   if (a.muted != b.muted || !(a.crop == b.crop) || a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
        a.markers.size() != b.markers.size()) return false;
    for (size_t i{}; i < a.markers.size(); ++i)
       if (a.markers[i].id != b.markers[i].id || a.markers[i].position != b.markers[i].position ||

@@ -2,7 +2,7 @@
 
 Status: current implementation plus target architecture. Native clips,
 Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
-per-clip speed and picture crop are implemented in this branch. Embedded-layer
+per-clip speed, picture crop and picture mute are implemented in this branch. Embedded-layer
 geometry remains an independent foundation awaiting native controls, saved
 parent identities and pixel rendering.
 Collapsible track groups, native-size transport controls and the preview timeline
@@ -439,8 +439,9 @@ and one Undo entry still require coordinator adoption; video-only snapshot
 atomicity does not establish that wider contract.
 
 Composition settings are likewise immutable inputs, not a second saved/live
-project. Track/clip presentation values reference existing identities and reject
-duplicates or orphan properties. New crop/embedding properties must enter the
+project. Track presentation values reference existing identities and reject
+duplicates or orphan properties. Clip picture mute lives only on the owned clip,
+not in a second presentation map. New crop/embedding properties must enter the
 owned saved schema and native history together before their UI is enabled.
 
 Target objects:
@@ -665,6 +666,23 @@ flags, restores them if history publication fails, and does nothing when the
 requested state already matches. Clipboard clones and optional `videoSolo`
 project XML retain state alongside the existing `videoVisible` field.
 
+Individual picture mute is a default-false property on each owned `Clip`.
+`SampleVideoContent` treats a muted root or nested occurrence as transparent, so
+preview, flat export and the composition evaluator consume the same value. It
+does not change source bounds, duration, placement, links or native audio. Join
+retains child flags; Separate propagates a muted parent to its children. Heal
+rejects differing flags rather than silently changing visibility. Clipboard and
+split copies retain the flag. The adapter publishes one ordinary history state
+only for a changed property and restores the previous timeline if history fails.
+Native clip commands require playback/recording to be stopped. Optional
+`videoMuted` XML attributes live inside the existing optional video extension;
+older projects default to false, and stock Audacity still skips that extension.
+The header keeps recognizable thumbnails and marks the occurrence `[Muted]`.
+No muted-picture source is needed by export, but relinking still retains its
+reference and unmuting can restore the picture. `fork-video-clip-mute` covers the
+menu, history, joined content, native round trips, lower-layer preview/export
+pixels and unchanged audio; stock consumers check its saved audio arrangement.
+
 Export captures the duration of all video tracks before applying visibility.
 Black gaps/tails use FFmpeg's existing color source. A fully hidden composition
 retains a source-derived canvas and full duration without opening hidden media;
@@ -779,6 +797,14 @@ Do not create output groups without declaring owner, grouping, trigger and finit
 retention. Completed user exports are user-owned documents, replaced only with
 explicit overwrite; they are not cache versions. Operational logs never become
 execution progress. New processes use current state rather than replaying logs.
+
+The affected-test runner uses one atomic current command-failure report under
+`.build/_test-results`, separate from immutable named-check receipts. Public
+failures carry short causes and report paths. Native child evidence is referenced
+without copying its streams into another response. Successful completion clears
+the command report; interrupted pending files are cleared under the owner lock.
+An I/O failure to save diagnostics preserves the original command evidence in
+the returned error. Reports never act as execution checkpoints or acceptance.
 
 ### Cleanup and diagnostic lifecycle
 

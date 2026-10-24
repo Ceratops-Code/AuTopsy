@@ -151,6 +151,19 @@ inline bool RemoveClip(Timeline &timeline, uint64_t id)
    return true;
 }
 
+inline bool ChangeVideoClipMute(Timeline &timeline, uint64_t id, bool muted)
+{
+   RequireWellFormedTimeline(timeline);
+   auto changed = timeline;
+   const auto found = std::find_if(changed.clips.begin(), changed.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == changed.clips.end()) throw std::runtime_error("Unknown video clip ID.");
+   if (found->muted == muted) return false;
+   found->muted = muted;
+   timeline = std::move(changed);
+   return true;
+}
+
 inline bool ChangeVideoClipCrop(Timeline &timeline, uint64_t id, VideoEditing::VideoFrameCrop crop)
 {
    RequireWellFormedTimeline(timeline);
@@ -187,7 +200,7 @@ inline bool KeepsOriginalPicture(const Timeline &timeline)
    double end{};
    for (const auto &clip : timeline.clips) {
       const auto source = SourceFor(timeline, clip);
-      if (clip.content || !(clip.crop == VideoEditing::VideoFrameCrop{}) ||
+      if (clip.muted || clip.content || !(clip.crop == VideoEditing::VideoFrameCrop{}) ||
           clip.playbackRate != 1 || source.path != timeline.sourcePath ||
           std::abs(source.duration - timeline.sourceDuration) > 1e-7 ||
           std::abs(clip.start - end) > 1e-7 ||

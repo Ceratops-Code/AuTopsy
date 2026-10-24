@@ -153,6 +153,7 @@ static bool SeparateOneLevel(Timeline &timeline, double from, double to)
          part.duration = (end - begin) / clip.playbackRate;
          part.playbackRate *= clip.playbackRate;
          part.crop = VideoEditing::ComposeVideoFrameCrops(part.crop, clip.crop);
+         part.muted = part.muted || clip.muted;
          changed.clips.push_back(std::move(part));
       }
    }
