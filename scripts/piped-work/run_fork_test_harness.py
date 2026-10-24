@@ -952,7 +952,22 @@ def operate_owned_video_track(
                         # route while the drag is still captured. Other drags
                         # keep the physical keyboard route.
                         if control_pressed:
-                            send(0x100, 0x1B, 0, 0)
+                            # Queue a full key transition so wx's application
+                            # filter sees Escape before the mouse release. A
+                            # synchronous HWND send bypasses that queue and can
+                            # leave a migration active; physical Ctrl+Esc opens Start.
+                            for message, flags in ((0x100, 1), (0x101, 0xC0000001)):
+                                if not user.PostMessageW(panel, message, 0x1B, flags):
+                                    raise RuntimeError("Windows rejected the owned drag's queued Escape.")
+                            deadline = time.monotonic() + 3
+                            while True:
+                                state = Gui()
+                                state.size = ctypes.sizeof(state)
+                                if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.capture != panel:
+                                    break
+                                if time.monotonic() >= deadline:
+                                    raise RuntimeError("The owned Ctrl-drag did not cancel before mouse release.")
+                                time.sleep(0.01)
                         else:
                             keyboard(0x1B)
                 button(4)

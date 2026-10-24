@@ -830,16 +830,21 @@ def check_preview_navigation(client, root, ffmpeg):
     assert abs(preview_project_seconds(status) - 12) < 0.015
     # Start at a known frame boundary. A paused live clock can fall between
     # source frames, where a next-frame step is shorter than one full frame.
-    for target, virtual_key, colour in ((13, 0x27, "red"), (12, 0x25, "red")):
+    for target, virtual_key in ((13, 0x27), (12, 0x25)):
         key(virtual_key)
         wait_for_native_state(lambda target=target: abs(preview_project_seconds(status) - target) < 0.003,
                               lambda: "paused preview one-second key: " + windows.control_text(status))
         assert windows.enabled(buttons["play"]) and windows.enabled(buttons["pause"])
-        expect_preview_crop_pixels(client, root, ffmpeg, {colour}, preview_info=info)
     press_preview_button(buttons["play"])
     wait_for_native_state(lambda: preview_project_seconds(status) > 12.15, "resume at the paused destination")
     press_preview_button(buttons["stop"])
     wait_for_native_state(lambda: not windows.enabled(buttons["stop"]), "preview navigation stopped")
+    # One-second seeks retain the selected 30-fps proxy, whose frame phase can
+    # differ. Explicit frame inspection must still reveal original 120-fps frames.
+    client.send("SelectTime: Start=12 End=12")
+    for direction, colour in ((1, "blue"), (-1, "red")):
+        client.send(f"StepVideoFrame: Direction={direction}")
+        expect_preview_crop_pixels(client, root, ffmpeg, {colour})
     assert client.data("GetLinkedMediaClips") == original
     client.file("SaveProject2", root / "_preview-navigation.aup3")
 

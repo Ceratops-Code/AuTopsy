@@ -143,9 +143,10 @@ public:
    }
    void StartPlaybackAtCursor() {
       const auto state = ReadNavigation();
-      const auto options = ProjectAudioIO::GetDefaultOptions(mProject);
+      // Preserve the main player's live loop policy when a seek restarts audio.
+      const auto options = ProjectAudioIO::GetDefaultOptions(mProject, true);
       ProjectAudioManager::Get(mProject).PlayPlayRegion(
-         SelectedRegion(state.cursor, state.duration), options, PlayMode::normalPlay);
+         SelectedRegion(state.cursor, state.duration), options, PlayMode::loopedPlay);
       if (!ReadState().playing) throw std::runtime_error("Project playback could not start at the preview destination.");
    }
    double ReadPlaybackGain() const {

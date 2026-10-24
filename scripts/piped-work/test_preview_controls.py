@@ -225,6 +225,17 @@ def check_preview_controls(client, root):
         press_preview_button(buttons["stop"])
         press_preview_button(int(info["previewLoopHandle"]))
         assert not client.data("GetVideoPreviewInfo")["loopActive"]
+    client.send("SelectTime: Start=0.4 End=2.8")
+    time.sleep(0.08)
+    press_preview_button(int(info["previewLoopHandle"]))
+    press_preview_button(buttons["play"])
+    wait_for_native_state(lambda: preview_project_seconds(status) > 0.55, "loop before a seek")
+    press_preview_button(int(info["previewForwardHandle"]))
+    wait_for_native_state(lambda: preview_project_seconds(status) > 1.4, "one-second seek within a loop")
+    time.sleep(2)
+    assert native.windows.enabled(buttons["stop"]) and 0.38 <= preview_project_seconds(status) < 2.85
+    press_preview_button(buttons["stop"])
+    press_preview_button(int(info["previewLoopHandle"]))
     assert client.data("GetInfo: Type=Clips Format=JSON") == original_audio
     client.file("SaveProject2", root / "_preview-controls.aup3")
 
