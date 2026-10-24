@@ -94,7 +94,7 @@ def check_preview_quality(client, root, ffmpeg, ffprobe):
     canceled = ready_video_preview(client)
     assert canceled["previewQuality"] == 0 and canceled["playbackPath"] == info["playbackPath"], canceled
     assert abs(canceled["audioPosition"] - 1.25) < 0.002
-    seen = {}
+    seen: dict[int, str] = {}
     for index, width, height in ((0, 960, 540), (1, 640, 360), (2, 1280, 720),
                                  (3, 1920, 1080), (4, 1920, 1080), (1, 640, 360), (1, 640, 360)):
         native.quality(choice, index)
