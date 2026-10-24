@@ -286,32 +286,35 @@ def check_video_clip_export(client, root, ffmpeg, ffprobe):
         windows.text(fields[0], output)
         windows.click(windows.button(dialog, "Save"))
 
-    for commit in (False, True):
-        errors = []
+    def export_dialogs():
+        for commit in (False, True):
+            errors = []
 
-        def handle_settings():
-            try:
-                windows = ClipDialogWindows()
-                wait_for_native_state(lambda: windows.dialog("Video Export Settings"), "clip export settings")
-                dialog = windows.dialog("Video Export Settings")
-                windows.activate(dialog)
-                windows.click(windows.button(dialog, "OK" if commit else "Cancel"))
-                wait_for_native_state(lambda: not windows.visible(dialog), "clip export settings closed")
-            except BaseException as error:
-                errors.append(error)
+            def handle_settings(commit=commit):
+                try:
+                    windows = ClipDialogWindows()
+                    wait_for_native_state(lambda: windows.dialog("Video Export Settings"), "clip export settings")
+                    dialog = windows.dialog("Video Export Settings")
+                    windows.activate(dialog)
+                    windows.click(windows.button(dialog, "OK" if commit else "Cancel"))
+                    wait_for_native_state(lambda: not windows.visible(dialog), "clip export settings closed")
+                except BaseException as error:
+                    errors.append(error)
 
-        worker = threading.Thread(target=handle_settings, daemon=True)
-        worker.start()
-        with_native_dialog(export_menu, "Export Video Clip with Audio Mix", save_file, menu_gesture=True)
-        worker.join(timeout=20)
-        assert not worker.is_alive()
-        if errors:
-            raise errors[0]
-        if commit:
-            wait_for_native_state(lambda: output.is_file(), "video clip export committed")
-        else:
-            assert not output.exists()
-    metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-of", "json", str(output)], timeout=30))
+            worker = threading.Thread(target=handle_settings, daemon=True)
+            worker.start()
+            with_native_dialog(export_menu, "Export Video Clip with Audio Mix", save_file, menu_gesture=True)
+            worker.join(timeout=20)
+            assert not worker.is_alive()
+            if errors:
+                raise errors[0]
+            if commit:
+                wait_for_native_state(lambda: output.is_file(), "video clip export committed")
+            else:
+                assert not output.exists()
+
+    export_dialogs()
+    metadata = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(output)], timeout=30))
     assert abs(float(metadata["format"]["duration"]) - 2) < 0.08, metadata
     pixel = run_process([ffmpeg, "-v", "error", "-ss", "0.5", "-i", str(output), "-frames:v", "1",
                          "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
@@ -326,6 +329,29 @@ def check_video_clip_export(client, root, ffmpeg, ffprobe):
                                            math.sin(2 * math.pi * frequency * index / 8000))
                             for index, value in enumerate(sample))) / len(sample)
         assert magnitude > 0.012, (frequency, magnitude)
+    expected_video = next(stream for stream in metadata["streams"] if stream["codec_type"] == "video")
+    clip_id = next(row["id"] for row in client.data("GetVideoClips")["clips"] if row["track"] == 0 and row["start"] == 2)
+    client.send(f'SetVideoClipMute: Track=0 Id="{clip_id}" Muted=1')
+    source, offline = root / "source.mp4", root / "_offline-source.mp4"
+    source.replace(offline)
+    try:
+        for repeat in range(2):
+            output = root / f"_exported-muted-clip-{repeat}.mp4"
+            export_dialogs()
+            hidden = json.loads(run_process([ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(output)], timeout=30))
+            video = next(stream for stream in hidden["streams"] if stream["codec_type"] == "video")
+            assert abs(float(hidden["format"]["duration"]) - 2) < 0.08, hidden
+            assert (video["width"], video["height"]) == (expected_video["width"], expected_video["height"]), video
+            for at in (0.25, 1.75):
+                pixel = run_process([ffmpeg, "-v", "error", "-ss", str(at), "-i", str(output), "-frames:v", "1",
+                                     "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
+                assert len(pixel) == 3 and max(pixel) < 15, pixel
+            sound = array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(output), "-map", "0:a:0",
+                                                  "-ar", "8000", "-ac", "1", "-f", "f32le", "pipe:1"], timeout=30))
+            assert len(sound) == len(pcm) and max(abs(a - b) for a, b in zip(sound, pcm, strict=True)) < 0.0001
+            output.unlink()
+    finally:
+        offline.replace(source)
     client.file("SaveProject2", root / "_video-clip-export.aup3")
 
 

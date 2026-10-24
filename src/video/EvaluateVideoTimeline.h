@@ -5,15 +5,10 @@
 
 namespace VideoEditing {
 struct VideoFrameRectangle { double x{}, y{}, width{1}, height{1}; };
-struct VideoClipPresentation {
-   uint64_t clipId{};
-   bool muted{};
-};
 struct VideoLayerPresentation {
    std::string trackId;
    VideoFrameRectangle rectangle; // Fractions of parent rectangle, or canvas for roots.
    bool muted{}, solo{};
-   std::vector<VideoClipPresentation> clips;
 };
 struct VideoCompositionSettings {
    int canvasWidth{}, canvasHeight{};

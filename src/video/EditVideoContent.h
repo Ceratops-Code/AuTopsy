@@ -47,6 +47,7 @@ struct Clip {
    std::shared_ptr<const VideoClipContent> content;
    double playbackRate{1}; // Content seconds per second in the containing timeline.
    VideoEditing::VideoFrameCrop crop;
+   bool muted{}; // Picture only; retained media and separately editable sound remain intact.
    double End() const { return start + duration; }
    double ContentTimeAtProjectTime(double at) const { return sourceStart + (at - start) * playbackRate; }
    double ProjectTimeAtContentTime(double at) const { return start + (at - sourceStart) / playbackRate; }

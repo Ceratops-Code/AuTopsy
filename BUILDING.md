@@ -676,6 +676,15 @@ The standard-library test interpreter is bound to persistent `sys.base_prefix`,
 so a CMake cache never depends on a discarded temporary `uv --with` environment.
 Later test changes do not rebuild or revoke an unchanged accepted installer.
 
+Failed-check responses contain only failed names, short causes, result identities
+and paths to their complete existing receipts. Command-level failures use one
+current `.build/_test-results/_command-failure.json`, written atomically under the
+same owner lock; the next successful command phase removes it. A native child
+report is referenced rather than copied into another response. If writing the
+report fails, the response preserves the original invocation, exit and both
+streams. Interrupted pending writes are removed by the current owner or its next
+normal entry; the command report never controls test reuse or execution progress.
+
 This mode checks owned video timing, transport, edit plans, crop/PiP geometry and product-name policy
 without the editor or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
 test interface, pinned to its Git commit. CMake owns the current executables,
@@ -712,6 +721,13 @@ setting must lose an acknowledged edit, so an app-only crash test cannot stand
 in for this power-cut model. No user files, physical input, or disk artifacts are
 used. The native connection/save adapters still need their separate app checks;
 this suite cannot prove storage firmware honors the operating system's flushes.
+
+`fork-video-clip-mute` owns the individual clip menu, repeated/no-op requests,
+canceled menus, Undo/Redo, split and joined properties, save/reopen, preview and
+decoded export colors, and unchanged independently editable audio. Its retained
+project is also opened by the pinned stock-Audacity consumers. All footage and
+tones are generated; successful scratch exports are removed before the consumer
+handoff. The scripting command is `SetVideoClipMute: Track=0 Id="1" Muted=1`.
 
 `fork-clip-actions` owns audio clip-menu targeting, cancelled/applied negative and
 positive dB changes, Undo and export-dialog selection from an empty or broader

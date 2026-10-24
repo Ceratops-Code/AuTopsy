@@ -373,6 +373,40 @@ public:
 const ComponentInterfaceSymbol SetVideoClipCropCommand::Symbol{XO("SetVideoClipCrop")};
 BuiltinCommandsModule::Registration<SetVideoClipCropCommand> sSetVideoClipCrop;
 
+class SetVideoClipMuteCommand final : public AudacityCommand {
+   wxString mId;
+   int mTrack{-1};
+   bool mMuted{true};
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override {
+      return XO("Hide one video clip's picture without changing its separate audio.");
+   }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
+      visitor.Define(mId, wxT("Id"), wxString{});
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      visitor.Define(mMuted, wxT("Muted"), true);
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         unsigned long long id{};
+         if (!mId.ToULongLong(&id) || !id)
+            throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
+         auto &track = FindClipTrack(context.project, id, mTrack);
+         VideoEditing::ChangeProjectVideoClipMute(context.project, track, id, mMuted);
+         RefreshPreviewLater(context.project);
+         return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+const ComponentInterfaceSymbol SetVideoClipMuteCommand::Symbol{XO("SetVideoClipMute")};
+BuiltinCommandsModule::Registration<SetVideoClipMuteCommand> sSetVideoClipMute;
+
 class GetVideoClipsCommand final : public AudacityCommand {
 public:
    static const ComponentInterfaceSymbol Symbol;
@@ -411,6 +445,7 @@ public:
                out.Key("start"); out.Double(clip.start); out.Key("end"); out.Double(clip.End());
                out.Key("sourceStart"); out.Double(clip.sourceStart); out.Key("duration"); out.Double(clip.duration);
                 out.Key("playbackRate"); out.Double(clip.playbackRate);
+               out.Key("muted"); out.Bool(clip.muted);
                out.Key("crop"); out.StartObject();
                out.Key("left"); out.Double(clip.crop.left); out.Key("top"); out.Double(clip.crop.top);
                out.Key("right"); out.Double(clip.crop.right); out.Key("bottom"); out.Double(clip.crop.bottom);
@@ -539,6 +574,7 @@ AttachedItem sVideoClipScripting{
       Command("SplitVideo", XXO("Split Video at Cursor"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("GetVideoClips", XXO("Get Video Clips"), CommandDispatch::OnAudacityCommand, AlwaysEnabledFlag),
       Command("SetVideoClipCrop", XXO("Set Video Clip Crop..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+      Command("SetVideoClipMute", XXO("Set Video Clip Mute..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("MoveVideoClip", XXO("Move Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("DeleteVideoClip", XXO("Delete Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag())),
    wxT("Optional/Extra/Part2/Scriptables2")

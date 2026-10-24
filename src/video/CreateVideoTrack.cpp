@@ -196,6 +196,9 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       }
       if (tag != "videoclip") return false;
       VideoTimeline::Clip clip;
+      int muted{};
+      if (!ReadOptionalAttribute(attributes, "videoMuted", muted) || muted < 0 || muted > 1) return false;
+      clip.muted = muted != 0;
       if (!ReadAttribute(attributes, "id", clip.id) || !ReadAttribute(attributes, "start", clip.start) ||
           !ReadAttribute(attributes, "sourceStart", clip.sourceStart) ||
           !ReadAttribute(attributes, "videoDuration", clip.duration) ||
@@ -279,6 +282,7 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       if (!clip.markers.empty()) writer.WriteAttr("clipMarkers", wxString::FromUTF8(ClipMarkers::EncodeMarkers(clip.markers)));
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);
       writer.WriteAttr("videoDuration", clip.duration, 17);
+      if (clip.muted) writer.WriteAttr("videoMuted", 1);
       if (clip.playbackRate != 1) writer.WriteAttr("videoRate", clip.playbackRate, 17);
       if (!(clip.crop == VideoEditing::VideoFrameCrop{})) {
          writer.WriteAttr("videoCropLeft", clip.crop.left, 17);

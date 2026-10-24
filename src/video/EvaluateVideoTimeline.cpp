@@ -37,14 +37,6 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
       if (index == indices.end() || !seen.insert(style.trackId).second)
          throw std::runtime_error("Composition properties require unique, existing track identities.");
       RequireRectangle(style.rectangle);
-      std::unordered_set<uint64_t> clips;
-      for (const auto &appearance : style.clips) {
-         const auto &timeline = project.tracks[index->second].timeline;
-         if (!clips.insert(appearance.clipId).second ||
-             std::none_of(timeline.clips.begin(), timeline.clips.end(),
-                [&](const auto &clip) { return clip.id == appearance.clipId; }))
-            throw std::runtime_error("Clip picture properties require unique, existing clip identities.");
-      }
       styles[index->second] = style;
    }
    VideoFramePlan result{settings.canvasWidth, settings.canvasHeight, settings.duration};
@@ -74,9 +66,6 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
       const auto &style = styles[item.index];
       const auto *clip = VideoTimeline::ClipAt(track.timeline, time);
       if (style.muted || !clip) continue;
-      const auto appearance = std::find_if(style.clips.begin(), style.clips.end(),
-         [&](const auto &value) { return value.clipId == clip->id; });
-      if (appearance != style.clips.end() && appearance->muted) continue;
       const auto sample = VideoTimeline::SampleVideoContent(*clip, VideoTimeline::SourceFor(track.timeline, *clip),
          clip->ContentTimeAtProjectTime(time));
       if (!sample) continue;

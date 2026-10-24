@@ -112,13 +112,59 @@ TEST_CASE("Mute wins over solo and never changes declared output duration", "[vi
    REQUIRE(frame.duration == 25);
    REQUIRE(frame.canvasWidth == 1920);
    settings.layers[0].solo = false;
-   settings.layers.push_back({"back", {}, false, false, {{1, true}}});
+   VideoTimeline::ChangeVideoClipMute(project.tracks[1].timeline, 1, true);
    REQUIRE(EvaluateVideoTimeline(project, settings, 1).layers.empty());
    settings.layers[1].muted = false;
-   settings.layers[0].clips = {{1, true}};
+   VideoTimeline::ChangeVideoClipMute(project.tracks.back().timeline, 1, true);
    frame = EvaluateVideoTimeline(project, settings, 1);
    REQUIRE(frame.layers.size() == 1);
    REQUIRE(frame.layers[0].trackId == "front");
+}
+
+TEST_CASE("Clip picture mute retains source ranges and exposes lower layers", "[video-composition][video-clip-mute]")
+{
+   using namespace VideoTimeline;
+   auto project = Project();
+   auto &front = project.tracks[0].timeline;
+   auto &back = project.tracks[1].timeline;
+   REQUIRE(SplitClipAt(front, 5));
+   const auto original = project;
+   REQUIRE(ChangeVideoClipMute(front, front.clips[0].id, true));
+   const auto muted = project;
+   for (int repeat = 0; repeat < 3; ++repeat) {
+      REQUIRE_FALSE(ChangeVideoClipMute(front, front.clips[0].id, true));
+      REQUIRE(SameVideoProject(project, muted));
+      REQUIRE(front.End() == original.tracks[0].timeline.End());
+      REQUIRE(front.clips[0].sourceStart == original.tracks[0].timeline.clips[0].sourceStart);
+      REQUIRE(VideoContentSources(front.clips[0], SourceFor(front, front.clips[0])).size() == 1);
+      REQUIRE_FALSE(KeepsOriginalPicture(front));
+      REQUIRE(EvaluateVideoLayers({&front, &back}, 1).timeline == &back);
+      REQUIRE(EvaluateVideoLayers({&front, &back}, 6).timeline == &front);
+      REQUIRE(EvaluateVideoTimeline(project, Settings(), 1).layers.size() == 1);
+      const auto flattened = ComposeVideoTracks({&front, &back});
+      REQUIRE(EvaluateVideoLayers({&flattened}, 1).source.path == "back.mp4");
+      REQUIRE(EvaluateVideoLayers({&flattened}, 6).source.path == "front.mp4");
+      REQUIRE_THROWS(ChangeVideoClipMute(front, 99999, false));
+      REQUIRE(SameVideoProject(project, muted));
+   }
+   REQUIRE(CopyVideoRange(front, 0, 5).clips[0].muted);
+   REQUIRE_THROWS(HealVideoClips(front, 0, 10));
+   REQUIRE(SameVideoProject(project, muted));
+   REQUIRE(JoinVideoClips(front, 0, 10));
+   REQUIRE_FALSE(front.clips[0].muted);
+   REQUIRE(front.clips[0].content->parts[0].muted);
+   REQUIRE_FALSE(front.clips[0].content->parts[1].muted);
+   REQUIRE(EvaluateVideoLayers({&front, &back}, 1).timeline == &back);
+   REQUIRE(EvaluateVideoLayers({&front, &back}, 6).timeline == &front);
+   REQUIRE(SeparateVideoClips(front, 0, 10));
+   REQUIRE(front.clips[0].muted);
+   REQUIRE_FALSE(front.clips[1].muted);
+   REQUIRE(JoinVideoClips(front, 0, 10));
+   REQUIRE(ChangeVideoClipMute(front, front.clips[0].id, true));
+   REQUIRE(SeparateVideoClips(front, 0, 10));
+   REQUIRE(std::all_of(front.clips.begin(), front.clips.end(), [](const auto &clip) { return clip.muted; }));
+   REQUIRE(ComposeVideoTracks({&front}).clips.empty());
+   REQUIRE(front.End() == 10);
 }
 
 TEST_CASE("Native layer selection shares mute and solo precedence with composition and flattened export", "[video-composition]")
@@ -169,8 +215,6 @@ TEST_CASE("Composition rejects stale properties and invalid geometry before prod
    settings.layers = {{"missing"}};
    REQUIRE_THROWS(EvaluateVideoTimeline(project, settings, 0));
    settings.layers = {{"front"}, {"front"}};
-   REQUIRE_THROWS(EvaluateVideoTimeline(project, settings, 0));
-   settings.layers = {{"front", {}, false, false, {{22}}}};
    REQUIRE_THROWS(EvaluateVideoTimeline(project, settings, 0));
    settings.layers.clear(); settings.canvasWidth = 0;
    REQUIRE_THROWS(EvaluateVideoTimeline(project, settings, 0));

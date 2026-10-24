@@ -1,6 +1,7 @@
 """Behavior cases for impact selection and immutable, bounded result ownership."""
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -219,10 +221,113 @@ class ReceiptTests(unittest.TestCase):
             with patch.object(runner, "run_command", side_effect=failed):
                 result = runner.run_named_check(self.root, self.root, self.test, "inputs", store)
             self.assertEqual(result["result"], "failed")
-            self.assertEqual(result["failure"]["exit_status"], 7)
-            self.assertEqual(result["failure"]["stdout"], "out")
-            self.assertEqual(result["failure"]["stderr"], "err")
+            self.assertIn("exited 7", result["failure"]["message"])
+            evidence = json.loads(Path(result["failure"]["diagnostic_output"]).read_text())["evidence"]
+            self.assertEqual(evidence["exit_status"], 7)
+            self.assertEqual(evidence["stdout"], "out")
+            self.assertEqual(evidence["stderr"], "err")
             self.assertIsNone(store.accepted(self.test["name"], "inputs"))
+
+    def test_command_report_is_complete_compact_and_removed_after_success(self) -> None:
+        root = self.root / "_results"
+        stream = "unrelated output\n" * 1000 + "1/2 Test #12: fork-video-clip-mute ....***Failed 1 sec\nAssertionError: wrong picture"
+        for _ in range(2):
+            failure = runner.CommandFailure(["ctest", "--output-on-failure"],
+                                            subprocess.CompletedProcess(["ctest"], 8, stream, "error stream"))
+            with self.assertRaises(runner.CommandFailure):
+                with runner.ReceiptStore(root):
+                    raise failure
+            self.assertLess(len(str(failure)), 700)
+            self.assertIn("fork-video-clip-mute", str(failure))
+            self.assertIn("wrong picture", str(failure))
+            assert failure.diagnostic_output is not None
+            saved = json.loads(Path(failure.diagnostic_output).read_text())
+            self.assertEqual(saved["command"], ["ctest", "--output-on-failure"])
+            self.assertEqual(saved["exit_status"], 8)
+            self.assertEqual(saved["stdout"], stream)
+            self.assertEqual(saved["stderr"], "error stream")
+            self.assertFalse(list(root.glob("_pending-*.json")))
+        with runner.ReceiptStore(root):
+            pass
+        self.assertFalse((root / "_command-failure.json").exists())
+
+    def test_native_failure_refers_to_its_existing_report_without_copying_streams(self) -> None:
+        native_build = self.root / "_native"
+        native_build.mkdir()
+        report = native_build / "_test_command_failure.json"
+        child = {"argv": ["ctest"], "exit": 8, "stdout":
+                 "1/1 Test #45: fork-video-clip-mute ...***Failed 1 sec\nAssertionError: pixel cue", "stderr": "<absent>"}
+        report.write_text(json.dumps(child))
+        failure = runner.CommandFailure(["ctest"], subprocess.CompletedProcess(
+            ["ctest"], 8, "Windows installer check failed; details: " + str(report), "<absent>"))
+        with patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": str(native_build)}):
+            with self.assertRaises(runner.CommandFailure):
+                with runner.ReceiptStore(self.root / "_results"):
+                    raise failure
+        self.assertIn("fork-video-clip-mute", str(failure))
+        self.assertIn("pixel cue", str(failure))
+        assert failure.diagnostic_output is not None
+        saved = json.loads(Path(failure.diagnostic_output).read_text())
+        self.assertEqual(saved["child_diagnostic_output"], str(report))
+        self.assertNotIn(child["stdout"], json.dumps(saved))
+        self.assertEqual(json.loads(report.read_text()), child)
+
+    def test_interrupted_command_report_releases_owner_and_cleans_staging(self) -> None:
+        root = self.root / "_results"
+        for after_effect in (False, True):
+            failure = runner.CommandFailure(["ctest"], subprocess.CompletedProcess(["ctest"], 8, "out", "err"))
+            replace = os.replace
+
+            def interrupt(source, target, *, after=after_effect, publish=replace):
+                if after:
+                    publish(source, target)
+                raise KeyboardInterrupt("report publication interrupted")
+
+            with patch.object(runner.os, "replace", side_effect=interrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    with runner.ReceiptStore(root):
+                        raise failure
+            self.assertFalse(list(root.glob("_pending-*.json")))
+            self.assertEqual((root / "_command-failure.json").exists(), after_effect)
+            # A fresh public owner must acquire the lock and clean the obsolete
+            # report, without any saved execution progress from the interruption.
+            with runner.ReceiptStore(root):
+                pass
+            self.assertFalse((root / "_command-failure.json").exists())
+
+    def test_cli_links_full_report_without_serializing_child_streams_again(self) -> None:
+        output = "bulk evidence\n" * 1000 + "AssertionError: precise cause"
+        failure = runner.CommandFailure(["ctest"], subprocess.CompletedProcess(["ctest"], 8, output, "stderr"))
+        with self.assertRaises(runner.CommandFailure):
+            with runner.ReceiptStore(self.root / "_results"):
+                raise failure
+        stream = io.StringIO()
+        with patch.object(runner, "run_selected_tests", side_effect=failure), patch.object(runner.sys, "stderr", stream):
+            self.assertEqual(runner.main([]), 1)
+        result = json.loads(stream.getvalue())
+        self.assertIn("precise cause", result["error"])
+        self.assertLess(len(stream.getvalue()), 1000)
+        self.assertNotIn("bulk evidence", stream.getvalue())
+        self.assertEqual(json.loads(Path(result["diagnostic_output"]).read_text())["stdout"], output)
+
+    def test_failed_report_write_preserves_original_cause_and_complete_cli_fallback(self) -> None:
+        failure = runner.CommandFailure(["ctest"], subprocess.CompletedProcess(["ctest"], 8, "out", "err"))
+        with patch.object(runner.os, "replace", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(runner.CommandFailure) as caught:
+                with runner.ReceiptStore(self.root / "_results"):
+                    raise failure
+        self.assertIs(caught.exception, failure)
+        self.assertIsNone(failure.diagnostic_output)
+        self.assertIn("disk unavailable", failure.diagnostic_error or "")
+        stream = io.StringIO()
+        with patch.object(runner, "run_selected_tests", side_effect=failure), patch.object(runner.sys, "stderr", stream):
+            self.assertEqual(runner.main([]), 1)
+        fallback = json.loads(stream.getvalue())["command_failure"]
+        self.assertEqual(fallback["stdout"], "out")
+        self.assertEqual(fallback["stderr"], "err")
+        self.assertEqual(fallback["exit_status"], 8)
+        with runner.ReceiptStore(self.root / "_results"):
+            pass
 
     def test_interruptions_around_child_and_receipt_use_fresh_authoritative_state(self) -> None:
         # Before the child: no effect or acceptance. After the child but before
@@ -305,6 +410,27 @@ class NativeReceiptTests(unittest.TestCase):
     def execute(self, run_id, inputs):
         return {"result": "passed", "version": "fixture",
                 "observations": {"native_object_seen": True}}
+
+    def test_clip_mute_recipe_changes_prevent_reuse_of_old_fixture_results(self):
+        # Exact basenames are the native runner contract, not executable fixtures.
+        driver = self.root / "_test_driver.py"
+        recipe = self.root / "test_video_clip_edits.py"
+        executable, module = self.root / "_app.exe", self.root / "_script.dll"
+        for path in (driver, recipe, executable, module, self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+            path.write_bytes(b"first input")
+        arguments = SimpleNamespace(case="video-clip-mute", ffmpeg=None, ffprobe=None)
+        with patch.object(native, "__file__", str(driver)):
+            def read():
+                return native.native_test_inputs(arguments, executable, module, {"device": "screen-two"})
+            with patch.object(self, "execute", wraps=self.execute) as app:
+                first = native.run_native_check(self.root, arguments.case, read, self.execute)
+                recipe.write_bytes(b"new complete-audio fixture recipe")
+                changed = native.run_native_check(self.root, arguments.case, read, self.execute)
+                again = native.run_native_check(self.root, arguments.case, read, self.execute)
+            self.assertEqual(app.call_count, 2)
+            self.assertNotEqual(first["original_run"], changed["original_run"])
+            self.assertEqual(again["result"], "reused")
+            self.assertEqual(again["original_run"], changed["original_run"])
 
     def test_native_repeat_reuses_original_result_without_starting_another_app(self):
         inputs = self.inputs()

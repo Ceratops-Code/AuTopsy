@@ -126,7 +126,27 @@ class CommandFailure(RuntimeError):
     def __init__(self, command: list[str], result: subprocess.CompletedProcess[str]):
         self.details: dict[str, Any] = {"command": command, "runtime": shutil.which(command[0]) or command[0], "exit_status": result.returncode,
                         "stdout": result.stdout or "<absent>", "stderr": result.stderr or "<absent>"}
-        super().__init__(json.dumps(self.details))
+        self.diagnostic_output: str | None = None
+        self.diagnostic_error: str | None = None
+        super().__init__(summarize_command_failure(self.details))
+
+
+def summarize_command_failure(details: dict[str, Any]) -> str:
+    """Describe failed cases without embedding child streams or JSON recursively."""
+    command = details.get("command", details.get("argv", ["command"]))
+    status = details.get("exit_status", details.get("exit", "unknown"))
+    text = "\n".join(str(details.get(stream, "")) for stream in ("stdout", "stderr"))
+    names = list(dict.fromkeys(re.findall(
+        r"Test\s+#\d+:\s+(.+?)\s+\.{2,}\*\*\*(?:Failed|Timeout|Exception)", text)))
+    reasons = [line.strip() for line in text.splitlines() if re.search(
+        r"^(?:AssertionError|ValueError|TypeError|RuntimeError):|: error [A-Z]\d+:", line.strip())
+        and not line.strip().startswith("RuntimeError: Command:")]
+    parts = [f"Command {Path(command[0]).name} exited {status}."]
+    if names:
+        parts.append("Failed tests: " + ", ".join(name[:100] for name in names[:8]) + ".")
+    if reasons:
+        parts.append(reasons[-1][:300])
+    return " ".join(parts)
 
 
 def run_command(command: list[str], root: Path) -> str:
@@ -236,22 +256,65 @@ class ReceiptStore:
             raise RuntimeError(f"Another affected-test runner owns {self.lock}: {error}") from error
         try:
             self.prune()
-        except BaseException:
-            self.__exit__()
+        except BaseException as error:
+            self.__exit__(type(error), error, error.__traceback__)
             raise
         return self
 
-    def __exit__(self, *_: Any) -> None:
-        if self.stream:
-            self.stream.seek(0)
-            if sys.platform == "win32":
-                import msvcrt
-                msvcrt.locking(self.stream.fileno(), msvcrt.LK_UNLCK, 1)
+    def finish_command_report(self, error: BaseException | None) -> None:
+        # One current command report belongs to this runner, under the same
+        # exclusive owner as its receipts. Success removes it; immutable check
+        # receipts retain the evidence that controls acceptance separately.
+        report = self.root / "_command-failure.json"
+        pending = self.root / ("_pending-" + uuid.uuid4().hex + ".json")
+        try:
+            if isinstance(error, CommandFailure):
+                evidence = dict(error.details)
+                native_build = os.environ.get("AUTOPSY_VIDEO_BUILD_DIR")
+                child = Path(native_build) / "_test_command_failure.json" if native_build else None
+                # Read only the known native producer's report when this exact
+                # failing command names it. Keep a reference, never another copy
+                # of its complete nested output in our public response.
+                if child and str(child) in str(evidence["stdout"]) and child.is_file():
+                    try:
+                        child_data = json.loads(child.read_text(encoding="utf-8"))
+                        evidence["child_diagnostic_output"] = str(child)
+                        error.args = (summarize_command_failure(child_data),)
+                    except (OSError, ValueError, KeyError, TypeError) as child_error:
+                        evidence["child_report_error"] = str(child_error)
+                with pending.open("x", encoding="utf-8") as stream:
+                    json.dump(evidence, stream, indent=2)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(pending, report)
+                error.diagnostic_output = str(report)
+            elif error is None:
+                report.unlink(missing_ok=True)
+        except (OSError, ValueError) as report_error:
+            if isinstance(error, CommandFailure):
+                error.diagnostic_error = str(report_error)
             else:
-                import fcntl
-                fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)
-            self.stream.close()
-            self.stream = None
+                print(json.dumps({"cleanup_error": str(report_error), "diagnostic_output": str(report)}), file=sys.stderr)
+        finally:
+            try:
+                pending.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                print(json.dumps({"cleanup_error": str(cleanup_error), "diagnostic_output": str(pending)}), file=sys.stderr)
+
+    def __exit__(self, exception_type: Any, error: BaseException | None, traceback: Any) -> None:
+        try:
+            self.finish_command_report(error)
+        finally:
+            if self.stream:
+                self.stream.seek(0)
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(self.stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)
+                self.stream.close()
+                self.stream = None
         # Keep the one lock inode: unlinking it can let a second process lock a
         # different inode while another caller still holds the old one.
 
@@ -316,12 +379,14 @@ def run_named_check(root: Path, build: Path, test: dict[str, Any], identity: str
     except (CommandFailure, RuntimeError) as error:
         evidence = error.details if isinstance(error, CommandFailure) else {"error": str(error)}
         record = store.publish(test["name"], identity, "failed", evidence)
-        return {"name": test["name"], "result": "failed", "receipt": record["id"], "failure": evidence}
+        return {"name": test["name"], "result": "failed", "receipt": record["id"],
+                "failure": {"message": str(error), "diagnostic_output": str(
+                    store.root / digest(test["name"]) / f"_result-{record['id']}.json")}}
     record = store.publish(test["name"], identity, "passed", {"command": command})
     return {"name": test["name"], "result": "passed", "receipt": record["id"]}
 
 
-def main(argv: list[str] | None = None) -> int:
+def run_selected_tests(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path(".build/_core"))
     parser.add_argument("--base", default=os.environ.get("AUTOPSY_TEST_BASE"))
@@ -383,14 +448,32 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(f"Selected check groups have no compiled/discovered tests: {missing}")
         failed = any(item["result"] == "failed" for item in results)
         print(json.dumps({"result": "failed" if failed else "passed", "scope": "native" if native_session else "portable",
-                          "comparison": comparison, "checks": results,
+                          "comparison": comparison,
+                          "checks": [item for item in results if item["result"] == "failed"] if failed else results,
+                          "passed_checks": sum(item["result"] == "passed" for item in results),
+                          "reused_checks": sum(item["result"] == "reused" for item in results),
                           "native_inputs_requiring_separate_acceptance": native}))
         return 1 if failed else 0
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    """CLI result boundary: link complete diagnostics, keep routine output short."""
     try:
-        raise SystemExit(main())
+        return run_selected_tests(argv)
     except (RuntimeError, OSError, ValueError) as error:
-        print(json.dumps({"result": "failed", "operation": "affected-tests", "error": str(error)}), file=sys.stderr)
-        raise SystemExit(1) from error
+        failure: dict[str, Any] = {"result": "failed", "operation": "affected-tests", "error": str(error)}
+        if isinstance(error, CommandFailure):
+            if error.diagnostic_output:
+                failure["diagnostic_output"] = error.diagnostic_output
+            else:
+                # Failure to write diagnostics must not erase the original
+                # invocation, status or either child stream.
+                failure["command_failure"] = error.details
+            if error.diagnostic_error:
+                failure["diagnostic_error"] = error.diagnostic_error
+        print(json.dumps(failure), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

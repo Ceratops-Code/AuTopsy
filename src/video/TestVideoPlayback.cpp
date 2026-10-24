@@ -13,6 +13,7 @@
 #include "ChooseVideoExport.h"
 #include "RelinkVideoMedia.h"
 #include "EditVideoTimeline.h"
+#include "JoinVideoClips.h"
 
 #include <catch2/catch.hpp>
 #include <limits>
@@ -815,4 +816,36 @@ TEST_CASE("Clip export separates source picture time from the project mix range"
    }
    REQUIRE(timeline.clips.front().start == 8);
    REQUIRE_THROWS(PlanVideoClipExport(timeline, 99));
+}
+
+TEST_CASE("Hidden clip export retains its own source geometry and project audio window")
+{
+   using namespace VideoTimeline;
+   auto timeline = CreateVideoTimeline("track-fallback.mp4", 12, 30, 160, 90);
+   auto &clip = timeline.clips.front();
+   clip.media = {"retained-clip.mp4", 12, 24, 320, 180};
+   clip.start = 8; clip.sourceStart = 3; clip.duration = 2;
+   clip.playbackRate = 2;
+   REQUIRE(ChangeVideoClipMute(timeline, 1, true));
+   SECTION("Muted simple occurrence") {}
+   SECTION("Joined content with every retained piece muted") {
+      REQUIRE(SplitClipAt(timeline, 9));
+      REQUIRE(JoinVideoClips(timeline, 8, 10));
+      REQUIRE_FALSE(timeline.clips.front().muted);
+   }
+   const auto id = timeline.clips.front().id;
+   for (int repeat = 0; repeat < 3; ++repeat) {
+      const auto plan = PlanVideoClipExport(timeline, id);
+      REQUIRE(plan.projectStart == 8);
+      REQUIRE(plan.duration == 2);
+      REQUIRE(plan.picture.clips.empty());
+      REQUIRE_FALSE(KeepsOriginalPicture(plan.picture));
+      REQUIRE(plan.picture.sourcePath == "retained-clip.mp4");
+      REQUIRE(plan.picture.sourceDuration == 12);
+      REQUIRE(plan.picture.frameRate == 24);
+      REQUIRE(plan.picture.sourceWidth == 320);
+      REQUIRE(plan.picture.sourceHeight == 180);
+      REQUIRE(plan.picture.protectedSourcePaths == std::vector<std::string>{"retained-clip.mp4"});
+      REQUIRE_NOTHROW(RequireWellFormedTimeline(plan.picture));
+   }
 }

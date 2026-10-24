@@ -65,6 +65,7 @@ from test_video_clip_edits import (
     check_preview_navigation,
     check_split_video_edges,
     check_transport_toolbar,
+    check_video_clip_mute,
     check_video_clip_structure,
     check_video_compound_render,
     check_video_crop,
@@ -1001,6 +1002,8 @@ def worker(args, root):
         check_video_export_timing(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-visibility":
         check_video_visibility(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "video-clip-mute":
+        check_video_clip_mute(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in ("video-speed", "video-speed-storage"):
         check_video_speed(client, root, args.ffmpeg, args.ffprobe, storage_only=args.case == "video-speed-storage")
     elif args.case in ("video-clip-edits", "video-linked-clip-edits", "video-clip-storage", "video-parent-links"):
@@ -1132,7 +1135,7 @@ def native_test_inputs(args, executable, module, display):
     }
     if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
-                     "video-visibility", "video-speed", "video-speed-storage",
+                     "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line"):
@@ -1314,7 +1317,7 @@ def main():
             "transport-toolbar",
             "preview-navigation",
             "track-groups",
-            "clip-actions", "clip-selection", "video-clip-export", "edit-cursor-line",
+            "clip-actions", "clip-selection", "video-clip-export", "video-clip-mute", "edit-cursor-line",
             "project-compatibility",
             "video",
             "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
@@ -1672,7 +1675,7 @@ def main():
                     "input": source_identity,
                     **identities,
                 }
-                if args.case in ("project-compatibility", "track-groups"):
+                if args.case in ("project-compatibility", "track-groups", "video-clip-mute"):
                     record["compatibility_fixtures"] = read_compatibility_fixture_inputs(root)
                 observations = root / "_playback.json"
                 if observations.is_file():
@@ -1701,7 +1704,7 @@ def main():
     def read_inputs():
         return native_test_inputs(args, executable, module, display)
 
-    if args.case in ("project-compatibility", "track-groups"):
+    if args.case in ("project-compatibility", "track-groups", "video-clip-mute"):
         result = run_project_compatibility_checks(
             root.parent, args.case, read_inputs, execute, root, display, args.ffmpeg)
     else:
