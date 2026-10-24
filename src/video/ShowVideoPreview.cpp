@@ -228,7 +228,7 @@ class VideoPreviewFrame final : public wxFrame {
       const auto state = NativePreviewTransport(project).ReadState();
       const auto controls = VideoPreview::GetPreviewTransportControls(state);
       const auto enable = [](AButton *button, bool active) {
-         button->Enable(active);
+         button->SetEnabled(active);
          // These are ordinary dialog controls: native focus traversal must also
          // skip unavailable actions. AButton otherwise keeps HWNDs enabled for tooltips.
          button->wxWindow::Enable(active);
