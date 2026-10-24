@@ -193,6 +193,7 @@ class VideoPreviewFrame final : public wxFrame {
    wxTimer mTimer{ this };
    wxStopWatch mLoadTime;
    wxStopWatch mPlaybackSampleClock;
+   wxStopWatch mQualityLeaseClock;
    wxPanel *mVideoArea{};
    wxPanel *mSurface{};
    wxStaticText *mStatus{};
@@ -385,6 +386,19 @@ class VideoPreviewFrame final : public wxFrame {
          return;
       }
       UpdateTransportControls(*project);
+      if (!mQualityMedia.empty() && mQualityLeaseClock.Time() >= 1000) {
+         mQualityLeaseClock.Start();
+         std::map<std::string, bool> activeSources;
+         for (const auto *track : VideoTimeline::ProjectVideoTracks(*project))
+            for (const auto &clip : track->Timeline().clips)
+               for (const auto &source : VideoTimeline::VideoContentSources(clip,
+                     VideoTimeline::SourceFor(track->Timeline(), clip)))
+                  activeSources.emplace(source.path, true);
+         const auto previous = mQualityMedia.size();
+         mQualityMedia.erase(std::remove_if(mQualityMedia.begin(), mQualityMedia.end(),
+            [&](const auto &media) { return !activeSources.count(Utf8(media->sourcePath)); }), mQualityMedia.end());
+         if (mQualityMedia.size() != previous) VideoPreview::CleanPreviewCache();
+      }
       if (!mPlayer)
          return;
       try {
@@ -677,7 +691,9 @@ public:
          mSourceWidth, mSourceHeight, mSourceFrameRate);
       mMedia = VideoPreview::PrepareVideoMedia(path, state.duration, profile.lightweight,
          this, true, profile.maximumHeight);
-      mQualityMedia.push_back(mMedia);
+      if (std::none_of(mQualityMedia.begin(), mQualityMedia.end(),
+            [&](const auto &media) { return media->sourcePath == mMedia->sourcePath; }))
+         mQualityMedia.push_back(mMedia);
       if (profile.lightweight) {
          mPlayer->OpenVideoFile(mMedia->playbackPath);
          mDurationChecked = false; mLoadTime.Start();

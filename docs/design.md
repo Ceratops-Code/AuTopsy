@@ -669,7 +669,8 @@ explicit 360p/720p/1080p profiles never upscale. Original bypasses proxy playbac
 change prepares current project sources before publishing its choice. Cancellation
 retains the prior decoder, quality and cursor; audio transport is never stopped.
 The frame retains leases for only the current quality's project media, releasing
-the prior set after replacement. Existing decoder leases protect in-flight
+the prior set after replacement. Imports deduplicate source leases; a one-second
+membership sweep releases media removed from the project. Existing decoder leases protect in-flight
 readers. The cache's 36-entry idle bound and three versions per source apply
 after excluding live leases; current project media can exceed that idle bound.
 Open and Undo perform cache lookups without modal preparation. Quality is view
