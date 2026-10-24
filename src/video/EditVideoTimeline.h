@@ -474,6 +474,17 @@ inline VideoClipExportPlan PlanVideoClipExport(const Timeline& timeline, uint64_
    oneClip.clips = {*found};
    const auto range = CopyVideoRange(oneClip, found->start, found->End());
    VideoClipExportPlan result{ComposeVideoTracks({&range}), found->start, found->duration};
+   // A hidden occurrence still defines its export canvas and source identity.
+   // Keep no render segments: black frames use the explicit clip duration and
+   // independently mixed project audio, without reopening the muted source.
+   if (result.picture.sourcePath.empty()) {
+      const auto source = SourceFor(timeline, *found);
+      result.picture.sourcePath = source.path;
+      result.picture.sourceDuration = source.duration;
+      result.picture.frameRate = source.frameRate;
+      result.picture.sourceWidth = source.width;
+      result.picture.sourceHeight = source.height;
+   }
    result.picture.protectedSourcePaths = timeline.protectedSourcePaths;
    for (const auto& clip : timeline.clips)
       for (const auto& source : VideoContentSources(clip, SourceFor(timeline, clip)))

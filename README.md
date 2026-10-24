@@ -305,7 +305,9 @@ exports black for the full video duration with the edited audio mix. Export does
 not need to open muted sources.
 Right-click an individual video clip and choose **Mute Clip** to hide only its
 picture. Its grey header shows **[Muted]**; lower video layers show through and
-its separate audio keeps playing. Stop playback before changing this clip property.
+its separate audio keeps playing. **Export Clip...** produces black picture with
+the audible project mix when that clip is muted, retaining its saved output size
+even if the hidden source is offline. Stop playback before changing this clip property.
 Copy, split, Join/Separate, Undo/Redo and save/reopen retain the setting. Muting a
 joined clip hides all its pieces; separating it keeps those pieces muted.
 

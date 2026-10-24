@@ -681,6 +681,12 @@ neighbor. Optional
 `videoMuted` XML attributes live inside the existing optional video extension;
 older projects default to false, and stock Audacity still skips that extension.
 The header keeps recognizable thumbnails and marks the occurrence `[Muted]`.
+`PlanVideoClipExport` retains the clicked occurrence's media identity, saved
+canvas and frame rate even when flattening yields no visible segments. The
+explicit clip duration and original project audio range still reach the existing
+exporter, which can render black without opening that hidden source. Cancellation
+of its ordinary file/settings dialogs leaves no export; repeated completed
+exports preserve the same picture duration and audio mix.
 No muted-picture source is needed by export, but relinking still retains its
 reference and unmuting can restore the picture. `fork-video-clip-mute` covers the
 menu, history, joined content, native round trips, lower-layer preview/export
