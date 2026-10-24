@@ -37,6 +37,13 @@ class PreviewInput:
         self.api.GetForegroundWindow.restype = w.HWND
         self.api.GetAsyncKeyState.argtypes, self.api.GetAsyncKeyState.restype = [ctypes.c_int], ctypes.c_short
         self.api.keybd_event.argtypes = [w.BYTE, w.BYTE, w.DWORD, ctypes.c_size_t]
+        self.api.mouse_event.argtypes = [w.DWORD, w.DWORD, w.DWORD, w.DWORD, ctypes.c_size_t]
+        self.api.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+        self.api.GetCursorPos.argtypes = [ctypes.POINTER(w.POINT)]
+        self.api.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.api.WindowFromPoint.argtypes, self.api.WindowFromPoint.restype = [w.POINT], w.HWND
+        self.api.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        self.api.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
 
     def message(self, handle, code, first=0, second=0):
         assert self.windows.owner(handle) == self.pid
@@ -53,18 +60,32 @@ class PreviewInput:
                 if self.api.GetAsyncKeyState(value) & 0x8000]
         if held:
             raise RuntimeError(f"Release shared input before preview key input: {held}")
-        self.api.SetForegroundWindow(self.frame)
-        wait_for_native_state(lambda: self.api.GetForegroundWindow() == self.frame, "owned preview focus")
+        from ctypes import wintypes as w
+        previous, bounds = w.POINT(), w.RECT()
+        dpi = self.api.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        self.api.GetCursorPos(ctypes.byref(previous))
         try:
+            assert self.api.GetWindowRect(self.status, ctypes.byref(bounds))
+            point = w.POINT((bounds.left + bounds.right) // 2, (bounds.top + bounds.bottom) // 2)
+            assert self.api.SetCursorPos(point.x, point.y)
+            assert self.windows.owner(self.api.WindowFromPoint(point)) == self.pid
+            self.api.mouse_event(2, 0, 0, 0, 0)
+            self.api.mouse_event(4, 0, 0, 0, 0)
+            wait_for_native_state(lambda: self.api.GetForegroundWindow() == self.frame, "owned preview focus")
             self.api.keybd_event(code, 0, 1, 0)
         finally:
             self.api.keybd_event(code, 0, 3, 0)
+            self.api.mouse_event(4, 0, 0, 0, 0)
+            self.api.SetCursorPos(previous.x, previous.y)
+            if dpi:
+                self.api.SetThreadDpiAwarenessContext(dpi)
         time.sleep(0.12)
 
     def quality(self, handle, index):
         self.message(handle, 0x14E, index)  # CB_SETCURSEL
-        # CBN_SELCHANGE is the native wxChoice command, not a scripting bypass.
-        self.message(self.frame, 0x111, (self.api.GetDlgCtrlID(handle) & 0xFFFF) | (1 << 16), handle)
+        # wxChoice commits on CBN_SELENDOK. SELCHANGE only records a tentative
+        # highlighted item; it deliberately does not dispatch wxEVT_CHOICE.
+        self.message(self.frame, 0x111, (self.api.GetDlgCtrlID(handle) & 0xFFFF) | (9 << 16), handle)
 
     def volume(self, handle, percent):
         self.message(handle, 0x405, 1, percent)  # TBM_SETPOS
