@@ -12,8 +12,10 @@
 **********************************************************************/
 
 #include "SyncVideoPlayback.h"
+#include "ChoosePreviewQuality.h"
 #include "ExportVideoMix.h"
 #include "EditVideoTimeline.h"
+#include "EditVideoContent.h"
 #include "PrepareVideoPreview.h"
 #include "ShowVideoTrack.h"
 #include "CreateVideoTrack.h"
@@ -41,10 +43,15 @@
 #include "../commands/CommandDispatch.h"
 #include "../commands/LoadCommands.h"
 #include "SettingsVisitor.h"
+#include "../widgets/AButton.h"
+#include "../toolbars/MeterToolBar.h"
+#include "Theme.h"
+#include "AllThemeResources.h"
 
 #include "PlayVideoMedia.h"
 #include <wx/filedlg.h>
 #include <wx/button.h>
+#include <wx/choice.h>
 #include <wx/dcbuffer.h>
 #include <wx/filename.h>
 #include <wx/frame.h>
@@ -68,6 +75,7 @@
 #include <iomanip>
 #include <locale>
 #include <memory>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -140,11 +148,45 @@ public:
          SelectedRegion(state.cursor, state.duration), options, PlayMode::normalPlay);
       if (!ReadState().playing) throw std::runtime_error("Project playback could not start at the preview destination.");
    }
+   double ReadPlaybackGain() const {
+      int device{}; float capture{}, playback{};
+      AudioIO::Get()->GetMixer(&device, &capture, &playback);
+      return playback;
+   }
+   void SetPlaybackGain(double gain) {
+      int device{}; float capture{}, playback{};
+      AudioIO::Get()->GetMixer(&device, &capture, &playback);
+      AudioIO::Get()->SetMixer(device, capture, float(gain));
+      MeterToolBar::Get(mProject, true).UpdateControls();
+   }
+   VideoPreview::PreviewLoopState ReadLoop() const {
+      const auto &region = ViewInfo::Get(mProject).playRegion;
+      return {ReadState(), region.Active(), region.GetStart(), region.GetEnd()};
+   }
+   void SetLoopRange(double start, double end) {
+      ViewInfo::Get(mProject).playRegion.SetAllTimes(start, end);
+   }
+   void SetLoopEnabled(bool active) {
+      if (active) SelectUtilities::ActivatePlayRegion(mProject);
+      else SelectUtilities::InactivatePlayRegion(mProject);
+   }
 };
 
-
-
-
+// These are the main transport's themed frames and glyphs, rather than a second
+// icon set. The adapter stays here so upstream toolbar internals remain private.
+AButton *CreatePreviewTransportButton(wxWindow *parent,
+   const TranslatableString &label, int icon, int disabled, bool toggle = false)
+{
+   auto *button = new AButton(parent, wxID_ANY);
+   button->SetButtonType(AButton::FrameButton);
+   button->SetImages(theTheme.Image(bmpRecoloredUpLarge), theTheme.Image(bmpRecoloredUpHiliteLarge),
+      theTheme.Image(bmpRecoloredDownLarge), theTheme.Image(bmpRecoloredHiliteLarge),
+      theTheme.Image(bmpRecoloredUpLarge));
+   button->SetIcons(theTheme.Image(icon), wxNullImage, theTheme.Image(disabled));
+   button->SetLabel(label); button->SetToolTip(label);
+   button->SetMinSize({52, 52}); button->SetFrameMid(2); button->SetButtonToggles(toggle);
+   return button;
+}
 class VideoPreviewFrame final : public wxFrame {
    std::weak_ptr<AudacityProject> mProject;
    wxTimer mTimer{ this };
@@ -153,8 +195,15 @@ class VideoPreviewFrame final : public wxFrame {
    wxPanel *mVideoArea{};
    wxPanel *mSurface{};
    wxStaticText *mStatus{};
-   wxButton *mPlayButton{}, *mPauseButton{}, *mStopButton{};
+   AButton *mPlayButton{}, *mPauseButton{}, *mStopButton{};
+   AButton *mBackButton{}, *mForwardButton{}, *mLoopButton{};
    wxSlider *mTimeline{};
+   wxSlider *mVolume{};
+   wxStaticText *mVolumeText{};
+   wxChoice *mQualityChoice{};
+   VideoPreview::PreviewQuality mQuality{VideoPreview::PreviewQuality::Automatic};
+   bool mChangingQuality{};
+   std::vector<std::shared_ptr<const VideoPreview::PreparedMedia>> mQualityMedia;
    bool mDraggingTimeline{};
    std::unique_ptr<VideoPreview::VideoMediaPlayer> mPlayer;
    Observer::Subscription mProjectClosing;
@@ -178,10 +227,24 @@ class VideoPreviewFrame final : public wxFrame {
    {
       const auto state = NativePreviewTransport(project).ReadState();
       const auto controls = VideoPreview::GetPreviewTransportControls(state);
-      mPlayButton->Enable(controls.play); mPauseButton->Enable(controls.pause); mStopButton->Enable(controls.stop);
-      const auto label = state.playing && state.paused ? _("Resume") : _("Play");
-      if (mPlayButton->GetLabel() != label) mPlayButton->SetLabel(label);
+      const auto enable = [](AButton *button, bool active) {
+         button->Enable(active);
+         // These are ordinary dialog controls: native focus traversal must also
+         // skip unavailable actions. AButton otherwise keeps HWNDs enabled for tooltips.
+         button->wxWindow::Enable(active);
+      };
+      enable(mPlayButton, controls.play); enable(mPauseButton, controls.pause); enable(mStopButton, controls.stop);
+      if (state.playing) mPlayButton->PushDown(); else mPlayButton->PopUp();
+      if (state.paused) mPauseButton->PushDown(); else mPauseButton->PopUp();
       const auto navigation = NativePreviewTransport(project).ReadNavigation();
+      const bool canNavigate = state.hasVideo && state.canControl && !state.recording && !state.stopping;
+      enable(mBackButton, canNavigate); enable(mForwardButton, canNavigate);
+      const auto loop = NativePreviewTransport(project).ReadLoop();
+      enable(mLoopButton, canNavigate && (loop.active || !ViewInfo::Get(project).selectedRegion.isPoint()));
+      if (loop.active) mLoopButton->PushDown(); else mLoopButton->PopUp();
+      const auto volume = VideoPreview::PreviewVolumePercent(NativePreviewTransport(project).ReadPlaybackGain());
+      if (mVolume->GetValue() != volume) mVolume->SetValue(volume);
+      mVolumeText->SetLabel(wxString::Format("%d%%", volume));
       mTimeline->Enable(state.hasVideo && state.canControl && !state.recording && !state.stopping && navigation.duration > 0);
       if (!mDraggingTimeline && std::isfinite(navigation.position))
          mTimeline->SetValue(VideoPreview::PreviewTimelineValue(navigation.position, navigation.duration));
@@ -194,7 +257,6 @@ class VideoPreviewFrame final : public wxFrame {
          const auto state = transport.ReadNavigation();
          const auto target = std::clamp(position, 0.0, state.duration);
          VideoPreview::ApplyPreviewSeek(transport, {target, state.transport.playing, state.transport.paused});
-          if (!state.transport.playing || state.transport.paused) InspectOriginalFrames();
          UpdateTransportControls(*project);
       }
    }
@@ -213,6 +275,7 @@ class VideoPreviewFrame final : public wxFrame {
 
    void OnNavigationKey(wxKeyEvent &event)
    {
+      if (wxWindow::FindFocus() == mQualityChoice) { event.Skip(); return; }
       const auto key = event.GetKeyCode();
       if (mDraggingTimeline && key == WXK_ESCAPE) {
          mDraggingTimeline = false;
@@ -223,21 +286,18 @@ class VideoPreviewFrame final : public wxFrame {
           event.ControlDown() || event.AltDown() || event.MetaDown()) { event.Skip(); return; }
       if (const auto project = mProject.lock()) try {
          const auto state = NativePreviewTransport(*project).ReadNavigation();
-         if (!state.transport.canControl || state.transport.recording || state.transport.stopping) return;
          if (key == WXK_UP || key == WXK_DOWN) {
+            MeterToolBar::Get(*project, true).UpdateControls();
             auto &commands = CommandManager::Get(*project);
             const CommandContext context(*project);
             CommandDispatch::HandleTextualCommand(key == WXK_UP ? "OutputGainInc" : "OutputGainDec",
                context, commands.GetUpdateFlags(), false);
+            UpdateTransportControls(*project);
          }
-         else if ((state.transport.playing && !state.transport.paused) || event.ShiftDown())
-            SeekProject(state.position + (key == WXK_RIGHT ? 5.0 : -5.0));
          else {
-            const auto timeline = VideoTimeline::GetProjectTimeline(*project);
-            const auto *clip = VideoTimeline::ClipAt(timeline, std::max(0.0, state.position - (key == WXK_LEFT ? 1e-7 : 0)));
-            const auto rate = clip ? VideoTimeline::SourceFor(timeline, *clip).frameRate : timeline.frameRate;
-            SeekProject(VideoPreview::AdjacentSourceFrame(state.position, clip ? clip->start : 0,
-               clip ? clip->sourceStart : 0, rate, key == WXK_RIGHT ? 1 : -1, clip ? clip->playbackRate : 1));
+            if (!state.transport.canControl || state.transport.recording || state.transport.stopping) return;
+            SeekProject(VideoPreview::PreviewSecondDestination(state.position, state.duration,
+               key == WXK_RIGHT ? 1 : -1));
          }
       }
       catch (const std::exception &error) {
@@ -253,6 +313,62 @@ class VideoPreviewFrame final : public wxFrame {
       }
       else
          event.Skip();
+   }
+
+   void ChangeQuality(VideoPreview::PreviewQuality quality)
+   {
+      if (mChangingQuality || quality == mQuality) return;
+      const auto project = mProject.lock();
+      if (!project || ProjectWindow::Get(*project).IsBeingDeleted()) return;
+      const wxWeakRef<VideoPreviewFrame> alive(this);
+      mChangingQuality = true;
+      try {
+         std::map<std::string, VideoTimeline::MediaSource> sources;
+         for (const auto *track : VideoTimeline::ProjectVideoTracks(*project))
+            for (const auto &clip : track->Timeline().clips)
+               for (const auto &source : VideoTimeline::VideoContentSources(clip,
+                     VideoTimeline::SourceFor(track->Timeline(), clip)))
+                  sources.emplace(source.path, source);
+         std::vector<std::shared_ptr<const VideoPreview::PreparedMedia>> prepared;
+         if (quality != VideoPreview::PreviewQuality::Original) {
+            for (const auto &[path, source] : sources) {
+               if (!wxFileExists(wxString::FromUTF8(path))) continue;
+               const auto profile = VideoPreview::ChoosePreviewQualityProfile(quality,
+                  source.width, source.height, source.frameRate);
+               prepared.push_back(VideoPreview::PrepareVideoMedia(wxString::FromUTF8(path),
+                  source.duration, profile.lightweight, this, true, profile.maximumHeight));
+               if (!alive || ProjectWindow::Get(*project).IsBeingDeleted()) return;
+            }
+         }
+         auto current = mMedia;
+         for (const auto &media : prepared)
+            if (media->sourcePath == mPath) { current = media; break; }
+         const bool original = quality == VideoPreview::PreviewQuality::Original;
+         // Publish only after all requested profiles are ready. Old leases stay
+         // alive until the decoder reports its replacement is ready.
+         if (mPlayer) mPlayer->OpenVideoFile(original || !current ? mPath : current->playbackPath);
+         if (mMedia) {
+            mPreviousMedia.push_back(mMedia);
+            if (mPreviousMedia.size() > 3) mPreviousMedia.pop_front();
+         }
+         mQuality = quality; mMedia = std::move(current);
+         mQualityMedia = std::move(prepared);
+         mPreciseFrames = false; mUsingOriginalFrames = original && mMedia && mMedia->lightweight;
+         mDurationChecked = false; mLoadTime.Start();
+         mChangingQuality = false; mTimeline->SetFocus();
+         VideoPreview::CleanPreviewCache();
+      }
+      catch (const VideoPreview::PreviewPreparationCancelled &) {
+         if (!alive) return;
+         mChangingQuality = false;
+         mQualityChoice->SetSelection(int(mQuality)); mTimeline->SetFocus();
+      }
+      catch (const std::exception &error) {
+         if (!alive) return;
+         mChangingQuality = false;
+         mQualityChoice->SetSelection(int(mQuality));
+         wxMessageBox(wxString::FromUTF8(error.what()), _("Video Preview"), wxOK | wxICON_ERROR, this);
+      }
    }
 
    void OnTimer(wxTimerEvent &)
@@ -298,7 +414,8 @@ class VideoPreviewFrame final : public wxFrame {
           // so a 30 fps proxy cannot hide frames from a 60 fps original.
            // This snapshot's playing flag already excludes paused audio.
            if (transport.playing) mPreciseFrames = false;
-          const bool original = mPreciseFrames && mMedia && mMedia->lightweight;
+          const bool original = mMedia && mMedia->lightweight &&
+             (mPreciseFrames || mQuality == VideoPreview::PreviewQuality::Original);
           if (original != mUsingOriginalFrames) {
              mPlayer->OpenVideoFile(original ? mPath : mMedia->playbackPath);
              mUsingOriginalFrames = original;
@@ -353,7 +470,7 @@ class VideoPreviewFrame final : public wxFrame {
 public:
    explicit VideoPreviewFrame(AudacityProject &project)
       : wxFrame{ &ProjectWindow::Get(project), wxID_ANY, _("Video Preview"),
-           wxDefaultPosition, wxSize{ 640, 400 },
+           wxDefaultPosition, wxSize{ 680, 480 },
            wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT | wxFRAME_NO_TASKBAR }
       , mProject{ project.shared_from_this() }
    {
@@ -370,7 +487,7 @@ public:
        layout->Add(mStatus, 0, wxEXPAND | wxALL, 6);
         mTimeline = new wxSlider(this, wxID_ANY, 0, 0, VideoPreview::PreviewTimelineSteps);
         mTimeline->SetName(_("Preview timeline"));
-        mTimeline->SetToolTip(_("Seek project audio and video. Left/Right: frame when paused, five seconds when playing. Shift: five seconds. Up/Down: playback volume."));
+        mTimeline->SetToolTip(_("Seek project audio and video. Left/Right: one second. Up/Down: playback volume. Use the frame buttons for precise frames."));
         layout->Add(mTimeline, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
         mTimeline->Bind(wxEVT_SCROLL_THUMBTRACK, [this](wxScrollEvent &) { mDraggingTimeline = true; });
         mTimeline->Bind(wxEVT_SCROLL_THUMBRELEASE, [this](wxScrollEvent &) {
@@ -378,15 +495,18 @@ public:
         });
         mTimeline->Bind(wxEVT_SLIDER, [this](wxCommandEvent &) { if (!mDraggingTimeline) CommitTimeline(); });
        auto *playback = new wxBoxSizer{wxHORIZONTAL};
-       const auto addPlayback = [&](const wxString &label, VideoPreview::PreviewTransportAction action) {
-          auto *button = new wxButton{this, wxID_ANY, label};
+       const auto addPlayback = [&](const TranslatableString &label, int icon, int disabled,
+             VideoPreview::PreviewTransportAction action) {
+          auto *button = CreatePreviewTransportButton(this, label, icon, disabled, true);
           playback->Add(button, 0, wxRIGHT, 6);
           button->Bind(wxEVT_BUTTON, [this, action](wxCommandEvent &) {
              if (const auto project = mProject.lock()) {
                 if (ProjectWindow::Get(*project).IsBeingDeleted()) return;
                 try {
                    NativePreviewTransport transport(*project);
-                   VideoPreview::ApplyPreviewTransport(transport, action);
+                   const auto requested = action == VideoPreview::PreviewTransportAction::Pause &&
+                      transport.ReadState().paused ? VideoPreview::PreviewTransportAction::Play : action;
+                   VideoPreview::ApplyPreviewTransport(transport, requested);
                 }
                 catch (const std::exception &error) {
                    wxMessageBox(wxString::FromUTF8(error.what()), _("Video Preview"), wxOK | wxICON_ERROR, this);
@@ -396,13 +516,69 @@ public:
           });
           return button;
        };
-       mPlayButton = addPlayback(_("Play"), VideoPreview::PreviewTransportAction::Play);
-       mPauseButton = addPlayback(_("Pause"), VideoPreview::PreviewTransportAction::Pause);
-       mStopButton = addPlayback(_("Stop"), VideoPreview::PreviewTransportAction::Stop);
-       mPlayButton->SetToolTip(_("Play or resume project audio and video"));
-       mPauseButton->SetToolTip(_("Pause project audio and video at the current position"));
-       mStopButton->SetToolTip(_("Stop project playback"));
+       mPauseButton = addPlayback(XO("Pause"), bmpPause, bmpPauseDisabled, VideoPreview::PreviewTransportAction::Pause);
+       mPlayButton = addPlayback(XO("Play"), bmpPlay, bmpPlayDisabled, VideoPreview::PreviewTransportAction::Play);
+       mStopButton = addPlayback(XO("Stop"), bmpStop, bmpStopDisabled, VideoPreview::PreviewTransportAction::Stop);
+       mPlayButton->SetToolTip(XO("Play or resume project audio and video"));
+       mPauseButton->SetToolTip(XO("Pause or resume project audio and video"));
+       mStopButton->SetToolTip(XO("Stop project playback"));
+       const auto addSeek = [&](int direction) {
+          auto *button = CreatePreviewTransportButton(this, direction < 0 ? XO("-1 s") : XO("+1 s"),
+             direction < 0 ? bmpRewind : bmpFFwd, direction < 0 ? bmpRewindDisabled : bmpFFwdDisabled);
+          button->SetButtonType(AButton::FrameTextVButton);
+          button->SetToolTip(direction < 0 ? XO("Back one second") : XO("Forward one second"));
+          playback->Add(button, 0, wxRIGHT, 6);
+          button->Bind(wxEVT_BUTTON, [this, direction](wxCommandEvent &) {
+             if (const auto project = mProject.lock()) try {
+                const auto state = NativePreviewTransport(*project).ReadNavigation();
+                SeekProject(VideoPreview::PreviewSecondDestination(state.position, state.duration, direction));
+             } catch (const std::exception &error) {
+                wxMessageBox(wxString::FromUTF8(error.what()), _("Video Preview"), wxOK | wxICON_ERROR, this);
+             }
+          });
+          return button;
+       };
+       mBackButton = addSeek(-1); mForwardButton = addSeek(1);
+       mLoopButton = CreatePreviewTransportButton(this, XO("Loop selection"), bmpLoop, bmpLoopDisabled, true);
+       mLoopButton->SetToolTip(XO("Loop the selected time range. Double-click a clip to select its full range."));
+       playback->Add(mLoopButton, 0);
+       mLoopButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+          if (const auto project = mProject.lock()) try {
+             NativePreviewTransport transport(*project);
+             const auto &selection = ViewInfo::Get(*project).selectedRegion;
+             VideoPreview::ApplyPreviewLoop(transport, {!transport.ReadLoop().active, selection.t0(), selection.t1()});
+             UpdateTransportControls(*project);
+          } catch (const std::exception &error) {
+             wxMessageBox(wxString::FromUTF8(error.what()), _("Video Preview"), wxOK | wxICON_ERROR, this);
+          }
+       });
        layout->Add(playback, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
+       auto *options = new wxBoxSizer(wxHORIZONTAL);
+       options->Add(new wxStaticText(this, wxID_ANY, _("Quality")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+       mQualityChoice = new wxChoice(this, wxID_ANY);
+       for (const auto &name : {_("Auto (smooth)"), _("Low — 360p"), _("Medium — 720p"),
+             _("High — 1080p"), _("Original")}) mQualityChoice->Append(name);
+       mQualityChoice->SetSelection(0); mQualityChoice->SetName(_("Preview quality"));
+       mQualityChoice->SetToolTip(_("Playback quality only. Export always uses original media. Original may need a faster computer."));
+       mQualityChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
+          ChangeQuality(static_cast<VideoPreview::PreviewQuality>(mQualityChoice->GetSelection()));
+       });
+       options->Add(mQualityChoice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
+       options->Add(new wxStaticText(this, wxID_ANY, _("Playback volume")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+       mVolume = new wxSlider(this, wxID_ANY, 100, 0, 100);
+       mVolume->SetMinSize({130, -1}); mVolume->SetName(_("Playback volume"));
+       mVolume->SetToolTip(_("The same playback volume as the main window. Up/Down adjusts it."));
+       mVolume->Bind(wxEVT_SLIDER, [this](wxCommandEvent &) {
+          if (const auto project = mProject.lock()) {
+             NativePreviewTransport transport(*project);
+             VideoPreview::ApplyPreviewVolume(transport, mVolume->GetValue());
+             UpdateTransportControls(*project);
+          }
+       });
+       options->Add(mVolume, 1, wxALIGN_CENTER_VERTICAL);
+       mVolumeText = new wxStaticText(this, wxID_ANY, "100%", wxDefaultPosition, {42, -1});
+       options->Add(mVolumeText, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 4);
+       layout->Add(options, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
        UpdateTransportControls(project);
        auto *transport = new wxBoxSizer{wxHORIZONTAL};
        const auto addControl = [&](const wxString &label, auto operation) {
@@ -420,7 +596,7 @@ public:
        addControl(_("Go to timecode..."), [](auto &p) { GoToProjectVideoTimecode(p); });
        layout->Add(transport, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
       SetSizer(layout);
-      SetMinSize(wxSize{ 320, 200 });
+      SetMinSize(wxSize{ 600, 340 });
       Bind(wxEVT_TIMER, &VideoPreviewFrame::OnTimer, this, mTimer.GetId());
       Bind(wxEVT_CLOSE_WINDOW, &VideoPreviewFrame::OnClose, this);
        Bind(wxEVT_CHAR_HOOK, &VideoPreviewFrame::OnNavigationKey, this);
@@ -456,10 +632,14 @@ public:
          // Close commands could otherwise destroy the project during loading.
          mSourceDuration = saved->sourceDuration; mSourceFrameRate = saved->frameRate;
          mSourceWidth = saved->sourceWidth; mSourceHeight = saved->sourceHeight;
-         mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, true, this, false);
+         const auto profile = VideoPreview::ChoosePreviewQualityProfile(mQuality,
+            mSourceWidth, mSourceHeight, mSourceFrameRate);
+         mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, profile.lightweight,
+            this, false, profile.maximumHeight);
          if (!mMedia) mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, false, this, false);
       }
-      const auto playbackPath = mMedia ? mMedia->playbackPath : path;
+      const auto playbackPath = mMedia && mQuality != VideoPreview::PreviewQuality::Original ? mMedia->playbackPath : path;
+      mUsingOriginalFrames = mQuality == VideoPreview::PreviewQuality::Original && mMedia && mMedia->lightweight;
       if (mPlayer) mPlayer->OpenVideoFile(playbackPath);
       else mPlayer = std::make_unique<VideoPreview::VideoMediaPlayer>(*mSurface,playbackPath);
       mLoadTime.Start();
@@ -492,10 +672,12 @@ public:
          throw std::runtime_error("The video has no usable source rotation.");
       const auto rotation = int(std::llround(sourceRotation)) % 360;
       if (rotation == 90 || rotation == 270 || rotation == -90 || rotation == -270) std::swap(mSourceWidth, mSourceHeight);
-      const bool lightweight = mPlayer->ReadNumericVideoProperty("width") * mPlayer->ReadNumericVideoProperty("height") > 1280.0 * 720.0 ||
-         state.frameRate > 60;
-      mMedia = VideoPreview::PrepareVideoMedia(path, state.duration, lightweight, this);
-      if (lightweight) {
+      const auto profile = VideoPreview::ChoosePreviewQualityProfile(mQuality,
+         mSourceWidth, mSourceHeight, mSourceFrameRate);
+      mMedia = VideoPreview::PrepareVideoMedia(path, state.duration, profile.lightweight,
+         this, true, profile.maximumHeight);
+      mQualityMedia.push_back(mMedia);
+      if (profile.lightweight) {
          mPlayer->OpenVideoFile(mMedia->playbackPath);
          mDurationChecked = false; mLoadTime.Start();
       }
@@ -514,7 +696,7 @@ public:
    int GetVideoSourceHeight() const { return mSourceHeight; }
    auto Media() const { return mMedia; }
    auto PlayerState() { return mPlayer ? mPlayer->ReadPlaybackState() : VideoPreview::PlayerSnapshot{}; }
-   wxButton *TransportButton(VideoPreview::PreviewTransportAction action) const {
+   AButton *TransportButton(VideoPreview::PreviewTransportAction action) const {
       switch (action) {
       case VideoPreview::PreviewTransportAction::Play: return mPlayButton;
       case VideoPreview::PreviewTransportAction::Pause: return mPauseButton;
@@ -525,6 +707,15 @@ public:
    uintptr_t StatusHandle() const { return reinterpret_cast<uintptr_t>(mStatus->GetHandle()); }
    uintptr_t SurfaceHandle() const { return reinterpret_cast<uintptr_t>(mSurface->GetHandle()); }
     uintptr_t TimelineHandle() const { return reinterpret_cast<uintptr_t>(mTimeline->GetHandle()); }
+   uintptr_t VolumeHandle() const { return reinterpret_cast<uintptr_t>(mVolume->GetHandle()); }
+   uintptr_t QualityHandle() const { return reinterpret_cast<uintptr_t>(mQualityChoice->GetHandle()); }
+   uintptr_t SeekHandle(bool forward) const { return reinterpret_cast<uintptr_t>((forward ? mForwardButton : mBackButton)->GetHandle()); }
+   uintptr_t LoopHandle() const { return reinterpret_cast<uintptr_t>(mLoopButton->GetHandle()); }
+   int Quality() const { return int(mQuality); }
+   void AdoptQuality(const VideoPreviewFrame &source) {
+      mQuality = source.mQuality; mQualityMedia = source.mQualityMedia;
+      mQualityChoice->SetSelection(int(mQuality));
+   }
    bool PictureVisible() const { return mSurface->IsShown(); }
    double PlayerProperty(const char *name) { return mPlayer ? mPlayer->ReadNumericVideoProperty(name) : 0.0; }
    const auto &PlaybackSamples() const { return mPlaybackSamples; }
@@ -650,6 +841,17 @@ public:
        out.Key("previewSurfaceHandle"); out.Uint64(frame ? frame->SurfaceHandle() : 0);
         out.Key("previewTimelineHandle"); out.Uint64(frame ? frame->TimelineHandle() : 0);
         out.Key("playbackVolume"); out.Double(playbackVolume);
+       out.Key("captureVolume"); out.Double(inputVolume);
+       out.Key("previewVolumeHandle"); out.Uint64(frame ? frame->VolumeHandle() : 0);
+       out.Key("previewQualityHandle"); out.Uint64(frame ? frame->QualityHandle() : 0);
+       out.Key("previewQuality"); out.Int(frame ? frame->Quality() : 0);
+       out.Key("previewBackHandle"); out.Uint64(frame ? frame->SeekHandle(false) : 0);
+       out.Key("previewForwardHandle"); out.Uint64(frame ? frame->SeekHandle(true) : 0);
+       out.Key("previewLoopHandle"); out.Uint64(frame ? frame->LoopHandle() : 0);
+       const auto loop = NativePreviewTransport(context.project).ReadLoop();
+       out.Key("loopActive"); out.Bool(loop.active);
+       out.Key("loopStart"); out.Double(loop.start);
+       out.Key("loopEnd"); out.Double(loop.end);
        out.Key("pictureVisible"); out.Bool(frame && frame->PictureVisible());
        const auto picture = VideoTimeline::FindProjectPicture(context.project, ViewInfo::Get(context.project).selectedRegion.t0());
        out.Key("pictureSource"); out.String(picture.visible ? picture.source.path.c_str() : "");
@@ -762,6 +964,7 @@ bool ImportVideo(const CommandContext &context, const wxString &path)
    const auto destroyCandidate = [](VideoPreviewFrame *frame) { frame->Destroy(); };
    std::unique_ptr<VideoPreviewFrame, decltype(destroyCandidate)> candidate{
       new VideoPreviewFrame{ project }, destroyCandidate };
+   if (preview.frame && !preview.frame->IsBeingDeleted()) candidate->AdoptQuality(*preview.frame);
    bool committed{};
    try {
        if (!candidate->Load(path)) return false;
@@ -963,6 +1166,7 @@ void VideoTimeline::ShowProjectVideoPreview(AudacityProject &project, bool raise
    if (!preview.frame || preview.frame->IsBeingDeleted() || preview.frame->GetVideoPath() != path) {
       const auto destroy = [](VideoPreviewFrame *frame) { frame->Destroy(); };
       std::unique_ptr<VideoPreviewFrame, decltype(destroy)> candidate(new VideoPreviewFrame(project), destroy);
+      if (preview.frame && !preview.frame->IsBeingDeleted()) candidate->AdoptQuality(*preview.frame);
       try {
          if (!candidate->Load(path, &timeline)) return;
          ShowProjectVideoTrack(project, candidate->Media());

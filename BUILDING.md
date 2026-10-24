@@ -462,10 +462,14 @@ audio content and history. It does not move the shared pointer or press shared
 keyboard keys.
 
 `fork-preview-navigation` exercises the real timeline and focused preview arrow
-keys, canceled/repeated drags, frame steps, playback-volume changes, live seeks
+keys, canceled/repeated drags, one-second steps, playback-volume changes, live seeks
 and paused seeks/resume. A neutral 120-fps source forces a 30-fps proxy; captured
-red/blue source frames distinguish precise paused stepping from a timecode-only
-change. Both transport cases read the live preview status while
+red/blue source frames distinguish original-frame inspection from proxy output.
+`test_preview_controls.py` owns `fork-preview-quality`, `fork-preview-controls`
+and `fork-video-cursor`: profile decode sizes/rates and cache reuse, main-style
+transport and shared gain, native selected-section looping, and exact repeated
+video clicks at different viewport origins. All use generated media on the
+secondary display. Both transport cases read the live preview status while
 playing; Audacity's configured scripting dispatch stops audio before returning
 command data, so it cannot serve as a live clock observer.
 

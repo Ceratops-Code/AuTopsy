@@ -74,6 +74,7 @@ from test_video_clip_edits import (
     check_video_visibility,
 )
 from test_video_export_timing import check_video_export_timing
+from test_preview_controls import check_preview_controls, check_preview_quality, check_video_cursor
 
 
 def check_groups(client, root):
@@ -974,6 +975,12 @@ def worker(args, root):
         check_transport_toolbar(client, root)
     elif args.case == "preview-navigation":
         check_preview_navigation(client, root, args.ffmpeg)
+    elif args.case == "preview-controls":
+        check_preview_controls(client, root)
+    elif args.case == "preview-quality":
+        check_preview_quality(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "video-cursor":
+        check_video_cursor(client, root)
     elif args.case == "track-groups":
         check_track_groups(client, root)
     elif args.case == "clip-actions":
@@ -1147,6 +1154,10 @@ def native_test_inputs(args, executable, module, display):
         inputs["clip_selection_sha256"] = sha(here / "test_clip_selection.py")
     if args.case == "video-export-timing":
         inputs["export_timing_sha256"] = sha(here / "test_video_export_timing.py")
+    if args.case in ("preview-controls", "preview-quality", "video-cursor"):
+        inputs["preview_controls_sha256"] = sha(here / "test_preview_controls.py")
+        inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
     return inputs
 
 
@@ -1316,6 +1327,7 @@ def main():
             "history-view",
             "transport-toolbar",
             "preview-navigation",
+            "preview-controls", "preview-quality", "video-cursor",
             "track-groups",
             "clip-actions", "clip-selection", "video-clip-export", "video-clip-mute", "edit-cursor-line",
             "project-compatibility",
@@ -1472,7 +1484,7 @@ def main():
                 ],
                 timeout=30,
             )
-        if args.case in ("preview", "transport-toolbar", "preview-navigation"):
+        if args.case in ("preview", "transport-toolbar", "preview-navigation", "preview-controls", "video-cursor"):
             write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
         version_numbers = executable_version(executable)
         profile = executable.parent / "Portable Settings"

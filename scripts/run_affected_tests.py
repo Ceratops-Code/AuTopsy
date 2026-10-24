@@ -51,7 +51,7 @@ GROUPS = (
     CheckGroup("track-groups", ("src/track-groups/EditTrackGroups.*", "src/track-groups/RenderGroupWaveform.*",
         "src/track-groups/TestTrackGroups.cpp", "src/track-groups/CMakeLists.txt"), "track-groups-test"),
     CheckGroup("video-playback", TIMELINE_INPUTS + (
-        "src/video/SyncVideoPlayback.h", "src/video/ChooseVideoExport.h",
+        "src/video/SyncVideoPlayback.h", "src/video/ChoosePreviewQuality.h", "src/video/ChooseVideoExport.h",
         "src/video/RelinkVideoMedia.h", "src/video/TestVideoPlayback.cpp"), "video-playback-test"),
     CheckGroup("video-edits", TIMELINE_INPUTS + (
         "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp"), "video-edits-test"),
@@ -73,7 +73,7 @@ GROUPS = (
         "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
         "scripts/piped-work/test_fork_features.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
-        "scripts/piped-work/test_video_clip_edits.py")),
+        "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_preview_controls.py")),
     CheckGroup("fork-audacity-consumer-runtime", (
         "scripts/piped-work/run_audacity_consumer.py",
         "scripts/piped-work/test_run_audacity_consumer.py",
@@ -99,6 +99,7 @@ NATIVE_INPUTS = (
     "libraries/lib-wave-track/WaveTrack.cpp",
     "scripts/piped-work/test_video_clip_edits.py",
     "scripts/piped-work/test_video_export_timing.py",
+    "scripts/piped-work/test_preview_controls.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
     "src/video/PlayVideoMedia.cpp", "src/video/PlayVideoMedia.h",
     "src/video/EditVideoComposition.cpp", "src/video/EditVideoComposition.h",

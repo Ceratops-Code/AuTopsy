@@ -445,6 +445,27 @@ class NativeReceiptTests(unittest.TestCase):
         self.assertEqual(Path(first["receipt"]).read_bytes(), original)
         self.assertFalse(list((self.root / "_accepted").glob("_pending-*")))
 
+    def test_preview_case_recipe_changes_run_only_the_requested_case(self):
+        driver = self.root / "_test_driver.py"
+        recipe = self.root / "test_preview_controls.py"
+        executable, module = self.root / "_app.exe", self.root / "_script.dll"
+        for path in (driver, recipe, executable, module, self.root / "test_video_clip_edits.py", self.root / "test_clip_actions.py",
+                     self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+            path.write_bytes(b"original input")
+        for case in ("preview-quality", "preview-controls", "video-cursor"):
+            arguments = SimpleNamespace(case=case, ffmpeg=None, ffprobe=None)
+            with self.subTest(case=case), patch.object(native, "__file__", str(driver)):
+                def read(arguments=arguments):
+                    return native.native_test_inputs(arguments, executable, module, {"device": "screen-two"})
+                first = native.run_native_check(self.root, case, read, self.execute)
+                recipe.write_bytes(case.encode())
+                with patch.object(self, "execute", wraps=self.execute) as app:
+                    changed = native.run_native_check(self.root, case, read, self.execute)
+                    again = native.run_native_check(self.root, case, read, self.execute)
+                self.assertEqual(app.call_count, 1)
+                self.assertNotEqual(first["original_run"], changed["original_run"])
+                self.assertEqual(again["original_run"], changed["original_run"])
+
     def test_native_newer_matching_failure_blocks_pass_until_a_later_matching_success(self):
         inputs = self.inputs()
         first = native.run_native_check(self.root, "video", lambda: inputs, self.execute)

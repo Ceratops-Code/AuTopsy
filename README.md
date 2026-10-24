@@ -271,15 +271,20 @@ pipes, so it can run alongside an installed copy of Audacity.
    Use **Edit > Clips > Unlink Video / Audio Clips...** for independent edits.
    Edit, mute, or delete audio normally. Silent videos add no audio tracks.
 3. Use **Play**, **Pause** and **Stop** in the preview or the main transport.
-   Preview **Play** becomes **Resume** while paused. Both windows control the same
+   The themed buttons match the main transport; **Pause** also resumes. Both windows control the same
    project audio/video playback; preview controls do not interrupt recording or
    another project's stream. Video follows normal-speed playback, pause, stop,
    timeline seeks and loop jumps. Audio plays once through the editable tracks.
    The preview timeline seeks picture and sound together, retaining playback or
    pause. Dragging commits on release; **Escape** cancels an unfinished drag.
-   With preview focus, **Left/Right** step one source frame while stopped or
-   paused, or jump five seconds while playing. **Shift+Left/Right** always jump
-   five seconds. **Up/Down** adjust AuTopsy's playback volume.
+   With preview focus, **Left/Right** always seek one second, including while
+   paused or playing. **−1 s / +1 s** do the same. **Up/Down** and the preview
+   volume slider control the same playback volume as the main window.
+   **Previous frame / Next frame** retain precise source-frame inspection.
+   Select a time range, then enable **Loop selection** to repeat it while editing.
+   **Quality** offers Auto (smooth), 360p, 720p, 1080p and Original. This choice
+   belongs to the current preview session; changing it preserves position and
+   transport state. Export always uses original media.
 4. Closing the preview hides it. **View > Video Preview** shows it again, and
    starting playback also brings it back. Delete a video track using its normal
    close button or **Tracks > Remove Tracks**.

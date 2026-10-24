@@ -649,12 +649,41 @@ streams/recording and retains the requested playback or pause mode. A changed
 destination stops the old stream, sets the project cursor and pause before
 starting the new stream at that cursor, preventing a paused seek from briefly
 emitting sound. Repeating an already satisfied destination has no effect.
-`OnNavigationKey` belongs to the preview window: Left/Right step source frames
-at rest or while paused, and seek five seconds during playback; Shift forces
-five seconds. Up/Down use the native playback-gain commands, never track gain.
+`OnNavigationKey` belongs to the preview window: Left/Right and the matching
+buttons seek exactly one second in every transport mode, bounded by project
+duration. Explicit frame buttons still inspect original source frames. Up/Down
+use the native playback-gain commands; the preview slider reads and writes that
+same AudioIO mixer gain without changing capture gain. Timer refresh reflects
+main-window volume changes. Native themed AButton frames and glyphs match the
+main transport. Pause toggles pause/resume at the UI boundary; the independent
+desired-Pause request remains repeat-safe. Loop selection uses the native
+play region and activation state, rather than another playback clock.
 Core cases cover absolute mapping and interruption on both sides of every seek
 effect. `fork-preview-navigation` exercises the native slider and focused keys;
 live observations use its status label because configured scripting stops audio.
+
+`ChoosePreviewQuality.h` owns session choices and bounded FFmpeg profiles:
+Auto retains the existing 540p/30-fps smooth-preview policy for demanding sources;
+explicit 360p/720p/1080p profiles never upscale. Original bypasses proxy playback.
+`PrepareVideoPreview` groups each profile by source identity and recipe. A quality
+change prepares current project sources before publishing its choice. Cancellation
+retains the prior decoder, quality and cursor; audio transport is never stopped.
+The frame retains leases for only the current quality's project media, releasing
+the prior set after replacement. Existing decoder leases protect in-flight
+readers. The cache's 36-entry idle bound and three versions per source apply
+after excluding live leases; current project media can exceed that idle bound.
+Open and Undo perform cache lookups without modal preparation. Quality is view
+state, retained across imports in that project session, and adds no project-file
+field, edit-history step or export setting.
+
+Video header and picture single clicks preserve the press-time coordinate across
+native release dispatch; native snapping or stale hover handles cannot replace
+it with a clip start. Double-click selects one whole clip, while actual drags
+and modifier selections retain their existing edit contracts. `fork-video-cursor`
+checks repeated header/picture clicks at ordinary and scrolled/zoomed positions.
+`fork-preview-quality` checks actual decoder dimensions and source/proxy frame
+rates. `fork-preview-controls` covers native button size, one-second navigation,
+shared mixer gain, canceled presses, pause/resume and native loop playback.
 
 Video track Mute/Solo uses the host's semantic button-row layout and ordinary
 button capture/cancellation. The owned `VisibleVideoLayers` policy feeds both

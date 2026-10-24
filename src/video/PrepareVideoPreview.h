@@ -2,8 +2,13 @@
 #pragma once
 #include <wx/string.h>
 #include <memory>
+#include <stdexcept>
 class wxWindow;
 namespace VideoPreview {
+class PreviewPreparationCancelled final : public std::runtime_error {
+public:
+   PreviewPreparationCancelled() : std::runtime_error("Video preview preparation was cancelled.") {}
+};
 struct PreparedMedia {
    wxString sourcePath, playbackPath, contactSheet;
    double duration{};
@@ -14,6 +19,6 @@ struct PreparedMedia {
 constexpr int ThumbnailColumns = 16, ThumbnailCount = 128;
 constexpr int ThumbnailWidth = 160, ThumbnailHeight = 90;
 std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
-   double duration, bool lightweight, wxWindow *parent, bool buildIfMissing = true);
+   double duration, bool lightweight, wxWindow *parent, bool buildIfMissing = true, int maximumHeight = 540);
 void CleanPreviewCache();
 }

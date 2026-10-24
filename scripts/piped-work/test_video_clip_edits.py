@@ -384,8 +384,14 @@ class PreviewNativeWindows:
         assert self.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
         wait_for_native_state(lambda: self.enabled(handle), f"preview button HWND={handle} enabled")
         reply = ctypes.c_size_t()
-        if not self.api.SendMessageTimeoutW(handle, 0xF5, 0, 0, 2, 10000, ctypes.byref(reply)):
-            raise RuntimeError(f"Native BM_CLICK failed for HWND={handle}: {ctypes.WinError()}")
+        from ctypes import wintypes as w
+        self.api.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+        rectangle = w.RECT()
+        assert self.api.GetClientRect(handle, ctypes.byref(rectangle))
+        centre = rectangle.right // 2 | (rectangle.bottom // 2 << 16)
+        for code, flags, point in ((0x201, 1, centre), (0x202, 0, centre), (0x202, 0, -1)):
+            if not self.api.SendMessageTimeoutW(handle, code, flags, point, 2, 10000, ctypes.byref(reply)):
+                raise RuntimeError(f"Native transport mouse message {code:#x} failed for HWND={handle}: {ctypes.WinError()}")
 
 
 def check_transport_toolbar(client, root):
@@ -624,8 +630,7 @@ def check_video_transport(client, root):
             wait_for_native_state(lambda status=status: preview_project_seconds(status) > 0.15, "project clock advances")
             assert not windows.enabled(buttons["play"])
             press_preview_button(buttons["pause"])
-            wait_for_native_state(lambda buttons=buttons: windows.enabled(buttons["play"]) and
-                                  not windows.enabled(buttons["pause"]), "project paused")
+            wait_for_native_state(lambda buttons=buttons: windows.enabled(buttons["play"]), "project paused")
             time.sleep(0.08)
             paused = preview_project_seconds(status)
             time.sleep(0.2)
@@ -795,8 +800,8 @@ def check_preview_navigation(client, root, ffmpeg):
     for direction, virtual_key in ((1, 0x27), (-1, 0x25)):
         before = settled_seconds()
         key(virtual_key)
-        wait_for_native_state(lambda before=before, direction=direction: abs(preview_project_seconds(status) - before - direction / 120) < 0.003,
-                              "stopped preview frame key")
+        wait_for_native_state(lambda before=before, direction=direction: abs(preview_project_seconds(status) - before - direction) < 0.003,
+                              "stopped preview one-second key")
     volume = client.data("GetVideoPreviewInfo")["playbackVolume"]
     for _ in range(2):
         key(0x28)
@@ -812,7 +817,7 @@ def check_preview_navigation(client, root, ffmpeg):
     wait_for_native_state(lambda: windows.enabled(buttons["pause"]), "preview navigation playback")
     before = settled_seconds()
     key(0x27)
-    wait_for_native_state(lambda: preview_project_seconds(status) > before + 4.8, "live five-second preview seek")
+    wait_for_native_state(lambda: preview_project_seconds(status) > before + 0.95, "live one-second preview seek")
     assert windows.enabled(buttons["pause"])
     seek(125000)
     wait_for_native_state(lambda: 1.9 <= preview_project_seconds(status) < 3.5, "live preview timeline seek")
@@ -825,11 +830,11 @@ def check_preview_navigation(client, root, ffmpeg):
     assert abs(preview_project_seconds(status) - 12) < 0.015
     # Start at a known frame boundary. A paused live clock can fall between
     # source frames, where a next-frame step is shorter than one full frame.
-    for target, virtual_key, colour in ((12 + 1 / 120, 0x27, "blue"), (12, 0x25, "red")):
+    for target, virtual_key, colour in ((13, 0x27, "red"), (12, 0x25, "red")):
         key(virtual_key)
         wait_for_native_state(lambda target=target: abs(preview_project_seconds(status) - target) < 0.003,
-                              lambda: "paused preview frame key: " + windows.control_text(status))
-        assert windows.enabled(buttons["play"]) and not windows.enabled(buttons["pause"])
+                              lambda: "paused preview one-second key: " + windows.control_text(status))
+        assert windows.enabled(buttons["play"]) and windows.enabled(buttons["pause"])
         expect_preview_crop_pixels(client, root, ffmpeg, {colour}, preview_info=info)
     press_preview_button(buttons["play"])
     wait_for_native_state(lambda: preview_project_seconds(status) > 12.15, "resume at the paused destination")
