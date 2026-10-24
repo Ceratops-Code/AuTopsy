@@ -64,7 +64,7 @@ class PreviewInput:
     def quality(self, handle, index):
         self.message(handle, 0x14E, index)  # CB_SETCURSEL
         # CBN_SELCHANGE is the native wxChoice command, not a scripting bypass.
-        self.message(self.frame, 0x111, self.api.GetDlgCtrlID(handle) | (1 << 16), handle)
+        self.message(self.frame, 0x111, (self.api.GetDlgCtrlID(handle) & 0xFFFF) | (1 << 16), handle)
 
     def volume(self, handle, percent):
         self.message(handle, 0x405, 1, percent)  # TBM_SETPOS

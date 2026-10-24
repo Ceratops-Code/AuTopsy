@@ -116,7 +116,7 @@ public:
       return {VideoTimeline::HasProjectVideoClips(mProject), audio.CanStopAudioStream(),
          audio.Playing(), audio.Paused(), audio.Recording(), audio.Stopping()};
    }
-   void StartPlayback() { ProjectAudioManager::Get(mProject).PlayCurrentRegion(); }
+   void StartPlayback() { ProjectAudioManager::Get(mProject).PlayCurrentRegion(true); }
    void SetPaused(bool paused) {
       const auto state = ReadState();
       if (state.canControl && state.playing && !state.recording && state.paused != paused)
