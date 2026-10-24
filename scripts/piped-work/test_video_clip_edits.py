@@ -66,6 +66,7 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=N
         operation.argtypes, operation.restype = arguments, result
     window = user.GetAncestor(surface, 2)
     assert native.owner(window) == pid
+    assert user.IsWindowVisible(surface), "Open the owned preview before pixel capture."
     assert_owned_test_display(pid, window)
     previous_dpi = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
     was_topmost = bool(user.GetWindowLongW(window, -20) & 8)
@@ -82,7 +83,7 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=N
                          (rectangle.right - 4, rectangle.bottom - 4),
                          ((rectangle.left + rectangle.right) // 2,
                           (rectangle.top + rectangle.bottom) // 2)):
-                assert native.owner(user.WindowFromPoint(w.POINT(x, y))) == pid, "Owned preview capture is obstructed."
+                assert user.GetAncestor(user.WindowFromPoint(w.POINT(x, y)), 2) == window, "Owned preview capture is obstructed."
             rgb = run_process([
                 ffmpeg, "-v", "error", "-nostdin", "-f", "gdigrab", "-draw_mouse", "0",
                 "-framerate", "30", "-offset_x", str(bounds[0]), "-offset_y", str(bounds[1]),
@@ -982,8 +983,10 @@ def check_video_clip_mute(client, root, ffmpeg, ffprobe):
     audio_clips = client.data("GetInfo: Type=Clips Format=JSON")
 
     def sound(name):
+        # Include the exact native audio extent, including codec padding after
+        # the final picture frame; stock Audacity exports that full arrangement.
+        client.send("SelectAll")
         select_audio_project_tracks(client.send, client.data)
-        client.send("SelectTime: Start=0 End=4")
         output = root / name
         client.file("Export2", output, "NumChannels=2")
         return array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(output),
@@ -1012,6 +1015,7 @@ def check_video_clip_mute(client, root, ffmpeg, ffprobe):
 
     def picture(at, colour):
         client.send(f"SelectTime: Start={at} End={at}")
+        client.send("ShowVideoPreview")
         expect_preview_crop_pixels(client, root, ffmpeg, {colour})
 
     def exported(name, colours):

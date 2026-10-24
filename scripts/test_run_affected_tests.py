@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -409,6 +410,27 @@ class NativeReceiptTests(unittest.TestCase):
     def execute(self, run_id, inputs):
         return {"result": "passed", "version": "fixture",
                 "observations": {"native_object_seen": True}}
+
+    def test_clip_mute_recipe_changes_prevent_reuse_of_old_fixture_results(self):
+        # Exact basenames are the native runner contract, not executable fixtures.
+        driver = self.root / "_test_driver.py"
+        recipe = self.root / "test_video_clip_edits.py"
+        executable, module = self.root / "_app.exe", self.root / "_script.dll"
+        for path in (driver, recipe, executable, module, self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+            path.write_bytes(b"first input")
+        arguments = SimpleNamespace(case="video-clip-mute", ffmpeg=None, ffprobe=None)
+        with patch.object(native, "__file__", str(driver)):
+            def read():
+                return native.native_test_inputs(arguments, executable, module, {"device": "screen-two"})
+            with patch.object(self, "execute", wraps=self.execute) as app:
+                first = native.run_native_check(self.root, arguments.case, read, self.execute)
+                recipe.write_bytes(b"new complete-audio fixture recipe")
+                changed = native.run_native_check(self.root, arguments.case, read, self.execute)
+                again = native.run_native_check(self.root, arguments.case, read, self.execute)
+            self.assertEqual(app.call_count, 2)
+            self.assertNotEqual(first["original_run"], changed["original_run"])
+            self.assertEqual(again["result"], "reused")
+            self.assertEqual(again["original_run"], changed["original_run"])
 
     def test_native_repeat_reuses_original_result_without_starting_another_app(self):
         inputs = self.inputs()

@@ -1135,7 +1135,7 @@ def native_test_inputs(args, executable, module, display):
     }
     if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
-                     "video-visibility", "video-speed", "video-speed-storage",
+                     "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line"):
