@@ -264,6 +264,61 @@ def check_delete_gap(client, root, ffmpeg):
 def check_clip_properties(client, root):
     """Precise linked timing, collisions, no-ops, locks and cancelled dialogs."""
     client.file("ImportVideo", root / "source.mp4")
+    # Cut and leave gap must preflight every selected medium before touching
+    # either its clips or the project clipboard, including a mixed selection.
+    for anchor in (0, 1):
+        select(client, anchor, .25, .75)
+        client.send("Copy")
+        unlocked = model(client)
+        client.send(f"SetClipProperties: Track={anchor} At=1 Locked=1")
+        locked_cut = model(client)
+        for mixed in (False, True):
+            if mixed:
+                client.send("SelectAll")
+                client.send("SelectTime: Start=.5 End=1.5")
+            else:
+                select(client, anchor, .5, 1.5)
+            selection = client.data("GetInfo: Type=Selection Format=JSON")
+            for _ in range(2):
+                with_native_dialog(lambda: client.send("SplitCut"), "Locked Clip",
+                    lambda windows, dialog: windows.click(windows.button(dialog, "OK")), needs_focus=False)
+                assert model(client) == locked_cut
+                assert client.data("GetInfo: Type=Selection Format=JSON") == selection
+        client.send("Undo")
+        assert model(client) == unlocked, "Rejected split cut added an Undo entry."
+        assert not client.data(f"GetClipProperties: Track={anchor} At=1")["locked"]
+        client.send("Redo")
+        assert model(client) == locked_cut
+        assert client.data(f"GetClipProperties: Track={anchor} At=1")["locked"]
+        # Paste into a new, semantically identified row proves rejection did
+        # not clear or replace the earlier half-second clipboard selection.
+        names = {row["name"] for row in client.data("GetInfo: Type=Tracks Format=JSON")}
+        client.send("NewVideoTrack" if anchor == 0 else "NewMonoTrack")
+        rows = client.data("GetInfo: Type=Tracks Format=JSON")
+        added = [index for index, row in enumerate(rows) if row["name"] not in names]
+        assert len(added) == 1, rows
+        select(client, added[0], 10, 10)
+        client.send("Paste")
+        pasted = [row for row in (video_rows(client) if anchor == 0 else audio_rows(client)) if row["track"] == added[0]]
+        assert len(pasted) == 1 and abs(pasted[0]["end"] - pasted[0]["start"] - .5) < .002, pasted
+        client.send("Undo")
+        client.send("Undo")
+        assert model(client) == locked_cut
+        client.send(f"SetClipProperties: Track={anchor} At=1 Locked=0")
+        original_cut = model(client)
+        for _ in range(2):
+            select(client, anchor, .5, 1.5)
+            client.send("SplitCut")
+            changed_cut = model(client)
+            kind, other = ("video", "audio") if anchor == 0 else ("audio", "video")
+            assert changed_cut[other] == original_cut[other]
+            spans = changed_cut[kind]
+            assert len(spans) == 2 and abs(spans[0]["end"] - .5) < .002 and abs(spans[1]["start"] - 1.5) < .002, spans
+            client.send("Undo")
+            assert model(client) == original_cut
+            client.send("Redo")
+            assert model(client) == changed_cut
+            client.send("Undo")
     before = model(client)
     original = client.data("GetClipProperties: Track=0 At=1")
     duration = original["end"] - original["start"]

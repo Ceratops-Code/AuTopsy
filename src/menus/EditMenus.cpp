@@ -842,6 +842,7 @@ void OnDuplicate(const CommandContext &context)
 void OnSplitCut(const CommandContext &context)
 {
    auto &project = context.project;
+   if (!PermitTimingEdit(project)) return;
    auto &tracks = TrackList::Get(project);
    auto &selectedRegion = ViewInfo::Get(project).selectedRegion;
 
