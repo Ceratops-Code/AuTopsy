@@ -254,6 +254,11 @@ def checked_runtime_files(build: Path, report: dict) -> dict[str, str]:
             if path.is_file() and path.suffix.lower() in (".exe", ".dll")}
 
 
+def native_compile_command(driver: str, build: Path) -> list[str]:
+    """Own the native build arguments used by both provenance and execution."""
+    return [driver, "--build", str(build), "--config", "Release", "--parallel", "4"]
+
+
 def compiled_runtime_inputs(source: Path, build: Path, configure: list[str], dependencies: dict,
                             diagnostics: Path) -> dict | None:
     """Read product inputs separately from documentation and native check code.
@@ -267,16 +272,24 @@ def compiled_runtime_inputs(source: Path, build: Path, configure: list[str], dep
         return None
     paths = run_command(["git", "ls-files", "-z"], source, diagnostics).split("\0")
     excluded_files = {"README.md", "BUILDING.md", "AGENTS.md", "scripts/run_affected_tests.py",
-                      "scripts/test_run_affected_tests.py", "scripts/build/windows/test_build_video_installer.py"}
+                      "scripts/test_run_affected_tests.py", "scripts/build/windows/test_build_video_installer.py",
+                      "scripts/build/windows/build_video_installer.py"}
     files = {}
     for name in paths:
         if not name or name in excluded_files or name.startswith(("docs/", ".github/", "sdlc/", "scripts/piped-work/")):
             continue
         path = source / name
         files[name] = sha256(path) if path.is_file() else "missing"
+    settings = dict(line.split("=", 1) for line in cache.read_text(encoding="utf-8").splitlines()
+                    if "=" in line and not line.startswith(("#", "//")))
+    # uv regenerates its launcher for each environment. CMake records the real
+    # engine it ran in this cache; compare its bytes, not the launcher's embedded
+    # temporary Python path or comments naming an installation location.
+    native_driver = Path(settings.get("CMAKE_COMMAND:INTERNAL", configure[0]))
+    transient_locations = {"CMAKE_COMMAND:INTERNAL", "CMAKE_CPACK_COMMAND:INTERNAL",
+                           "CMAKE_CTEST_COMMAND:INTERNAL", "CMAKE_ROOT:INTERNAL"}
     tools = {}
-    for line in cache.read_text(encoding="utf-8").splitlines():
-        key, _, value = line.partition("=")
+    for key, value in settings.items():
         if key in {"CMAKE_LINKER:FILEPATH", "CMAKE_C_COMPILER:FILEPATH", "CMAKE_CXX_COMPILER:FILEPATH",
                    "CMAKE_MAKE_PROGRAM:FILEPATH", "CMAKE_VS_MSBUILD_COMMAND:INTERNAL"}:
             tool = Path(value)
@@ -285,8 +298,10 @@ def compiled_runtime_inputs(source: Path, build: Path, configure: list[str], dep
                 for name in ("cl.exe", "c1.dll", "c1xx.dll", "c2.dll", "mspdbcore.dll"):
                     compiler = tool.with_name(name)
                     tools[str(compiler)] = sha256(compiler) if compiler.is_file() else "missing"
-    return {"source_files": files, "configure": configure[1:], "cmake_sha256": sha256(Path(configure[0])),
-            "cache_sha256": sha256(cache), "compiler_tools": tools, "dependencies": dependencies,
+    return {"source_files": files, "configure": configure[1:], "cmake_sha256": sha256(native_driver),
+            "build_arguments": native_compile_command(configure[0], build)[1:],
+            "cache_settings": {key: value for key, value in settings.items() if key not in transient_locations},
+            "compiler_tools": tools, "dependencies": dependencies,
             "compiler_environment": {name: os.environ.get(name) for name in (
                 "CL", "_CL_", "CFLAGS", "CXXFLAGS", "LDFLAGS", "INCLUDE", "LIB", "LIBPATH",
                 "VCToolsInstallDir", "WindowsSdkDir", "WindowsSDKVersion")}}
@@ -313,7 +328,7 @@ def reuse_or_compile_runtime(source: Path, build: Path, configure: list[str], de
                 return previous
         except (ValueError, KeyError, TypeError):
             pass
-    run_command([configure[0], "--build", str(build), "--config", "Release", "--parallel", "4"], source, diagnostics)
+    run_command(native_compile_command(configure[0], build), source, diagnostics)
     if inputs is None:
         # A partial configure has no reusable product identity. The required
         # native payload/CTest checks still reject missing or incomplete output.

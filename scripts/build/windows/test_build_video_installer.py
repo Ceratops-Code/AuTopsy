@@ -18,6 +18,27 @@ import build_video_installer as builder
 
 
 class InstallerBuildTests(unittest.TestCase):
+    def test_native_engine_identity_survives_relocated_temporary_launchers(self):
+        with tempfile.TemporaryDirectory(prefix="_cmake-engine-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            source, build = root / "source", root / "build"
+            source.mkdir()
+            build.mkdir()
+            (source / "main.cpp").write_text("product", encoding="utf-8")
+            native = root / "_native-cmake.exe"
+            native.write_bytes(b"pinned native CMake engine")
+            first, second = root / "_launcher-one.exe", root / "_launcher-two.exe"
+            first.write_bytes(b"temporary Python path one")
+            second.write_bytes(b"temporary Python path two")
+            cache = build / "CMakeCache.txt"
+            cache.write_text(f"# Generated at first location\nCMAKE_COMMAND:INTERNAL={native}\nCMAKE_ROOT:INTERNAL=first\nCMAKE_CXX_FLAGS:STRING=/O2\n", encoding="utf-8")
+            with mock.patch.object(builder, "run_command", return_value="main.cpp\0"):
+                original = builder.compiled_runtime_inputs(source, build, [str(first), "-B", str(build)], {}, root / "_failure.json")
+                cache.write_text(cache.read_text(encoding="utf-8").replace("first", "second"), encoding="utf-8")
+                self.assertEqual(builder.compiled_runtime_inputs(source, build, [str(second), "-B", str(build)], {}, root / "_failure.json"), original)
+                native.write_bytes(b"different native CMake engine")
+                self.assertNotEqual(builder.compiled_runtime_inputs(source, build, [str(second), "-B", str(build)], {}, root / "_failure.json"), original)
+
     def test_compiled_runtime_inputs_distinguish_product_changes_from_check_edits(self):
         with tempfile.TemporaryDirectory(prefix="_compile-inputs-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
             root = Path(temporary)
