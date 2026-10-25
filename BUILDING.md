@@ -414,10 +414,14 @@ without opening AuTopsy; its temporary media is removed after the check.
 The SDLC Windows installer build compiles first, then calls the same affected-test
 runner with `--before-package BUILD_DIR`. Its baseline is `fork-fixtures`,
 `fork-preview` and `fork-project-compatibility`; the native input map adds named
-cases for changed features. `AUTOPSY_TEST_BASE` chooses the comparison revision.
-An unavailable base requires an explicit native scope through the builder's
-`--test-name` option; an unmapped native input or missing named test stops the build.
-That option adds checks and never removes the baseline or known affected cases.
+cases for changed features. The builder requests beta qualification: the runner
+reads current GitHub releases and compares with the newest published beta or
+stable product version containing the installer and build manifest. It resolves
+that release's tag and requires agreement with its immutable source revision.
+An ambiguous or conflicting latest release stops packaging; no older fallback
+is chosen. With no eligible release, every declared native case is selected.
+The builder's `--test-name` option adds checks and never removes the baseline or
+known affected cases. An unmapped native input or missing named test stops the build.
 The native harness reuses its own matching passes without opening another editor.
 Only after the checks pass does Inno Setup stage the same compiled runtime. A
 failed desktop check, unavailable desktop, changed source or changed runtime
@@ -700,11 +704,15 @@ runner. Its direct developer entry point is:
 
     uv run --project scripts --locked --with cmake==3.31.10 python scripts/run_affected_tests.py
 
-The runner compares against the merge base with `origin/main`, including current
-staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use `--base REF`
-for another comparison. CI supplies the event's base revision; an unavailable
-shallow base conservatively selects all portable checks. `--all` explicitly
-selects that full scope. Docs-only changes need no portable tests.
+Local development defaults to the merge base with `origin/main`, including
+current staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use
+`--base REF` for another development comparison. Product qualification uses
+`--qualification-level alpha|beta|stable` or `AUTOPSY_TEST_LEVEL`; CI and the
+installer builder request beta. The newest eligible published product version
+at that level or higher owns the comparison, with no caller-pinned older base.
+The runner reads release metadata afresh and fetches only its selected tag.
+No eligible release conservatively selects all checks. `--all` explicitly
+selects every portable check. Docs-only changes need no portable tests.
 
 One input map in `run_affected_tests.py` selects dependent groups; unknown owned
 executable inputs require a map entry or an explicit scope decision. CMake builds
@@ -712,6 +720,8 @@ only their targets, and Catch2/CTest discovers individual compiled case names.
 Separate suites cover edit plans, composition geometry, existing playback,
 branding, installer production, harness policy/lifecycle and affected selection.
 Native adapter inputs are reported separately, without implying desktop acceptance.
+An explicitly scoped native session runs only its selected compiled host cases;
+it never records portable passes against core binaries that session did not build.
 
 The runner owns `.build/_core` and `.build/_test-results`. Immutable results retain
 their original IDs and source/test/fixture/lock/executable/runtime/command inputs.
@@ -770,6 +780,10 @@ List device capabilities without opening a microphone:
 
 Set `AUTOPSY_TEST_RECORDING_DEVICE` to one exact returned name before configuring
 or running the selected `fork-cursor-recording` case through the SDLC test action.
+`fork-cursor-recording-save-before` and `fork-cursor-recording-save-after` are
+separate opt-in identities for recorded-clip save/reopen and process interruption.
+Each repeats a fresh record/save/reopen/stop/reopen journey twice. The earlier
+cursor-recording pass keeps its original check version and is not repurposed.
 That explicit scope enables physical capture; normal CI and default build tests
 never record a microphone. The private mono MME profile uses zero latency
 correction and no software playthrough. Other hosts, stereo, default latency
@@ -777,10 +791,22 @@ compensation and other sample rates need their own device-scoped cases.
 Captured projects and autosave/audio files live only in the marked case's
 `_audio_temp`; after its process stops, success and failure cleanup delete that
 directory. A live process, foreign marker or redirected path blocks deletion.
-Only original generated ranges are exported for comparison; every audio output
-created after capture also stays in that disposable directory. A regression
-that writes into an original range therefore cannot leave captured samples in
-retained fixtures. Acceptance records contain capabilities and geometry only.
+The cursor-recording case compares original generated ranges; save-boundary cases
+also compare the recorded mix before and after reopening. Every audio output
+created after capture stays in that disposable directory. A regression that
+writes into an original range therefore cannot leave captured samples in retained
+fixtures. Acceptance records contain capabilities, geometry and numeric outcomes.
+
+`AwaitProjectSaveTestBoundary` is inert unless the harness sets
+`AUTOPSY_TEST_SAVE_ROOT` for its exact marked `_audio_temp` project directory.
+That directory owns the arm/ready/release signals and an atomic pending sibling.
+A live barrier waits at most 20 seconds around the saved-document transaction;
+normal release removes signals, and stopping the owned process lets the harness
+delete the entire private directory. Failed preparation keeps bounded worker
+streams and a Python stack, not captured media. Neither another project path
+nor an unmarked or redirected directory can enable the barrier. These native
+checks cover application-process interruption, not a physical power failure;
+the storage unit suite separately discards unsynced writes through its test VFS.
 
 `AUTOPSY_PREVIEW_SOAK_SECONDS` selects 60 to 240 seconds (default 180) for
 `fork-preview-soak`. The test observes native window state during playback,

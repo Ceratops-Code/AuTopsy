@@ -4,12 +4,29 @@
 #include <sqlite3.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
+#include <thread>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
+#endif
 
 namespace {
 using autopsy::project_storage::ConfigureProjectStorage;
@@ -434,4 +451,135 @@ TEST_CASE("Storage setup rejects unsupported modes and active transactions", "[p
    const auto rc = ConfigureProjectStorage(memory, "main", StorageMode::LiveProject);
    REQUIRE(sqlite3_close(memory) == SQLITE_OK);
    REQUIRE(rc != SQLITE_OK);
+}
+
+namespace {
+struct PrivateSaveBoundary {
+   static unsigned long ProcessId() {
+#ifdef _WIN32
+      return GetCurrentProcessId();
+#else
+      return static_cast<unsigned long>(getpid());
+#endif
+   }
+   static bool ProcessRunning(unsigned long pid) {
+#ifdef _WIN32
+      const auto process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+      if (!process) return GetLastError() != ERROR_INVALID_PARAMETER;
+      const bool running = WaitForSingleObject(process, 0) != WAIT_OBJECT_0;
+      CloseHandle(process);
+      return running;
+#else
+      return kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH;
+#endif
+   }
+   static void RemoveAbandonedRoots() {
+      // The CTest working directory owns only this prefix. Preserve every live
+      // PID, ambiguous owner or redirected path, including a reused PID.
+      const auto parent = std::filesystem::current_path();
+      const std::string prefix = "_save-boundary-";
+      for (const auto& item : std::filesystem::directory_iterator(parent)) {
+         const auto name = item.path().filename().string();
+         if (name.rfind(prefix, 0) != 0 || item.is_symlink() || !item.is_directory()) continue;
+         const auto end = name.find('-', prefix.size());
+         if (end == std::string::npos) continue;
+         const auto id = name.substr(prefix.size(), end - prefix.size());
+         if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos) continue;
+         unsigned long pid{};
+         try { pid = std::stoul(id); }
+         catch (const std::exception&) { continue; }
+         if (!pid || ProcessRunning(pid)) continue;
+         std::ifstream marker(item.path() / "_owner");
+         const std::string signature{std::istreambuf_iterator<char>(marker), {}};
+         marker.close();
+         if (signature == "AuTopsy behavior tests 1" || std::filesystem::is_empty(item.path())) {
+            if (std::filesystem::weakly_canonical(item.path()).parent_path() == parent)
+               std::filesystem::remove_all(item.path());
+         }
+      }
+   }
+   std::filesystem::path caseRoot = std::filesystem::current_path() /
+      ("_save-boundary-" + std::to_string(ProcessId()) + "-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+   std::filesystem::path audio = caseRoot / "_audio_temp";
+   sqlite3* db{};
+   std::optional<std::string> previous;
+   bool ownsRoot{};
+
+   static void SetRoot(const std::string& value) {
+#ifdef _WIN32
+      _putenv_s("AUTOPSY_TEST_SAVE_ROOT", value.c_str());
+#else
+      if (value.empty()) unsetenv("AUTOPSY_TEST_SAVE_ROOT");
+      else setenv("AUTOPSY_TEST_SAVE_ROOT", value.c_str(), 1);
+#endif
+   }
+   PrivateSaveBoundary() {
+      if (const auto value = std::getenv("AUTOPSY_TEST_SAVE_ROOT")) previous = value;
+      try {
+         RemoveAbandonedRoots();
+         if (!(ownsRoot = std::filesystem::create_directory(caseRoot)))
+            throw std::runtime_error("Private save test directory already exists.");
+         std::ofstream(caseRoot / "_owner") << "AuTopsy behavior tests 1";
+         std::filesystem::create_directory(audio);
+         if (sqlite3_open((audio / "test.aup3").u8string().c_str(), &db) != SQLITE_OK)
+            throw std::runtime_error("Private save test database did not open.");
+         SetRoot(audio.u8string());
+      }
+      catch (...) { Cleanup(); throw; }
+   }
+   void Cleanup() {
+      if (db) { sqlite3_close(db); db = nullptr; }
+      SetRoot(previous.value_or(""));
+      std::error_code error;
+      if (ownsRoot && std::filesystem::weakly_canonical(caseRoot, error) == caseRoot)
+         std::filesystem::remove_all(caseRoot, error);
+   }
+   ~PrivateSaveBoundary() { Cleanup(); }
+};
+}
+
+TEST_CASE("Private save barriers repeat both boundaries and remove completed signals", "[project-storage]") {
+   using autopsy::project_storage::AwaitProjectSaveTestBoundary;
+   PrivateSaveBoundary test;
+   for (const auto phase : {"before", "after", "before", "after"}) {
+      std::ofstream(test.audio / "_save_boundary_arm") << phase;
+      const auto other = std::string(phase) == "before" ? "after" : "before";
+      AwaitProjectSaveTestBoundary(test.db, other);
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_ready"));
+      auto worker = std::async(std::launch::async, [&] { AwaitProjectSaveTestBoundary(test.db, phase); });
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (!std::filesystem::exists(test.audio / "_save_boundary_ready") &&
+             std::chrono::steady_clock::now() < deadline)
+         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      const bool observed = std::filesystem::exists(test.audio / "_save_boundary_ready");
+      // Always release before assertions, so a failed observation cannot strand
+      // its worker or the SQLite handle that the fixture must close.
+      std::ofstream(test.audio / "_save_boundary_release") << "continue";
+      worker.get();
+      REQUIRE(observed);
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_ready"));
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_arm"));
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_release"));
+   }
+}
+
+TEST_CASE("Save barriers refuse foreign ownership and leave ordinary projects untouched", "[project-storage]") {
+   using autopsy::project_storage::AwaitProjectSaveTestBoundary;
+   PrivateSaveBoundary test;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      PrivateSaveBoundary::SetRoot("");
+      REQUIRE_NOTHROW(AwaitProjectSaveTestBoundary(test.db, "before"));
+      PrivateSaveBoundary::SetRoot((test.caseRoot / "unrelated").u8string());
+      REQUIRE_NOTHROW(AwaitProjectSaveTestBoundary(test.db, "before"));
+      PrivateSaveBoundary::SetRoot(test.audio.u8string());
+      REQUIRE_NOTHROW(AwaitProjectSaveTestBoundary(test.db, "before"));
+      std::ofstream(test.caseRoot / "_owner", std::ios::trunc) << "different owner";
+      REQUIRE_THROWS(AwaitProjectSaveTestBoundary(test.db, "before"));
+      std::ofstream(test.caseRoot / "_owner", std::ios::trunc) << "AuTopsy behavior tests 1";
+      std::filesystem::create_directory(test.audio / "_save_boundary_arm");
+      REQUIRE_THROWS(AwaitProjectSaveTestBoundary(test.db, "before"));
+      std::filesystem::remove(test.audio / "_save_boundary_arm");
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_ready"));
+   }
 }

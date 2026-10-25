@@ -102,12 +102,15 @@ def check_neutral_preview_fixture(work_root, ffmpeg, ffprobe):
     print("fixtures: PASS (synthetic picture/audio, repeated calls and interrupted publication)")
 
 
-def run_behavior_worker(command, environment, app, root, *, timeout_seconds=240):
+def run_behavior_worker(command, environment, app, root, *, timeout_seconds=240, expected_app_stop=None):
     """Collect worker streams with a finite budget; stop on owned-app failure.
 
     The outer case owner closes the app. This function owns only its worker,
     including termination and both output streams on interruption or expiry.
     Long soak callers reserve extra setup/cleanup time in their outer deadline.
+    A fault-test owner may set expected_app_stop only after observing its exact
+    native boundary, immediately before stopping this app. That acknowledgement
+    changes shutdown handling, never the worker's exit code or acceptance.
     """
     if not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 285:
         raise ValueError("Choose a finite positive worker deadline of at most 285 seconds.")
@@ -135,6 +138,8 @@ def run_behavior_worker(command, environment, app, root, *, timeout_seconds=240)
             except subprocess.TimeoutExpired:
                 status = app.poll()
                 if status is not None:
+                    if expected_app_stop is not None and expected_app_stop.is_set():
+                        break
                     if stopped_at is None:
                         stopped_at = time.monotonic()
                     if status or time.monotonic() - stopped_at > 2:

@@ -23,6 +23,167 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_expected_fault_stop_keeps_streams_and_never_stops_an_unacknowledged_app(self) -> None:
+        import threading
+
+        import run_fork_test_harness as harness
+
+        for acknowledged in (False, True, False, True):
+            with self.subTest(acknowledged=acknowledged), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "_app.log").write_text("private test app", encoding="utf-8")
+                event = threading.Event()
+                if acknowledged:
+                    event.set()
+                app = unittest.mock.Mock()
+                app.poll.side_effect = [None, 17]
+                app.returncode = 17
+                command = [sys.executable, "-c", "import sys,time; print('started',flush=True); print('details',file=sys.stderr,flush=True); time.sleep(60)"]
+                if acknowledged:
+                    result = harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
+                    self.assertIsNotNone(result.returncode)
+                    self.assertIn("started", result.stdout)
+                    self.assertIn("details", result.stderr)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "Owned app exited with status 17"):
+                        harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
+                app.terminate.assert_not_called()
+                self.assertIn("started", (root / "_commands.log").read_text(encoding="utf-8"))
+                self.assertIn("details", (root / "_errors.log").read_text(encoding="utf-8"))
+
+    @staticmethod
+    def published_release(tag: str, *, preview: bool = True, draft: bool = False) -> dict[str, Any]:
+        return {"id": tag, "tag_name": tag, "draft": draft, "prerelease": preview,
+                "target_commitish": "a" * 40,
+                "published_at": "2026-10-25T00:00:00Z",
+                "assets": [{"name": "_build-manifest.json"}, {"name": "autopsy-win-3.7.10-test-x64.exe"}]}
+
+    def test_latest_baseline_excludes_lower_levels_and_compares_versions(self) -> None:
+        rows = [self.published_release("v3.7.10-autopsy.2"),
+                self.published_release("v3.7.9", preview=False),
+                self.published_release("v3.8.0-autopsy.alpha.3"),
+                self.published_release("v3.7.10-autopsy.10")]
+        original = json.dumps(rows, sort_keys=True)
+        for _ in range(2):
+            for level, tag in (("alpha", "v3.8.0-autopsy.alpha.3"), ("beta", "v3.7.10-autopsy.10"), ("stable", "v3.7.9")):
+                selected = runner.select_qualification_baseline(rows, level)
+                assert selected is not None
+                self.assertEqual(selected["tag"], tag)
+            self.assertEqual(json.dumps(rows, sort_keys=True), original)
+        rows.append(self.published_release("v3.8.0", preview=False))
+        selected = runner.select_qualification_baseline(rows, "beta")
+        assert selected is not None
+        self.assertEqual(selected["tag"], "v3.8.0")
+
+    def test_baseline_requires_published_installer_acceptance_and_unambiguous_metadata(self) -> None:
+        missing = self.published_release("v4.0.0-autopsy.1")
+        missing["assets"] = []
+        rows = [missing, self.published_release("v4.1.0-autopsy.1", draft=True),
+                self.published_release("v3.8.0-autopsy.alpha.1")]
+        self.assertIsNone(runner.select_qualification_baseline(rows, "beta"))
+        with self.assertRaisesRegex(RuntimeError, "conflicting"):
+            runner.select_qualification_baseline([self.published_release("v3.7.10", preview=True)], "beta")
+        with self.assertRaisesRegex(ValueError, "level"):
+            runner.select_qualification_baseline([], "unknown")
+        first = self.published_release("v3.7.10-autopsy.10")
+        with self.assertRaisesRegex(RuntimeError, "ambiguous"):
+            runner.select_qualification_baseline([first, {**first, "id": "another-release"}], "beta")
+
+    def test_baseline_rejects_missing_source_and_disagreeing_tag_before_tests(self) -> None:
+        release = self.published_release("v3.7.10-autopsy.10")
+        for source, tag, message in ((None, "a" * 40, "immutable source"),
+                                     ("a" * 40, "b" * 40, "disagree")):
+            calls: list[list[str]] = []
+
+            def execute(command, cwd, *, source=source, tag=tag, calls=calls):
+                calls.append(command)
+                if command[:3] == ["gh", "repo", "view"]:
+                    return json.dumps({"nameWithOwner": "owner/AuTopsy"})
+                if command[:2] == ["gh", "api"]:
+                    return json.dumps([[{**release, "target_commitish": source}]])
+                if command[:2] == ["git", "fetch"]:
+                    return ""
+                return tag
+
+            with self.subTest(source=source, tag=tag), patch.object(runner, "run_command", side_effect=execute):
+                for _ in range(2):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        runner.read_qualification_baseline(Path("repo"), "beta")
+                self.assertFalse(any(command[0] in ("cmake", "ctest") for command in calls))
+                self.assertEqual(any(command[:2] == ["git", "fetch"] for command in calls), source is not None)
+
+    def test_native_session_never_accepts_current_portable_sources_against_an_old_binary(self) -> None:
+        calls = []
+
+        def execute(command, cwd):
+            calls.append(command)
+            if "--show-only=json-v1" in command:
+                return json.dumps({"tests": [{"name": "fork-test-runner"}, {"name": "fork-native-media-session"}]})
+            return ""
+
+        with patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "private-build",
+                                     "AUTOPSY_VIDEO_TEST_NAME": "^fork-cursor-recording-save-before$"}), \
+             patch.object(runner, "changed_paths", return_value=(["scripts/run_affected_tests.py"], "commit")), \
+             patch.object(runner.shutil, "which", return_value="available"), \
+             patch.object(runner, "ReceiptStore"), patch.object(runner, "file_digest", return_value="runtime"), \
+             patch.object(runner, "run_command", side_effect=execute), \
+             patch.object(runner, "run_named_check") as portable_check, redirect_stdout(io.StringIO()) as output:
+            for _ in range(2):
+                output.seek(0)
+                output.truncate()
+                self.assertEqual(runner.run_selected_tests([]), 0)
+                report = json.loads(output.getvalue())
+                self.assertEqual(report["scope"], "native")
+                self.assertEqual(report["checks"], [{"name": "fork-native-media-session", "result": "passed"}])
+            portable_check.assert_not_called()
+            self.assertFalse(any("--build" in command for command in calls))
+
+    def test_qualification_base_cannot_be_silently_pinned_to_an_older_version(self) -> None:
+        chosen = {"tag": "v3.7.10-autopsy.10", "level": "beta", "commit": "a" * 40}
+        with patch.object(runner, "read_qualification_baseline", return_value=chosen), \
+             patch.object(runner, "run_command", return_value="b" * 40) as command:
+            with self.assertRaisesRegex(RuntimeError, "newest eligible"):
+                runner.changed_paths(Path("repo"), "v3.7.10-autopsy.9", "beta")
+            self.assertEqual(command.call_count, 1)
+
+    def test_baseline_reads_current_service_state_after_each_interruption(self) -> None:
+        root = Path("repo")
+        rows = [self.published_release("v3.7.10-autopsy.10")]
+        for boundary in ("before-fetch", "after-fetch"):
+            calls: list[list[str]] = []
+            interrupted = False
+            effects: list[str] = []
+
+            def execute(command, cwd, *, calls=calls, effects=effects, boundary=boundary):
+                nonlocal interrupted
+                self.assertEqual(cwd, root)
+                calls.append(command)
+                if command[:3] == ["gh", "repo", "view"]:
+                    return json.dumps({"nameWithOwner": "owner/AuTopsy"})
+                if command[:2] == ["gh", "api"]:
+                    return json.dumps([rows])
+                if command[:2] == ["git", "fetch"]:
+                    self.assertEqual(command[-1], "refs/tags/v3.7.10-autopsy.10:refs/tags/v3.7.10-autopsy.10")
+                    if boundary == "after-fetch":
+                        effects.append(command[-1])
+                    if not interrupted:
+                        interrupted = True
+                        raise KeyboardInterrupt(boundary)
+                    if boundary == "before-fetch":
+                        effects.append(command[-1])
+                    return ""
+                return "a" * 40
+
+            with self.subTest(boundary=boundary), patch.object(runner, "run_command", side_effect=execute):
+                with self.assertRaises(KeyboardInterrupt):
+                    runner.read_qualification_baseline(root, "beta")
+                for _ in range(2):
+                    selected = runner.read_qualification_baseline(root, "beta")
+                    assert selected is not None
+                    self.assertEqual(selected["commit"], "a" * 40)
+                self.assertEqual(sum(command[:2] == ["gh", "api"] for command in calls), 3)
+                self.assertEqual(len(effects), 2 if boundary == "before-fetch" else 3)
+
     def test_preview_sample_window_counts_seek_resets_and_preserves_observations(self) -> None:
         from test_preview_controls import measure_preview_sample_window
 

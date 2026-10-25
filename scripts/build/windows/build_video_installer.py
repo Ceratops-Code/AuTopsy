@@ -409,7 +409,8 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
     # The selector and native harness already own check impact and acceptance.
     # Run them on the compiled host, before producing any installer. Inno's
     # target stages prebuilt files; it has no dependency on the application target.
-    command = [sys.executable, str(source / "scripts/run_affected_tests.py"), "--before-package", str(build)]
+    command = [sys.executable, str(source / "scripts/run_affected_tests.py"), "--before-package", str(build),
+               "--qualification-level", "beta"]
     if native_tests:
         command.extend(["--native-tests", native_tests])
     output = run_command(command, source, diagnostics)

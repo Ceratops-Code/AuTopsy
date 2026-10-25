@@ -33,6 +33,7 @@ Paul Licameli split from AudacityProject.cpp
 #include "ActiveProjects.h"
 #include "CodeConversions.h"
 #include "DBConnection.h"
+#include "ConfigureProjectStorage.h"
 #include "FileNames.h"
 #include "PendingTracks.h"
 #include "Project.h"
@@ -2038,7 +2039,13 @@ bool ProjectFileIO::WriteDoc(const char *table,
       return false;
    }
 
-   return transaction.Commit();
+   const bool testSavedProject = strcmp(table, "project") == 0 && strcmp(schema, "main") == 0;
+   if (testSavedProject)
+      autopsy::project_storage::AwaitProjectSaveTestBoundary(db, "before");
+   const auto committed = transaction.Commit();
+   if (committed && testSavedProject && sqlite3_get_autocommit(db))
+      autopsy::project_storage::AwaitProjectSaveTestBoundary(db, "after");
+   return committed;
 }
 
 ProjectFileIO::

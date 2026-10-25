@@ -50,7 +50,8 @@ jobs:
       - name: Validate and test through SDLC
         uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@fd2616cac03ef727a0ea96dc778ad15295d05b90
         env:
-          AUTOPSY_TEST_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          AUTOPSY_TEST_LEVEL: beta
+          GH_TOKEN: ${{ github.token }}
           CERATOPS_PROJECTS_ROOT: ${{ github.workspace }}/..
           CERATOPS_TASK_TEMP_ROOT: ${{ runner.temp }}
         with:
@@ -91,7 +92,7 @@ jobs:
       - name: Build installer from this revision
         id: installer
         env:
-          AUTOPSY_TEST_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+          GH_TOKEN: ${{ github.token }}
         run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
       - name: Upload unsigned installer and source manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

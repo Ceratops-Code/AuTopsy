@@ -112,7 +112,7 @@ flowchart LR
   GitHub -->|"installer download"| Editor
 ```
 
-**System-context view — one AuTopsy installation.** Boxes name people, systems,
+**System-context view â€” one AuTopsy installation.** Boxes name people, systems,
 components or files; arrows name the interaction. GitHub builds/distributes the
 product; local media processing does not upload the editor's content. User media
 is untrusted input to bundled decoders. Project save and export are separate
@@ -178,7 +178,7 @@ flowchart TB
   Export -->|"local encoding"| Decoder
 ```
 
-**Component view — AuTopsy editing process.** Boxes are components within the
+**Component view â€” AuTopsy editing process.** Boxes are components within the
 desktop process, except FFmpeg child processes. Arrows show dependency/data flow.
 The kernel has no native UI, XML, mpv or audio-object dependencies. Native track
 objects own the authoritative current states; the kernel does not own a second
@@ -470,7 +470,7 @@ handles and transparent gaps. Simple clips use source seconds directly; joined
 clips use content seconds. Tracks own placements, a default source and visibility.
 The model remains limited to ordered non-overlapping, non-negative picture
 ranges. Playback rate is content seconds per project second, defaults to 1 and
-supports 0.01–100 including the effective product through nested joined content.
+supports 0.01â€“100 including the effective product through nested joined content.
 Named project/content conversions are shared by trim, split, copy, join, flags,
 frame stepping, preview and export. Retiming changes the visible placement map;
 retained media and hidden source handles are immutable.
@@ -689,7 +689,7 @@ sequenceDiagram
   end
 ```
 
-**Sequence view — one linked edit.** Participants are a person and in-process
+**Sequence view â€” one linked edit.** Participants are a person and in-process
 components. Arrows are synchronous semantic calls/results; history publication
 is the visible effect. This is the target transaction, not a claim that every
 current native edit already uses a common planner.
@@ -1004,7 +1004,7 @@ flowchart LR
   App -->|"leased derived files"| Cache["Store: local preview cache"]
 ```
 
-**Container/store view — build to local editing.** Boxes name applications and
+**Container/store view â€” build to local editing.** Boxes name applications and
 stores, not classes; arrows name data/effects. No automatic service connection
 exists from local media to the release build. A separate deployment view adds no
 useful distribution detail: the desktop app and bundled media tools run on one
@@ -1135,6 +1135,15 @@ does not revoke an unchanged installer or schedule its media acceptance again.
 This uses the Ceratops refactor plan's existing-owner/affected-input/result-reuse
 idea; Nx, a new database and a second cache/dependency service are unnecessary.
 
+Product qualification selects the newest published product version at the same
+or a higher level. The runner reads current GitHub release state, requires the
+installer/manifest pair and agreement between its immutable source revision and
+Git tag, then computes affected inputs from that commit. CI and installer builds
+request beta. Missing eligibility expands the test scope; conflicting metadata
+blocks qualification rather than silently selecting an older release. An explicit
+native session accepts only its selected compiled host and cannot attribute
+portable passes to current source without compiling those portable inputs.
+
 The last installed baseline is source `eae1e5fec14576a87544f13b13cb84444e157940`,
 installer SHA-256 `d920ed6a3eb80e3d4a72286781c17662ff872a0b0e0171252ee359906d72d9f6`.
 Its ten native groups/selection/clipboard, split-edge, structural-edit,
@@ -1169,6 +1178,17 @@ not load its driver; only the unavailable-encoder rejection path passed here.
 The storage power-cut model now preserves several acknowledged edits while a
 later edit is interrupted; concurrent checkpoint scheduling and actual firmware
 remain separate limits.
+
+Two additional opt-in native cases stop the private app immediately before and
+after the saved-document transaction commit. Each repeats a fresh recording,
+normal save/reopen and interrupted save/reopen journey twice; clip geometry and
+decoded recorded mixes remained intact, and the post-commit edit was complete.
+The barrier is inert outside an explicitly marked private project root and has
+a 20-second lifetime. Its live synchronization files, captured mixes and project
+companions belong to that disposable directory and are deleted after all owned
+processes stop. These cases retain separate result identities from the earlier
+cursor-capture pass. They establish process-interruption behavior on this mono
+MME device; real OS-cache loss remains covered only by the independent VFS model.
 
 The urgent general Undo/Redo fix is built separately from the new core foundation:
 source `d43451e1fddfd039eb576b1dd88d30c11fae3927`, installer SHA-256
