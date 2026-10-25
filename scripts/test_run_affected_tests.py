@@ -23,6 +23,17 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_invalid_worker_deadline_blocks_before_any_process_effect(self) -> None:
+        import run_fork_test_harness as harness
+
+        for seconds in (0, -1, 286, float("nan"), float("inf")):
+            with self.subTest(seconds=seconds), \
+                 patch.object(harness.subprocess, "Popen", side_effect=AssertionError("started a process")):
+                app = unittest.mock.Mock()
+                with self.assertRaises(ValueError):
+                    harness.run_behavior_worker([sys.executable], {}, app, Path("_unused"), timeout_seconds=seconds)
+                app.poll.assert_not_called()
+
     def test_invalid_soak_duration_blocks_before_gui_or_file_work(self) -> None:
         for value in ("0", "59", "241", "nan", "inf", "not-a-duration"):
             with self.subTest(value=value), patch.dict(os.environ, {"AUTOPSY_PREVIEW_SOAK_SECONDS": value}), \

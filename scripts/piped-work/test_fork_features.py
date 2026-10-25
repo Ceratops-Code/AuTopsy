@@ -1763,7 +1763,8 @@ def main():
                         output, errors = operation.communicate(timeout=10)
                         (root / "_commands.log").write_text(output, encoding="utf-8")
                         (root / "_errors.log").write_text(errors, encoding="utf-8")
-                result = run_behavior_worker(worker_command, environment, app, root)
+                result = run_behavior_worker(worker_command, environment, app, root,
+                    timeout_seconds=285 if args.case == "preview-soak" else 240)
                 if result.returncode:
                     raise RuntimeError(
                         f"Command: {subprocess.list2cmdline(worker_command)}\n"

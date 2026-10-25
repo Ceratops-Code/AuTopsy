@@ -790,6 +790,10 @@ Targets are a response p95 below 0.5 seconds, timing drift p95 below 0.15 second
 at most 2% dropped frames plus three frames, at most 128 MiB private-memory growth
 and at most 64 extra handles. A pass describes that machine and fixture; it does
 not establish hours of uninterrupted playback or behavior on every GPU.
+Its worker budget is 285 seconds and CTest's outer limit is 360 seconds, leaving
+setup, stop and cleanup time around the maximum 240-second measurement. Other
+native cases retain their existing worker budget. Headless lifecycle cases
+repeat deadline expiry and check worker cleanup without terminating the app.
 The scoped Windows run measured 180 seconds, 13 wraps, no reported dropped
 frames, about 17.5 MiB private-memory growth and four extra handles. Drift p95
 in the retained final 256 timing samples was 0.0343 seconds. Physical mono MME

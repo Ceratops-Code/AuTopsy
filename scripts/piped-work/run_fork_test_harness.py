@@ -102,8 +102,15 @@ def check_neutral_preview_fixture(work_root, ffmpeg, ffprobe):
     print("fixtures: PASS (synthetic picture/audio, repeated calls and interrupted publication)")
 
 
-def run_behavior_worker(command, environment, app, root):
-    """Collect both worker streams and stop promptly when the owned app fails."""
+def run_behavior_worker(command, environment, app, root, *, timeout_seconds=240):
+    """Collect worker streams with a finite budget; stop on owned-app failure.
+
+    The outer case owner closes the app. This function owns only its worker,
+    including termination and both output streams on interruption or expiry.
+    Long soak callers reserve extra setup/cleanup time in their outer deadline.
+    """
+    if not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 285:
+        raise ValueError("Choose a finite positive worker deadline of at most 285 seconds.")
     if app.poll() is not None:
         raise RuntimeError(
             f"Command: {subprocess.list2cmdline(command)}\n"
@@ -118,7 +125,7 @@ def run_behavior_worker(command, environment, app, root):
         env=environment,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
-    deadline, stopped_at = time.monotonic() + 240, None
+    deadline, stopped_at = time.monotonic() + timeout_seconds, None
     cause, output, errors = None, "", ""
     try:
         while True:
@@ -134,7 +141,7 @@ def run_behavior_worker(command, environment, app, root):
                         cause = f"Owned app exited with status {status} while its worker was active."
                         break
                 if time.monotonic() >= deadline:
-                    cause = "Behavior worker exceeded its 240-second deadline."
+                    cause = f"Behavior worker exceeded its {timeout_seconds:g}-second deadline."
                     break
     finally:
         if operation.poll() is None:
@@ -343,11 +350,11 @@ def check_test_display_selection():
 
 
 def check_behavior_worker_lifecycle(work_root):
-    """No GUI: repeat normal exit and app failure on both sides of worker launch."""
+    """No GUI: repeat normal exit, bounded expiry and both app-failure boundaries."""
     import tempfile
 
     work_root.mkdir(parents=True, exist_ok=True)
-    for boundary in ("normal", "before", "after"):
+    for boundary in ("normal", "before", "after", "deadline"):
         for _ in range(2):
             with tempfile.TemporaryDirectory(
                 prefix="_worker-lifecycle-", dir=work_root
@@ -368,7 +375,7 @@ def check_behavior_worker_lifecycle(work_root):
                     if boundary == "after"
                     else (
                         "import time,sys;time.sleep("
-                        + ("10" if boundary == "normal" else "0")
+                        + ("10" if boundary in ("normal", "deadline") else "0")
                         + ");sys.exit(197)"
                     )
                 )
@@ -394,15 +401,21 @@ def check_behavior_worker_lifecycle(work_root):
                 try:
                     try:
                         result = run_behavior_worker(
-                            command, os.environ.copy(), app, root
+                            command, os.environ.copy(), app, root,
+                            timeout_seconds=0.25 if boundary == "deadline" else 240,
                         )
                     except RuntimeError as error:
                         assert boundary != "normal", str(error)
-                        assert "status 197" in str(error), str(error)
-                        if boundary == "before":
+                        if boundary == "deadline":
+                            assert "0.25-second deadline" in str(error), str(error)
+                            assert "Worker exit:" in str(error) and "stdout:" in str(error) and "stderr:" in str(error)
+                            assert app.poll() is None, "The worker owner terminated an app it does not own."
+                        elif boundary == "before":
+                            assert "status 197" in str(error), str(error)
                             assert "<not started>" in str(error)
                             assert not (root / "_commands.log").exists()
                         else:
+                            assert "status 197" in str(error), str(error)
                             assert (
                                 "worker output" in (root / "_commands.log").read_text()
                             )
