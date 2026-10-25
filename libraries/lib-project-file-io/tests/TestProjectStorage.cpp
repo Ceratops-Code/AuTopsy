@@ -280,6 +280,68 @@ TEST_CASE("Power-cut model exposes the previous NORMAL durability loss", "[proje
    });
 }
 
+TEST_CASE("An interrupted later edit cannot lose previously acknowledged clip blocks", "[project-storage]") {
+   // Several acknowledged transactions and page-sized, distinct blocks model a
+   // real arrangement rather than a single saved row. Only its final two clips
+   // change in the interrupted edit; every older clip must remain byte-exact.
+   const auto change = std::string("BEGIN; DELETE FROM sampleblocks WHERE blockid>4;")
+      + "INSERT INTO sampleblocks VALUES(7,CAST('" + std::string(8192, 'z') + "' AS BLOB));"
+      + "UPDATE project SET doc='1,2,3,4,7'; COMMIT;";
+   for (const auto mode : {StorageMode::LiveProject, StorageMode::StandaloneCopy}) {
+      const auto populate = [mode](Database& db) {
+         Prepare(db, mode);
+         std::string document = "1";
+         for (int id = 2; id <= 6; ++id) {
+            document += "," + std::to_string(id);
+            const auto sql = "BEGIN; INSERT INTO sampleblocks VALUES(" + std::to_string(id)
+               + ",CAST('" + std::string(8192, static_cast<char>('a' + id)) + "' AS BLOB));"
+               + "UPDATE project SET doc='" + document + "'; COMMIT;";
+            REQUIRE(db.Execute(sql.c_str()) == SQLITE_OK);
+         }
+         std::vector<std::string> stable;
+         for (int id = 1; id <= 4; ++id)
+            stable.push_back(db.Value(("SELECT hex(samples) FROM sampleblocks WHERE blockid="
+               + std::to_string(id)).c_str()));
+         return stable;
+      };
+      int effects{};
+      {
+         PowerCutDisk disk; Database db(disk); populate(db); disk.Arm(0, false);
+         REQUIRE(db.Execute(change.c_str()) == SQLITE_OK);
+         effects = disk.effects;
+      }
+      REQUIRE(effects > 0);
+      for (int at = 1; at <= effects; ++at) {
+         for (const bool after : {false, true}) {
+            CAPTURE(static_cast<int>(mode), at, after);
+            PowerCutDisk disk; Database db(disk);
+            const auto expected = populate(db);
+            disk.Arm(at, after);
+            const auto status = db.Execute(change.c_str());
+            CutAndReopen(disk, db, [&](Database& reopened) {
+               REQUIRE(reopened.Value("PRAGMA integrity_check") == "ok");
+               for (int id = 1; id <= 4; ++id)
+                  REQUIRE(reopened.Value(("SELECT hex(samples) FROM sampleblocks WHERE blockid="
+                     + std::to_string(id)).c_str()) == expected[id - 1]);
+               const auto document = reopened.Value("SELECT doc FROM project");
+               REQUIRE((document == "1,2,3,4,5,6" || document == "1,2,3,4,7"));
+               if (status == SQLITE_OK) REQUIRE(document == "1,2,3,4,7");
+               REQUIRE(reopened.Value("SELECT count(*) FROM sampleblocks")
+                  == (document == "1,2,3,4,7" ? "5" : "6"));
+               if (document == "1,2,3,4,7")
+                  REQUIRE(reopened.Value("SELECT length(samples) FROM sampleblocks WHERE blockid=7") == "8192");
+               REQUIRE(ConfigureProjectStorage(reopened.handle, "main", mode) == SQLITE_OK);
+               for (int repeat = 0; repeat != 2; ++repeat) {
+                  REQUIRE(reopened.Execute(change.c_str()) == SQLITE_OK);
+                  REQUIRE(reopened.Value("SELECT doc FROM project") == "1,2,3,4,7");
+                  REQUIRE(reopened.Value("SELECT count(*) FROM sampleblocks") == "5");
+               }
+            });
+         }
+      }
+   }
+}
+
 TEST_CASE("Edits remain atomic across every interrupted write and sync", "[project-storage]") {
    for (auto mode : {StorageMode::LiveProject, StorageMode::StandaloneCopy}) {
       int count{};

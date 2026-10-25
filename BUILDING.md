@@ -760,6 +760,42 @@ does not fetch or merge upstream updates automatically.
 microphone. The adapter creates a fresh pending capture clip at the cursor and
 passes the earliest free-space/selection end to the native stream. Actual capture
 device behavior still depends on the user's audio device.
+`CreateCursorCapture` binds append, flush and dropout repair to that exact pending
+clip; ordinary track append chooses the rightmost clip and cannot record into a
+middle gap safely.
+
+List device capabilities without opening a microphone:
+
+    uv run --project scripts --locked python scripts/piped-work/test_fork_features.py --list-recording-devices
+
+Set `AUTOPSY_TEST_RECORDING_DEVICE` to one exact returned name before configuring
+or running the selected `fork-cursor-recording` case through the SDLC test action.
+That explicit scope enables physical capture; normal CI and default build tests
+never record a microphone. The private mono MME profile uses zero latency
+correction and no software playthrough. Other hosts, stereo, default latency
+compensation and other sample rates need their own device-scoped cases.
+Captured projects and autosave/audio files live only in the marked case's
+`_audio_temp`; after its process stops, success and failure cleanup delete that
+directory. A live process, foreign marker or redirected path blocks deletion.
+Only original generated ranges are exported for comparison; every audio output
+created after capture also stays in that disposable directory. A regression
+that writes into an original range therefore cannot leave captured samples in
+retained fixtures. Acceptance records contain capabilities and geometry only.
+
+`AUTOPSY_PREVIEW_SOAK_SECONDS` selects 60 to 240 seconds (default 180) for
+`fork-preview-soak`. The test observes native window state during playback,
+because configured scripting commands stop audio. After stopping, it reads the
+player's bounded final timing window and cumulative dropped-frame counters.
+Targets are a response p95 below 0.5 seconds, timing drift p95 below 0.15 seconds,
+at most 2% dropped frames plus three frames, at most 128 MiB private-memory growth
+and at most 64 extra handles. A pass describes that machine and fixture; it does
+not establish hours of uninterrupted playback or behavior on every GPU.
+The scoped Windows run measured 180 seconds, 13 wraps, no reported dropped
+frames, about 17.5 MiB private-memory growth and four extra handles. Drift p95
+in the retained final 256 timing samples was 0.0343 seconds. Physical mono MME
+capture also passed full/early-stop repeats, Undo/Redo and normal process exit.
+NVENC could not load `nvcuda.dll`; its rejection/cleanup case passed, while
+successful NVIDIA encoding remains unchecked.
 
 `project-storage::` cases compile the application's owned SQLite configuration
 against its bundled SQLite. A private VFS separates volatile writes from synced
@@ -771,6 +807,10 @@ setting must lose an acknowledged edit, so an app-only crash test cannot stand
 in for this power-cut model. No user files, physical input, or disk artifacts are
 used. The native connection/save adapters still need their separate app checks;
 this suite cannot prove storage firmware honors the operating system's flushes.
+The multi-edit case first commits six clips and distinct sample blocks, then
+interrupts replacement of the last two clips at every VFS effect. Earlier clips
+must remain byte-exact, the later document must be old or completely new, and a
+fresh repeated edit must converge after reopening.
 
 `fork-video-clip-mute` owns the individual clip menu, repeated/no-op requests,
 canceled menus, Undo/Redo, split and joined properties, save/reopen, preview and

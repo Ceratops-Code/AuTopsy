@@ -25,6 +25,7 @@ Owner: AuTopsy maintainers.
     {"path": "src/video/CreateVideoTrack.cpp", "role": "implemented native track and persistence adapter"},
     {"path": "src/clip-groups/LinkMediaClips.cpp", "role": "implemented mixed-media editing adapter"},
     {"path": "src/clip-groups/SelectMediaClips.h", "role": "host-free temporary move-selection policy"},
+    {"path": "src/recording/CreateCursorCapture.cpp", "role": "native adapter binding recording writes to one pending clip"},
     {"path": "src/video/TestVideoPlayback.cpp", "role": "independent behavior evidence"},
     {"path": "src/video/TestVideoEdits.cpp", "role": "dedicated planner behavior evidence"},
     {"path": "src/video/TestVideoComposition.cpp", "role": "dedicated composition behavior evidence"},
@@ -45,7 +46,7 @@ Owner: AuTopsy maintainers.
     "interfaces": {"heading": "8. Adapter and rendering contracts", "status": "documented"},
     "protection": {"heading": "9. Failure containment and owned files", "status": "documented"},
     "decisions": {"heading": "4. Strategy and decisions", "status": "documented"},
-    "quality": {"heading": "11. Quality targets", "status": "unverified", "reason": "Targets are proposed; the listed performance, long-run and future-operation measurements have not been completed."},
+  "quality": {"heading": "11. Quality targets", "status": "unverified", "reason": "Short machine-scoped preview measurements passed; hours-long use, other hardware and future-operation targets remain unmeasured."},
     "risks": {"heading": "13. Risks and remaining decisions", "status": "documented"},
     "glossary": {"heading": "14. Glossary and references", "status": "documented"},
     "verification": {"heading": "12. Behavior evidence and delivery", "status": "documented"},
@@ -319,6 +320,14 @@ sample-aligned stop is the earliest following clip or earlier selection end.
 No following boundary means open-ended recording. A new capture interval is
 inserted only into the pending track copy; a device-start failure cannot insert
 an empty clip into the original. Punch-and-roll keeps its existing adapter path.
+`CreateCursorCapture` implements the existing `RecordableSequence` interface and
+pins the pending track and its newly created interval through the audio worker's
+final flush. Append, flush and dropout repair address that interval directly;
+they cannot append to the track's later rightmost clip or shift a neighbor.
+The pending-track owner still controls publication and cancellation. This
+adapter repairs the middle-gap defect exposed by physical capture. The opt-in
+native case passed repeated full/early-stop recording and Undo/Redo with the
+original clip geometry and generated sound unchanged, followed by normal exit.
 Pure `cursor-recording::` cases exercise range/rate rejection, complete-sample
 boundaries, multiple capture tracks and repeated requests without a microphone.
 
@@ -1136,6 +1145,27 @@ baseline; new transport/visibility acceptance belongs to each current executable
 named receipts. No NVIDIA hardware result is available. Document mechanics do
 not establish implementation quality.
 
+The coverage expansion adds separate native identities for VFR export, encoder
+failure boundaries, sustained preview and opt-in physical recording. VFR footage
+uses actual alternating presentation intervals plus independent sound/flash
+cues. The preview target uses 32 linked clips at a six-hour offset for 60--240
+seconds, with live clock/resource measurements and a bounded final timing window.
+The capture case repeats full and early-stop recording, checks original clips
+and sound, and exercises Undo/Redo without recapturing. Its private microphone
+project and samples are deleted only after the owned process stops. Default CI
+does not capture; a zero-correction mono MME pass does not cover other devices,
+hosts, stereo or latency compensation. Real NVIDIA encoding remains conditional
+on a successful device probe; advertised encoder names are insufficient evidence.
+All four scoped native cases passed on one Windows host. The 180-second preview
+run completed 13 loop wraps with no reported dropped frames, about 17.5 MiB
+private-memory growth and four extra handles. Drift p95 in the final 256 timing
+samples was 0.0343 seconds. These results do not establish hours-long stability,
+other hardware, or complete exact-PTS editing support. The NVIDIA probe could
+not load its driver; only the unavailable-encoder rejection path passed here.
+The storage power-cut model now preserves several acknowledged edits while a
+later edit is interrupted; concurrent checkpoint scheduling and actual firmware
+remain separate limits.
+
 The urgent general Undo/Redo fix is built separately from the new core foundation:
 source `d43451e1fddfd039eb576b1dd88d30c11fae3927`, installer SHA-256
 `8076e62b3b04165d1e1749dd1b6fa3c8b2e21919527823f6504f91f3df73105e`.
@@ -1198,8 +1228,10 @@ require the applicable approval before creation.
   publication does not claim they are fixed or that signing sponsorship exists.
 - **Shipping cleanup:** the lifecycle helper removed the active task workspace and
   its temporary drafts after publication. The workspace was recreated from shipped
-  main. Helper ownership/retention repair belongs to shared tooling, not the video
-  kernel; do not rely on temporary drafts as the only copy of authoritative docs.
+  main. A shared-tooling source repair now automatically retains the requesting
+  linked worktree; focused repeated/interrupted shipping cases passed. It remains
+  separate from the installed lifecycle runtime until explicitly promoted and
+  deployed. Do not rely on temporary drafts as the only copy of authoritative docs.
 
 ## 14. Glossary and references
 

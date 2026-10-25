@@ -76,6 +76,7 @@
 #include <cstdio>
 #include <iomanip>
 #include <locale>
+#include <limits>
 #include <memory>
 #include <map>
 #include <optional>
@@ -1129,10 +1130,17 @@ public:
       visitor.Define(mFileName, wxT("Filename"), wxString{});
       visitor.Define(mOverwrite, wxT("Overwrite"), false);
       visitor.Define(mPreset, wxT("Preset"), wxString{"auto"});
-      visitor.Define(mWidth, wxT("Width"), 0, 0, 16384);
-      visitor.Define(mHeight, wxT("Height"), 0, 0, 16384);
-      visitor.Define(mFrameRate, wxT("FrameRate"), 0.0, 0.0, 1000.0);
-      visitor.Define(mQuality, wxT("Quality"), 23, 0, 51);
+      // Keep rejected values for the owned policy below. The inherited loader
+      // offers defaults in a modal dialog for out-of-range numeric settings;
+      // a scripted export must instead fail without changing its destination.
+      visitor.Define(mWidth, wxT("Width"), 0,
+         std::numeric_limits<int>::lowest(), std::numeric_limits<int>::max());
+      visitor.Define(mHeight, wxT("Height"), 0,
+         std::numeric_limits<int>::lowest(), std::numeric_limits<int>::max());
+      visitor.Define(mFrameRate, wxT("FrameRate"), 0.0,
+         std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max());
+      visitor.Define(mQuality, wxT("Quality"), 23,
+         std::numeric_limits<int>::lowest(), std::numeric_limits<int>::max());
       return true;
    }
    bool VisitSettings(SettingsVisitor &visitor) override { return Settings(visitor); }
@@ -1169,6 +1177,8 @@ public:
          return false;
       }
       try {
+          VideoExport::RequireUsableExportSettings(
+             {Utf8(mPreset), mWidth, mHeight, mFrameRate, mQuality});
           auto effects = VideoEditing::PrepareProjectVideoExport(context.project, VideoTimeline::GetProjectVisibleVideoLayers(context.project),
              VideoTimeline::GetProjectVideoDuration(context.project),
              {mWidth, mHeight, 0, mFrameRate > 0 ? mFrameRate : timeline.frameRate, true},

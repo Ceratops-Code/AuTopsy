@@ -213,6 +213,22 @@ media and the owned test process.
 Preview tests generate their own neutral 16-second colour-pattern video and
 tone; personal video inputs are not accepted. `fork-fixtures` checks that media
 without opening AuTopsy.
+The native case catalogue belongs to `test_fork_features.py`; CMake reads it
+through `--list-native-cases`, so adding a scenario does not rebuild the editor.
+`fork-video-vfr-export` checks real alternating frame durations with independent
+flash/click cues, split seams, crop and repeated decoded exports.
+`fork-video-encoder-boundaries` checks failed requests without overwriting an
+existing destination. It probes actual NVENC use: an unavailable driver earns
+only rejection/cleanup coverage, never a hardware-encoding pass.
+`fork-preview-soak` targets sustained playback with 32 linked clips and a
+six-hour timeline offset, measuring clock response, loop continuity, memory,
+handles and the retained playback timing samples. These machine-specific
+measurements are separate from the portable models.
+Physical capture is opt-in: `fork-cursor-recording` is listed only when
+`AUTOPSY_TEST_RECORDING_DEVICE` names an exact input device. It checks gap limits,
+early stop, repeated capture and Undo/Redo. The harness closes the private editor
+before deleting the captured project, samples and SQLite companions; only device
+capabilities and clip geometry enter its receipt. See [BUILDING.md](BUILDING.md).
 `fork-project-compatibility` separately exercises a private stock Audacity 3
 consumer with generated projects and compares their rendered audio. See
 [BUILDING.md](BUILDING.md) for its explicit consumer input.

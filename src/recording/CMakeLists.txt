@@ -1,7 +1,8 @@
 # Pure policy checks are shared by the application and affected-test runner.
 set(_recording_tests PlanCursorRecording.cpp TestCursorRecording.cpp)
 if(TARGET Audacity)
-   target_sources(Audacity PRIVATE PlanCursorRecording.h PlanCursorRecording.cpp)
+   target_sources(Audacity PRIVATE PlanCursorRecording.h PlanCursorRecording.cpp
+      CreateCursorCapture.h CreateCursorCapture.cpp)
    add_unit_test(NAME cursor-recording SOURCES ${_recording_tests})
 else()
    add_executable(cursor-recording-test ${_recording_tests} ../../tests/Catch2Main.cpp)

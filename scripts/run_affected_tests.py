@@ -90,6 +90,7 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/recording/CreateCursorCapture.*",
     "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*",
     "src/media/CollectProjectMedia.*",
     "scripts/piped-work/test_beginner_edits.py",
@@ -146,7 +147,7 @@ INSTALLER_NATIVE_GROUPS = (
         "src/clip-groups/GroupAudioClips.*", "src/clip-groups/LinkMediaClips.*",
         "src/tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp",
         "scripts/piped-work/test_beginner_edits.py")),
-    (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport"), (
+    (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport", "preview-soak"), (
         "src/video/ShowVideoPreview.cpp", "src/video/PlayVideoMedia.*", "src/video/PrepareVideoPreview.*",
         "src/video/ChoosePreviewQuality.*", "src/video/SyncVideoPlayback.*",
         "scripts/piped-work/test_preview_controls.py")),
@@ -161,7 +162,7 @@ INSTALLER_NATIVE_GROUPS = (
       "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage", "video-clip-storage"), (
         "src/video/EditVideoComposition.*", "src/video/ShowVideoCrop.*", "src/video/EvaluateVideoTimeline.*",
         "src/video/RenderVideoComposition.*", "src/video/PlanVideoExport.*")),
-    (("clip-actions", "video-clip-export", "edit-cursor-line", "video-export-timing"), (
+    (("clip-actions", "video-clip-export", "edit-cursor-line", "video-export-timing", "video-vfr-export", "video-encoder-boundaries"), (
         "src/clip-groups/OpenClipActions.*", "src/video/ExportVideoMix.*", "src/video/ChooseVideoExport.*",
         "src/export/ExportAudioDialog.*", "src/tracks/ui/EditCursorOverlay.cpp",
         "src/tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp",
@@ -175,6 +176,7 @@ INSTALLER_NATIVE_GROUPS = (
         "libraries/lib-project-history/*", "libraries/lib-viewport/*", "src/toolbars/ControlToolBar.*")),
 )
 INSTALLER_SHARED_INPUTS = (
+    "src/recording/CreateCursorCapture.*",
     "src/commands/ScriptCommandRelay.cpp",
     "CMakeLists.txt", "CMakePresets.json", "src/video/CMakeLists.txt", "src/menus/*.cpp",
     "src/commands/GetInfoCommand.cpp", "src/ProjectAudioManager.*", "src/TrackPanel.cpp",

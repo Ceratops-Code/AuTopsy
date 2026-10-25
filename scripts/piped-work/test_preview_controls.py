@@ -283,6 +283,143 @@ def check_preview_controls(client, root):
     client.file("SaveProject2", root / "_preview-controls.aup3")
 
 
+def preview_soak_seconds():
+    """Keep a requested soak finite and bind its length to the native receipt."""
+    import math
+    import os
+
+    seconds = float(os.environ.get("AUTOPSY_PREVIEW_SOAK_SECONDS", "180"))
+    if not math.isfinite(seconds) or not 60 <= seconds <= 240:
+        raise ValueError("Preview soak duration must be between 60 and 240 seconds.")
+    return seconds
+
+
+def read_owned_process_resources(pid):
+    """Read private bytes and handles from the test PID; always close our handle."""
+    from ctypes import wintypes as w
+
+    class MemoryCounters(ctypes.Structure):
+        _fields_ = [("cb", w.DWORD), ("PageFaultCount", w.DWORD), *[
+            (name, ctypes.c_size_t) for name in (
+                "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
+                "PagefileUsage", "PeakPagefileUsage", "PrivateUsage")]]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    memory_api = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel.OpenProcess.argtypes, kernel.OpenProcess.restype = [w.DWORD, w.BOOL, w.DWORD], w.HANDLE
+    kernel.CloseHandle.argtypes = [w.HANDLE]
+    kernel.GetProcessHandleCount.argtypes = [w.HANDLE, ctypes.POINTER(w.DWORD)]
+    memory_api.GetProcessMemoryInfo.argtypes = [w.HANDLE, ctypes.POINTER(MemoryCounters), w.DWORD]
+    handle = kernel.OpenProcess(0x410, False, pid)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        memory, handles = MemoryCounters(), w.DWORD()
+        memory.cb = ctypes.sizeof(memory)
+        if not memory_api.GetProcessMemoryInfo(handle, ctypes.byref(memory), memory.cb):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not kernel.GetProcessHandleCount(handle, ctypes.byref(handles)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return {"private_bytes": int(memory.PrivateUsage), "handles": int(handles.value)}
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def check_preview_soak(client, root):
+    """Measure sustained proxy playback, loop sync, response time and resource growth.
+
+    This is a machine-scoped smoke bound, not a promise about every long project.
+    Keep detailed numbers in the native result so slow or unsupported hardware
+    cannot acquire an unmeasured performance claim from a portable model pass.
+    """
+    import json
+    import os
+
+    seconds = preview_soak_seconds()
+    client.file("ImportVideo", root / "source.mp4")
+    client.send("SelectAll")
+    client.send("Copy")
+    for index in range(1, 32):
+        at = index * 20
+        client.send(f"SelectTime: Start={at} End={at}")
+        client.send("Paste")
+    clips = client.data("GetVideoClips")["clips"]
+    assert len(clips) == 32, clips
+    last = max(clips, key=lambda clip: clip["start"])
+    origin = 6 * 60 * 60
+    client.send(f'SetClipProperties: Track={last["track"]} At={last["start"] + 0.5} Start={origin}')
+    client.send(f"SelectTime: Start={origin + 1} End={origin + 15}")
+    info, buttons = owned_preview_controls(client)
+    audio = client.data("GetInfo: Type=Clips Format=JSON")
+    assert len(audio) == 32 and any(abs(clip["start"] - origin) < 0.001 for clip in audio), audio
+    video = [(clip["id"], clip["start"], clip["end"]) for clip in client.data("GetVideoClips")["clips"]]
+    status = int(info["previewStatusHandle"])
+    windows = PreviewNativeWindows()
+    press_preview_button(int(info["previewLoopHandle"]))
+    press_preview_button(buttons["play"])
+    wait_for_native_state(lambda: preview_project_seconds(status) > origin + 1.2,
+                          "soak audio clock starts")
+    time.sleep(3)  # Exclude first decoder/renderer allocation from growth limits.
+    pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    baseline = read_owned_process_resources(pid)
+    started, samples = time.monotonic(), []
+    previous, wraps = preview_project_seconds(status), 0
+    try:
+        while time.monotonic() - started < seconds:
+            call_started = time.monotonic()
+            # Configured scripting commands stop audio before executing. Read
+            # the real status HWND while live, then inspect the application's
+            # bounded timing samples after stopping through its normal button.
+            current = preview_project_seconds(status)
+            response = time.monotonic() - call_started
+            assert windows.enabled(buttons["pause"]) and windows.visible(int(info["previewSurfaceHandle"]))
+            assert origin + 1 <= current <= origin + 15, current
+            assert response < 2, f"Preview command stalled for {response:.3f}s."
+            if current < previous - 1:
+                wraps += 1
+            samples.append({"elapsed": time.monotonic() - started,
+                            "audio": current - origin,
+                            "response": response, **read_owned_process_resources(pid)})
+            previous = current
+            time.sleep(0.25)
+    finally:
+        press_preview_button(buttons["stop"])
+        loop = client.data("GetVideoPreviewInfo")
+        if loop["loopActive"]:
+            press_preview_button(int(info["previewLoopHandle"]))
+    latency = sorted(row["response"] for row in samples)
+    recent = loop["samples"]
+    drift = sorted(abs(row["expectedPosition"] - row["position"]) for row in recent
+                   if not row["paused"] and 1.5 < row["audioPosition"] - origin < 14.5)
+    drops = max(0, loop["droppedFrames"] - info["droppedFrames"])
+    decoder_drops = max(0, loop["decoderDroppedFrames"] - info["decoderDroppedFrames"])
+    assert drift and wraps >= int(seconds / 14) - 1, "Playback did not sustain the selected loop."
+    observed = {
+        "seconds": time.monotonic() - started, "samples": len(samples), "wraps": wraps,
+        "video_clips": len(clips), "timeline_origin_seconds": origin,
+        "timing_sample_count": len(recent), "timing_scope": "last bounded playback sample window",
+        "response_p95_seconds": latency[int((len(latency) - 1) * 0.95)],
+        "drift_p95_seconds": drift[int((len(drift) - 1) * 0.95)],
+        "dropped_frames": drops, "decoder_dropped_frames": decoder_drops,
+        "private_growth_bytes": max(row["private_bytes"] for row in samples) - baseline["private_bytes"],
+        "handle_growth": max(row["handles"] for row in samples) - baseline["handles"],
+    }
+    (root / "_playback.json").write_text(json.dumps(observed, indent=2), encoding="utf-8")
+    assert observed["response_p95_seconds"] < 0.5, observed
+    assert observed["drift_p95_seconds"] < 0.15, observed
+    assert drops + decoder_drops <= seconds * 30 * 0.02 + 3, observed
+    assert observed["private_growth_bytes"] <= 128 * 1024 * 1024, observed
+    assert observed["handle_growth"] <= 64, observed
+    assert client.data("GetInfo: Type=Clips Format=JSON") == audio
+    assert [(clip["id"], clip["start"], clip["end"]) for clip in client.data("GetVideoClips")["clips"]] == video
+    for _ in range(2):
+        press_preview_button(buttons["play"])
+        wait_for_native_state(lambda: windows.enabled(buttons["pause"]), "restart after soak")
+        press_preview_button(buttons["stop"])
+    client.file("SaveProject2", root / "_soak.aup3")
+
+
 def check_video_cursor(client, root):
     """Single clicks retain exact pressed time after ranges and viewport changes."""
     client.file("ImportVideo", root / "source.mp4")

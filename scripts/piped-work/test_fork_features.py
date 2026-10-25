@@ -1036,6 +1036,18 @@ def worker(args, root):
         check_video_crop(client, root, args.ffmpeg, args.ffprobe, controls_only=args.case == "video-crop-controls")
     elif args.case == "video-export-timing":
         check_video_export_timing(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "cursor-recording":
+        from test_clip_actions import check_cursor_recording
+        check_cursor_recording(client, root, args.ffmpeg)
+    elif args.case == "preview-soak":
+        from test_preview_controls import check_preview_soak
+        check_preview_soak(client, root)
+    elif args.case == "video-encoder-boundaries":
+        from test_video_export_timing import check_video_encoder_boundaries
+        check_video_encoder_boundaries(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "video-vfr-export":
+        from test_video_export_timing import check_variable_frame_rate_export
+        check_variable_frame_rate_export(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-visibility":
         check_video_visibility(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-clip-mute":
@@ -1177,7 +1189,7 @@ def native_test_inputs(args, executable, module, display):
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
-    if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line"):
+    if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line", "cursor-recording"):
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "track-groups":
@@ -1188,12 +1200,21 @@ def native_test_inputs(args, executable, module, display):
         inputs["beginner_edits_sha256"] = sha(here / "test_beginner_edits.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
-    if args.case == "video-export-timing":
+    if args.case in ("video-export-timing", "video-vfr-export", "video-encoder-boundaries"):
         inputs["export_timing_sha256"] = sha(here / "test_video_export_timing.py")
-    if args.case in ("preview-controls", "preview-quality", "video-cursor"):
+    if args.case in ("preview-controls", "preview-quality", "video-cursor", "preview-soak"):
         inputs["preview_controls_sha256"] = sha(here / "test_preview_controls.py")
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+    if args.case == "preview-soak":
+        from test_preview_controls import preview_soak_seconds
+        inputs["execution_scope"]["soak_seconds"] = preview_soak_seconds()
+    if args.case == "cursor-recording":
+        from test_clip_actions import require_recording_device
+        inputs["execution_scope"]["recording_device"] = require_recording_device()
+    if args.case == "video-encoder-boundaries":
+        from test_video_export_timing import video_hardware_scope
+        inputs["execution_scope"]["video_hardware"] = video_hardware_scope()
     return inputs
 
 
@@ -1371,36 +1392,58 @@ def run_project_compatibility_checks(work_root, case, read_inputs, execute, root
 
 
 
+def remove_private_capture_audio(root, *, process_stopped):
+    """Delete only this stopped case's captured samples, including SQLite scratch.
+
+    A repeated call after an interrupted deletion removes only what remains.
+    The case marker and unrelated fixtures/results are never cleanup targets.
+    """
+    if not process_stopped:
+        raise RuntimeError("Captured samples cannot be removed while the owned process is live.")
+    marker = root / "_owner"
+    if (root.resolve() != root.absolute() or marker.is_symlink() or not marker.is_file()
+            or marker.read_text() != "AuTopsy behavior tests 1"):
+        raise RuntimeError("Captured sample cleanup requires this case's unchanged owner marker.")
+    audio = root / "_audio_temp"
+    if not audio.exists():
+        return
+    if audio.resolve() != audio.absolute() or not audio.is_dir():
+        raise RuntimeError("Captured sample cleanup refuses a redirected or foreign audio directory.")
+    shutil.rmtree(audio)
+
+
+NATIVE_CASES = (
+    *BEGINNER_VIDEO_CASES,
+    "groups",
+    "tracks",
+    "history-view",
+    "transport-toolbar",
+    "preview-navigation",
+    "preview-controls", "preview-quality", "video-cursor", "preview-soak",
+    "track-groups",
+    "clip-actions", "clip-selection", "video-clip-export", "video-clip-mute", "edit-cursor-line",
+    "project-compatibility",
+    "video",
+    "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
+    "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
+    "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "video-export-timing", "video-vfr-export", "video-encoder-boundaries",
+    "media",
+    "preview",
+    "branding",
+    "fixtures",
+)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--work-root", type=Path)
-    parser.add_argument(
-        "--case",
-        choices=(
-            *BEGINNER_VIDEO_CASES,
-            "groups",
-            "tracks",
-            "history-view",
-            "transport-toolbar",
-            "preview-navigation",
-            "preview-controls", "preview-quality", "video-cursor",
-            "track-groups",
-            "clip-actions", "clip-selection", "video-clip-export", "video-clip-mute", "edit-cursor-line",
-            "project-compatibility",
-            "video",
-            "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
-            "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
-            "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "video-export-timing",
-            "media",
-            "preview",
-            "branding",
-            "display-policy",
-            "worker-lifecycle",
-            "fixtures",
-        ),
-        required=True,
-    )
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--case", choices=(*NATIVE_CASES, "cursor-recording", "display-policy", "worker-lifecycle"))
+    selection.add_argument("--list-native-cases", action="store_true",
+                           help="Print the CTest case catalogue without opening an application.")
+    selection.add_argument("--list-recording-devices", action="store_true",
+                           help="Read available MME input names without capturing audio.")
     parser.add_argument(
         "--interrupt-cache",
         choices=("before-publish", "after-publish"),
@@ -1411,6 +1454,22 @@ def main():
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--reject-display", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.list_recording_devices:
+        if os.name != "nt":
+            parser.error("MME input discovery requires Windows.")
+        from test_clip_actions import read_recording_devices
+        print(json.dumps(read_recording_devices()))
+        return
+    if args.list_native_cases:
+        cases = (*NATIVE_CASES, *(("cursor-recording",) if os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE") else ()))
+        print(";".join(cases))
+        return
+    if args.case == "preview-soak":
+        from test_preview_controls import preview_soak_seconds
+        preview_soak_seconds()
+    if args.case == "cursor-recording":
+        from test_clip_actions import require_recording_device
+        require_recording_device()
     if args.case == "display-policy":
         check_test_display_selection()
         return
@@ -1541,7 +1600,7 @@ def main():
                 ],
                 timeout=30,
             )
-        if args.case in ("preview", "transport-toolbar", "preview-navigation", "preview-controls", "video-cursor"):
+        if args.case in ("preview", "transport-toolbar", "preview-navigation", "preview-controls", "video-cursor", "preview-soak"):
             write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
         version_numbers = executable_version(executable)
         profile = executable.parent / "Portable Settings"
@@ -1571,11 +1630,17 @@ def main():
             f"Normal_X={left + 16}\nNormal_Y={top + 16}\nNormal_Width={width}\nNormal_Height={height}\n"
             "Maximized=0\nIconized=0\n"
         )
+        capture_configuration = ""
+        if args.case == "cursor-recording":
+            from test_clip_actions import require_recording_device
+            device = require_recording_device()
+            capture_configuration = (f"[AudioIO]\nHost=MME\nRecordingDevice={device['name']}\n"
+                "RecordChannels=1\nLatencyCorrection=0\nSWPlaythrough=0\nDuplex=0\n")
         (profile / "autopsy.cfg").write_text(
             f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
             f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
             "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
-            f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement,
+            f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement + capture_configuration,
             encoding="utf-8",
         )
         environment = dict(
@@ -1755,6 +1820,8 @@ def main():
                 if app.poll() is None:
                     app.terminate()
                     app.wait(timeout=20)
+                if args.case == "cursor-recording":
+                    remove_private_capture_audio(root, process_stopped=app.poll() is not None)
                 if profile_owner.is_file() and profile_owner.read_text() == str(
                     args.work_root.resolve()
                 ):

@@ -23,6 +23,88 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_invalid_soak_duration_blocks_before_gui_or_file_work(self) -> None:
+        for value in ("0", "59", "241", "nan", "inf", "not-a-duration"):
+            with self.subTest(value=value), patch.dict(os.environ, {"AUTOPSY_PREVIEW_SOAK_SECONDS": value}), \
+                 patch.object(sys, "argv", ["test_fork_features.py", "--case", "preview-soak"]), \
+                 patch.object(native, "connected_test_displays", side_effect=AssertionError("opened the desktop")):
+                with self.assertRaises(ValueError):
+                    native.main()
+
+    def test_capture_needs_explicit_device_before_reading_hardware(self) -> None:
+        import test_clip_actions
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTOPSY_TEST_RECORDING_DEVICE", None)
+            with patch.object(test_clip_actions, "read_recording_devices", side_effect=AssertionError("read hardware")), \
+                 self.assertRaisesRegex(RuntimeError, "AUTOPSY_TEST_RECORDING_DEVICE"):
+                test_clip_actions.require_recording_device()
+
+    def test_native_catalogue_is_side_effect_free_and_capture_is_explicit(self) -> None:
+        for device in (None, "explicit test microphone"):
+            with self.subTest(device=device), patch.dict(os.environ, {}, clear=False):
+                if device is None:
+                    os.environ.pop("AUTOPSY_TEST_RECORDING_DEVICE", None)
+                else:
+                    os.environ["AUTOPSY_TEST_RECORDING_DEVICE"] = device
+                output = io.StringIO()
+                with patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
+                     patch.object(native, "worker", side_effect=AssertionError("opened a worker")), \
+                     patch.object(native, "connected_test_displays", side_effect=AssertionError("opened the desktop")), \
+                     patch.object(native.subprocess, "Popen", side_effect=AssertionError("started a process")), \
+                     redirect_stdout(output):
+                    native.main()
+                names = output.getvalue().strip().split(";")
+                self.assertEqual(len(names), len(set(names)))
+                self.assertTrue(all(re.fullmatch(r"[a-z0-9-]+", name) for name in names))
+                self.assertTrue({"preview-soak", "video-vfr-export", "video-encoder-boundaries"} <= set(names))
+                self.assertEqual("cursor-recording" in names, device is not None)
+                self.assertNotIn("display-policy", names)
+
+    def test_capture_audio_cleanup_repeats_after_interruption_and_preserves_other_outputs(self) -> None:
+        for boundary in ("before", "after"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory(prefix="_capture-cleanup-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as raw:
+                root = Path(raw)
+                (root / "_owner").write_text("AuTopsy behavior tests 1")
+                keep = root / "source.wav"
+                keep.write_bytes(b"generated fixture")
+                audio = root / "_audio_temp"
+                audio.mkdir()
+                for name in ("capture.aup3", "capture.aup3-wal", "capture.aup3-shm"):
+                    (audio / name).write_bytes(b"private sample pages")
+                original = native.shutil.rmtree
+
+                def interrupted(path, *args, audio=audio, boundary=boundary, original=original, **kwargs):
+                    self.assertEqual(path, audio)
+                    if boundary == "after":
+                        original(path, *args, **kwargs)
+                    raise OSError("interrupted capture cleanup")
+
+                with patch.object(native.shutil, "rmtree", interrupted), self.assertRaises(OSError):
+                    native.remove_private_capture_audio(root, process_stopped=True)
+                self.assertEqual(audio.exists(), boundary == "before")
+                for _ in range(2):
+                    native.remove_private_capture_audio(root, process_stopped=True)
+                self.assertFalse(audio.exists())
+                self.assertEqual(keep.read_bytes(), b"generated fixture")
+                self.assertTrue((root / "_owner").is_file())
+
+    def test_capture_cleanup_rejects_live_or_foreign_work_before_deletion(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="_capture-guard-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as raw:
+            root = Path(raw)
+            audio = root / "_audio_temp"
+            audio.mkdir()
+            keep = audio / "capture.aup3"
+            keep.write_bytes(b"must remain")
+            marker = root / "_owner"
+            marker.write_text("AuTopsy behavior tests 1")
+            with self.assertRaisesRegex(RuntimeError, "live"):
+                native.remove_private_capture_audio(root, process_stopped=False)
+            marker.write_text("another owner")
+            with self.assertRaisesRegex(RuntimeError, "owner"):
+                native.remove_private_capture_audio(root, process_stopped=True)
+            self.assertEqual(keep.read_bytes(), b"must remain")
+
     @staticmethod
     def native_catalogue(executable: Path) -> list[dict[str, Any]]:
         names = set(runner.INSTALLER_BASELINE_TESTS)
@@ -35,7 +117,7 @@ class SelectionTests(unittest.TestCase):
         baseline = set(runner.INSTALLER_BASELINE_TESTS)
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
-                               "fork-video-cursor", "fork-video-transport"}
+                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),

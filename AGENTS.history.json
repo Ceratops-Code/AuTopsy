@@ -44,6 +44,14 @@
       "decision": "Require ordinary AuTopsy project interoperability with supported Audacity releases as features evolve, keeping feature state optional to stock readers and checking affected storage or supported-consumer changes.",
       "reason": "The user requested an enduring local compatibility rule. Optional native XML extensions and the stock Audacity 3.7.8 interoperability case demonstrate feasibility; the rule adds future change discipline without claiming control over unreleased readers.",
       "regression": "Preserve every existing rule, including full requested functionality and narrow native adapters. Reuse the focused interoperability suite for changed persistence or supported consumers, without testing unrelated changes again or pinning a branch or consumer version."
+    },
+    {
+      "rules": [
+        "FORK-02"
+      ],
+      "decision": "Remove the fixed upstream branch from FORK-02 and identify AuTopsy as the coupling-repair target. Supersede only the audacity3 branch binding in the earlier decision 'Make full requested functionality explicit in FORK-01, retain native editing integration, extend FORK-02 to independent feature and audacity3 adapter tests with plausible upstream changes, and add FORK-03 for semantic targeting and clear missing or ambiguous contracts.' Preserve its other obligations.",
+      "reason": "An update source is repository configuration, not a durable instruction identity. Independent owned behavior and separate supported-revision adapter tests still expose changes that require repairs in our fork.",
+      "regression": "Upstream branch changes require no rule edit. Full requested functionality, independent feature tests, separate adapter tests with plausible upstream changes, semantic targeting and ordinary AUP3 interoperability remain mandatory. Official Audacity is not a repair target."
     }
   ]
 }

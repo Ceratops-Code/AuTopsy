@@ -3,7 +3,8 @@
 Dialogs are identified by caption and their fields by adjacent labels. Only this
 worker's PID is touched, and the shared display/input guards remain in force.
 All outputs belong to the harness case directory and its existing cleanup owner.
-No test opens a microphone: recording-gap boundaries live in the pure C++ suite.
+Physical capture is a separate opt-in hardware case: its project lives only in
+the disposable audio directory and no captured samples are retained as fixtures.
 """
 import array
 import ctypes
@@ -187,6 +188,100 @@ def selected_audio(client, root, name, track, start, end, ffmpeg):
     client.file("Export2", target, "NumChannels=1")
     return array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(target),
                                          "-ar", "8000", "-ac", "1", "-f", "f32le", "pipe:1"], timeout=30))
+
+
+def read_recording_devices():
+    """Query MME input capabilities without opening or recording from a device."""
+    class InputCaps(ctypes.Structure):
+        _fields_ = [("manufacturer", w.WORD), ("product", w.WORD), ("driver", w.DWORD),
+                    ("name", w.WCHAR * 32), ("formats", w.DWORD),
+                    ("channels", w.WORD), ("reserved", w.WORD)]
+
+    api = ctypes.WinDLL("winmm", use_last_error=True)
+    api.waveInGetNumDevs.restype = w.UINT
+    api.waveInGetDevCapsW.argtypes = [ctypes.c_size_t, ctypes.POINTER(InputCaps), w.UINT]
+    api.waveInGetDevCapsW.restype = w.UINT
+    result = []
+    for index in range(api.waveInGetNumDevs()):
+        caps = InputCaps()
+        error = api.waveInGetDevCapsW(index, ctypes.byref(caps), ctypes.sizeof(caps))
+        if error:
+            raise RuntimeError(f"Reading MME input {index} failed with multimedia status {error}.")
+        result.append({"name": caps.name, "index": index, "channels": int(caps.channels),
+                       "driver": int(caps.driver), "manufacturer": int(caps.manufacturer),
+                       "product": int(caps.product), "formats": int(caps.formats)})
+    return result
+
+
+def require_recording_device():
+    """Bind hardware acceptance to one explicitly selected, currently present input."""
+    requested = os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE", "")
+    if not requested or any(character in requested for character in "\r\n"):
+        raise RuntimeError("Set AUTOPSY_TEST_RECORDING_DEVICE to one exact, available MME input name.")
+    selected = [device for device in read_recording_devices() if device["name"] == requested]
+    if len(selected) != 1 or not selected[0]["channels"]:
+        raise RuntimeError("Set AUTOPSY_TEST_RECORDING_DEVICE to one exact, available MME input name.")
+    return selected[0]
+
+
+def check_cursor_recording(client, root, ffmpeg):
+    """Capture in a bounded gap, interrupt it, and repeat Undo/Redo without recapture.
+
+    The harness deletes the entire private audio directory after closing its
+    process, including the project, autosave and SQLite companions. Only geometry
+    and device capabilities enter the receipt. Only original generated ranges
+    are selected for sound comparisons. Keep every post-capture audio comparison
+    in that disposable directory too: even a regression writing into an original
+    range must not leave microphone samples in retained test fixtures.
+    """
+    device = require_recording_device()
+    selected = client.send('GetPreference: Name="/AudioIO/RecordingDevice"')
+    assert device["name"] in selected, (device, selected)
+    client.file("Import2", root / "tone-a.wav")
+    imported = client.data("GetInfo: Type=Clips Format=JSON")
+    duration = imported[0]["end"] - imported[0]["start"]
+    left, right = duration / 4, duration * 3 / 4
+    cursor = left + min(0.1, (right - left) / 4)
+    client.send(f"SelectTime: Start={left} End={right}")
+    client.send("SplitDelete")
+    baseline = client.data("GetInfo: Type=Clips Format=JSON")
+    assert len(baseline) == 2, baseline
+    original_sound = [selected_audio(client, root, f"_original-{side}.wav", 0, start, end, ffmpeg)
+                      for side, start, end in (("left", 0, left), ("right", right, duration))]
+    client.file("SaveProject2", root / "_audio_temp" / "_cursor-recording.aup3")
+    captures = []
+    for interrupted in (False, True, False, True):
+        client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+        client.send(f"SelectTime: Start={cursor} End={cursor}")
+        client.send("Record1stChoice")
+        if interrupted:
+            time.sleep(min(0.12, (right - cursor) / 3))
+            client.send("Stop")
+        else:
+            time.sleep(right - cursor + 0.6)
+        clips = client.data("GetInfo: Type=Clips Format=JSON")
+        added = [clip for clip in clips if abs(clip["start"] - cursor) <= 2 / 44100]
+        if interrupted and clips == baseline:
+            captures.append({"interrupted": True, "no_sample_published": True})
+            continue
+        assert len(clips) == 3 and len(added) == 1, (baseline, clips)
+        clip = added[0]
+        assert abs(clip["start"] - cursor) <= 2 / 44100, (cursor, clip)
+        assert cursor < clip["end"] <= right + 2 / 44100, (right, clip)
+        if not interrupted:
+            assert abs(clip["end"] - right) <= 2 / 44100, (right, clip)
+        assert all(any((original["start"], original["end"]) == (row["start"], row["end"])
+                       for row in clips) for original in baseline), (baseline, clips)
+        for expected, (side, start, end) in zip(original_sound,
+                (("left", 0, left), ("right", right, duration)), strict=True):
+            assert selected_audio(client, root / "_audio_temp", f"_after-{side}.wav", 0, start, end, ffmpeg) == expected
+        captures.append({"interrupted": interrupted, "start": clip["start"], "end": clip["end"]})
+        client.send("Undo")
+        assert client.data("GetInfo: Type=Clips Format=JSON") == baseline
+        client.send("Redo")
+        assert client.data("GetInfo: Type=Clips Format=JSON") == clips
+        client.send("Undo")
+    (root / "_playback.json").write_text(json.dumps({"device": device, "captures": captures}), encoding="utf-8")
 
 
 def check_audio_clip_actions(client, root, ffmpeg):
