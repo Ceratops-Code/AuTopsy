@@ -22,7 +22,7 @@ from run_fork_test_harness import (
 
 def crop_pixel_counts(rgb):
     """Classify decoded/captured fixture pixels; no source-text assumptions."""
-    counts = {"red": 0, "green": 0, "blue": 0, "white": 0}
+    counts = {"red": 0, "green": 0, "blue": 0, "white": 0, "purple": 0}
     for offset in range(0, len(rgb) - 2, 3):
         red, green, blue = rgb[offset:offset + 3]
         if min(red, green, blue) > 180:
@@ -33,6 +33,8 @@ def crop_pixel_counts(rgb):
             counts["green"] += 1
         elif blue > 160 and red < 60 and green < 60:
             counts["blue"] += 1
+        elif 60 < red < 195 and 60 < blue < 195 and green < 40:
+            counts["purple"] += 1
     return counts
 
 
@@ -320,8 +322,40 @@ def wait_for_native_state(condition, description, timeout=8):
     deadline = time.monotonic() + timeout
     while not condition():
         if time.monotonic() >= deadline:
-            raise AssertionError("Native state did not arrive: " + (description() if callable(description) else description))
+            raise AssertionError("Native state did not arrive: " + (description() if callable(description) else description)
+                                 + "; owned windows: " + str(read_owned_native_windows()))
         time.sleep(0.025)
+
+
+def read_owned_native_windows():
+    """Bound failure evidence to visible windows owned by this test process."""
+    observations: list[dict[str, object]] = []
+    pid = int(os.environ.get("AUTOPSY_OWNED_APP_PID", "0"))
+    if pid:
+        native = PreviewNativeWindows()
+        callback_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_ssize_t)
+        native.api.EnumWindows.argtypes = [callback_type, ctypes.c_ssize_t]
+        native.api.EnumChildWindows.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_ssize_t]
+        native.api.GetForegroundWindow.restype = ctypes.c_void_p
+        @callback_type
+        def collect(handle, _):
+            if native.owner(handle) == pid and native.visible(handle) and len(observations) < 12:
+                controls: list[dict[str, object]] = []
+                @callback_type
+                def child(control, _):
+                    if native.visible(control) and len(controls) < 16:
+                        text = native.caption(control)
+                        if text:
+                            controls.append({"text": text[:160], "enabled": bool(native.enabled(control))})
+                    return 1
+                native.api.EnumChildWindows(handle, child, 0)
+                observations.append({"handle": handle, "title": native.caption(handle),
+                                     "enabled": bool(native.enabled(handle)),
+                                     "foreground": native.api.GetForegroundWindow() == handle,
+                                     "controls": controls})
+            return 1
+        native.api.EnumWindows(collect, 0)
+    return observations
 
 
 class PreviewNativeWindows:
@@ -380,11 +414,47 @@ class PreviewNativeWindows:
             raise RuntimeError(f"Native WM_GETTEXT failed for HWND={handle}: {ctypes.WinError()}")
         return text.value
 
+    def active_in_thread(self, handle):
+        """Dialog activation is thread-local; foreground belongs to the desktop.
+
+        BM_CLICK requires the former. Requiring the latter unnecessarily blocks
+        owned direct messages whenever another app retains foreground focus.
+        """
+        from ctypes import wintypes as w
+        class Gui(ctypes.Structure):
+            _fields_ = [("size", w.DWORD), ("flags", w.DWORD),
+                        ("active", w.HWND), ("focus", w.HWND), ("capture", w.HWND),
+                        ("menu", w.HWND), ("move", w.HWND), ("caret", w.HWND), ("rectangle", w.RECT)]
+        assert self.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+        self.api.GetGUIThreadInfo.argtypes = [w.DWORD, ctypes.POINTER(Gui)]
+        self.api.GetGUIThreadInfo.restype = w.BOOL
+        state = Gui()
+        state.size = ctypes.sizeof(state)
+        thread = self.api.GetWindowThreadProcessId(handle, None)
+        return bool(self.api.GetGUIThreadInfo(thread, ctypes.byref(state))) and state.active == handle
+
     def click(self, handle):
         assert self.owner(handle) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
         wait_for_native_state(lambda: self.enabled(handle), f"preview button HWND={handle} enabled")
         reply = ctypes.c_size_t()
         from ctypes import wintypes as w
+        self.api.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+        kind = ctypes.create_unicode_buffer(128)
+        self.api.GetClassNameW(handle, kind, len(kind))
+        if kind.value == "Button":
+            # Dialog buttons use Windows' button command; AButton below owns a
+            # different press/release protocol. Block an inactive dialog before
+            # the effect: Windows can otherwise silently ignore BM_CLICK.
+            self.api.GetAncestor.argtypes = [w.HWND, w.UINT]
+            self.api.GetAncestor.restype = w.HWND
+            self.api.GetForegroundWindow.restype = w.HWND
+            dialog = self.api.GetAncestor(handle, 2)
+            assert self.owner(dialog) == int(os.environ["AUTOPSY_OWNED_APP_PID"])
+            wait_for_native_state(lambda: self.active_in_thread(dialog),
+                                  f"owned dialog HWND={dialog} active before button HWND={handle}")
+            if not self.api.SendMessageTimeoutW(handle, 0xF5, 0, 0, 2, 10000, ctypes.byref(reply)):
+                raise RuntimeError(f"Native dialog button click failed for HWND={handle}: {ctypes.WinError()}")
+            return
         self.api.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
         rectangle = w.RECT()
         assert self.api.GetClientRect(handle, ctypes.byref(rectangle))

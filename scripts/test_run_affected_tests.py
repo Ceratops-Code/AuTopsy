@@ -34,7 +34,8 @@ class SelectionTests(unittest.TestCase):
         catalogue = self.native_catalogue(Path("AuTopsy.exe"))
         baseline = set(runner.INSTALLER_BASELINE_TESTS)
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
-        expected = baseline | {"fork-" + name for name in runner.INSTALLER_NATIVE_GROUPS[0][0]}
+        expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
+                               "fork-video-cursor", "fork-video-transport"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
@@ -530,6 +531,50 @@ class NativeReceiptTests(unittest.TestCase):
     def execute(self, run_id, inputs):
         return {"result": "passed", "version": "fixture",
                 "observations": {"native_object_seen": True}}
+
+    def test_native_buttons_use_their_own_click_protocol_without_replaying_effects(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        import test_video_clip_edits as edits
+        for kind in ("Button", "wxWindowClassNR"):
+            def class_name(_handle, buffer, _size, name=kind):
+                buffer.value = name
+                return len(name)
+            def rectangle(_handle, pointer):
+                pointer._obj.right, pointer._obj.bottom = 80, 40
+                return True
+            active = [42]
+            def gui_state(_thread, pointer, active_window=active):
+                pointer._obj.active = active_window[0]
+                return True
+            api = SimpleNamespace(GetClassNameW=Mock(side_effect=class_name),
+                                  GetAncestor=Mock(return_value=42),
+                                  GetForegroundWindow=Mock(return_value=99),
+                                  GetWindowThreadProcessId=Mock(return_value=123),
+                                  GetGUIThreadInfo=Mock(side_effect=gui_state),
+                                  GetClientRect=Mock(side_effect=rectangle),
+                                  SendMessageTimeoutW=Mock(return_value=True))
+            window: Any = object.__new__(edits.PreviewNativeWindows)
+            window.api, window.owner, window.enabled = api, lambda _h: 123, lambda _h: True
+            with patch.dict(os.environ, {"AUTOPSY_OWNED_APP_PID": "123"}):
+                for _ in range(2):
+                    window.click(9)
+            expected = [0xF5] * 2 if kind == "Button" else [0x201, 0x202, 0x202] * 2
+            self.assertEqual([call.args[1] for call in api.SendMessageTimeoutW.call_args_list], expected)
+            if kind == "Button":
+                api.GetClientRect.assert_not_called()
+                # An inactive dialog is an unmet input precondition. It may not
+                # receive the click and then be retried as though it had failed.
+                active[0] = 99
+                api.SendMessageTimeoutW.reset_mock()
+                def ready(condition, _description):
+                    if not condition():
+                        raise RuntimeError("inactive dialog")
+                with patch.dict(os.environ, {"AUTOPSY_OWNED_APP_PID": "123"}), patch.object(edits, "wait_for_native_state", side_effect=ready):
+                    with self.assertRaisesRegex(RuntimeError, "inactive dialog"):
+                        window.click(9)
+                api.SendMessageTimeoutW.assert_not_called()
 
     def test_clip_mute_recipe_changes_prevent_reuse_of_old_fixture_results(self):
         # Exact basenames are the native runner contract, not executable fixtures.

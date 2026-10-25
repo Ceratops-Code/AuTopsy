@@ -2,7 +2,9 @@
 
 Status: current implementation plus target architecture. Native clips,
 Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
-per-clip speed, picture crop and picture mute are implemented in this branch. Embedded-layer
+per-clip speed, visual picture crop, picture mute, exact clip properties,
+gap-preserving Delete, portable media collection and picture fades are implemented
+in this branch. Embedded-layer
 geometry remains an independent foundation awaiting native controls, saved
 parent identities and pixel rendering.
 Collapsible track groups, native-size transport controls and the preview timeline
@@ -200,6 +202,12 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/RenderVideoComposition.h/.cpp` | Host-free source geometry and encoder expressions | Oriented crop projection and FFmpeg crop translation |
 | `src/video/PlanVideoExport.h/.cpp` | Host-free export frame clock and automatic canvas | Global frame windows, source sampling phase and cropped source dimensions |
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
+| `src/video/PlanVideoTransitions.h/.cpp` | Host-free opacity layers and shared frame intervals | Fades and overlaps on the same project clock as ordinary cuts |
+| `src/video/PrepareVideoEffects.h/.cpp` | Derived transition spans and project-scoped leases | Cancellable FFmpeg work shared by preview and original-quality export |
+| `src/video/EditVideoFades.h/.cpp` | Fade/crossfade dialog, commands and history | Candidate preparation before publishing an edit |
+| `src/video/ShowVideoCrop.h/.cpp` | Visual crop handles and numeric fields | A private draft until Apply, with no temporary screenshot file |
+| `src/clip-groups/PlanClipPlacement.h` and `EditClipPlacement.h/.cpp` | Precise timing, collision rules, timing locks and Close Gap | Owned value policy with native linked-media adapters |
+| `src/media/CollectMediaFiles.h/.cpp` and `CollectProjectMedia.h/.cpp` | Portable project archive and native save-copy boundary | Atomic publication, content identities and ordinary backup compatibility |
 | `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan and explicit project audio range |
 | `src/clip-groups/OpenClipActions.h/.cpp` | Clicked-clip targeting, native dB effect and export dialogs | Selection scope and cancellation stay at the host boundary |
 | `src/recording/PlanCursorRecording.h/.cpp` | Host-free cursor/gap/sample-edge policy | Reject occupied starts and choose the earliest stop across capture tracks |
@@ -221,6 +229,65 @@ including pause, or its edit cursor while stopped. It calls the native viewport
 scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into
 `RenderVideoFrames.h/.cpp` after separate path approval.
+
+### Beginner editing, picture transitions and portable projects
+
+Ordinary Delete removes the selected interval in place for audio and video.
+The native split-delete audio operation retains source handles; video uses its
+equivalent retained-content erase. Later clips keep their absolute timestamps.
+Ripple Delete (Close Gap) is a separate action. A rejected locked edit restores
+the prior selection as well as leaving content unchanged. The small native audio
+boundary correction treats a selection beginning exactly at a clip's start as a
+leading trim, avoiding an invalid zero-length left fragment.
+
+Clip Properties edits start, end, duration and speed through the existing linked
+timing coordinator. End/duration changes retime the retained span; edge handles
+remain trimming controls. A whole linked set must fit before publication.
+Close Gap Before Clip moves that set to the preceding boundary without changing
+its duration. Timing locks protect movement, trimming and deletion. Native drag
+snapping includes the pre-gesture cursor and selection endpoints; Alt bypasses
+magnetic snapping while source-frame and collision constraints remain active.
+
+Visual crop handles and numeric percentages edit one draft of oriented source
+fractions. Cancel discards it. Applying uses the existing crop/history boundary.
+Modal media dialogs defer scripting commands until their native stack-owned
+controls unwind, so an immediate Save/Close cannot delete a live dialog.
+
+Picture envelopes store fade endpoints in retained content coordinates. Split,
+trim/untrim and affine speed changes preserve the source phase and envelope.
+Nested envelopes multiply; they do not restart at every visible fragment.
+Separate projects parent envelopes into each child's retained content clock,
+including products of several ramps. Optional bounded `videoOpacityRamps`
+metadata retains those curves through saves; removing fades clears the selected
+clip's own projected curves without discarding its footage.
+Fades reveal eligible lower video, or black. The Crossfade from Video Below
+preset requires an existing overlap on separate tracks and changes the upper
+picture's fade-in; it never shifts clips, changes duration or edits audio.
+
+The transition planner samples the same retained-content model as ordinary
+playback. It divides the project at content/fade boundaries on the export's
+integer frame clock. Opaque spans keep original-source playback; fading spans
+are rendered with bundled FFmpeg into picture-only cached files. Input source
+timestamps, fast seeking and final output frames share one explicit clock.
+Original-quality export uses lossless transition intermediates; preview follows
+the user's quality choice. Cache preparation completes before the fade edit is
+published. Cancellation leaves project/history untouched. The preview timer
+does not re-enter preparation while a progress dialog yields events.
+
+Collect Project Media writes a new portable folder containing Project.aup3,
+Media content-addressed video files and a flat ownership/integrity manifest.
+The native save-copy API carries audio, labels and settings; XML source mapping
+is scoped to serialization and never rewrites the open project. Retained and
+nested source footage is included so untrim remains possible. Relative local
+media hints are optional fork metadata. On ordinary saves an absolute fallback
+also remains, so a backup saved elsewhere can still find its video. A moved
+portable folder prefers its adjacent Media files.
+
+The collector locks only its selected destination, checks source identities,
+copies into a marked sibling staging folder and publishes by one rename.
+Repeating an unchanged collection reads the completed archive without rewriting
+it. Changed, damaged or unrelated destinations are refused. A fresh call removes
+only its own interrupted staging; it does not infer steps from an execution log.
 
 ### Clip actions, recording gaps and cursor projection
 
@@ -756,7 +823,7 @@ No authentication is needed inside the local edit kernel; scripting pipes retain
 the local application's access boundary. Service credentials belong to release
 infrastructure, not project or media payloads.
 
-Current preview/export share `EvaluateVideoLayers` and `SampleVideoContent`: the
+Opaque preview/export share `EvaluateVideoLayers` and `SampleVideoContent`: the
 highest visible track with a picture sample wins, including nested joins, with
 lower pictures exposed through gaps. The new independent
 `EvaluateVideoTimeline` returns an owned bottom-to-top `VideoFramePlan`, retaining
@@ -777,8 +844,8 @@ Crop margins remain fractions of original oriented source dimensions. Proxy
 resolution and relinking to a different resolution cannot change the intended
 framing. Placement maps the retained crop into its rectangle; letterboxing/aspect
 controls belong to the render settings rather than altering those margins. The
-current UI offers numeric margins and reset for the whole clip. Interactive
-frame handles remain a later view operation. The decoder crop adapter currently
+current UI offers draggable frame handles, numeric margins and reset for the whole clip.
+The decoder crop adapter currently
 accepts display rotation in quarter turns; arbitrary angles need an oriented
 preview source before this rectangle adapter.
 It must retain crop/embedding through copy, split, compatible joins, save/reopen
@@ -829,14 +896,16 @@ user's responsibility; the product must not delete them to repair a cache.
 
 | Runtime path group | Owner and purpose | Lifecycle and bound |
 | --- | --- | --- |
-| Active settings `_video-previews` | `PrepareVideoPreview.cpp`: proxy/thumbnail pairs by source identity | Startup and completed preparation prune orphans; leases protect live readers; current plus two predecessors per source, 36 entries total |
+| Active settings `_video-previews` | `PrepareVideoPreview.cpp`: proxy/thumbnail pairs and transition spans by source/recipe identity | Startup and completed preparation prune orphans; current plus two predecessors per group, up to 36 retained unleased entries; leases protect active project/decoder readers even above the disposal quota |
+| Selected portable project folder | `CollectMediaFiles.cpp`: completed native project, original media copies and `_collection.txt` integrity manifest | Each selected destination is one user-owned archive; repeated matching requests leave it intact; changed/foreign contents are refused |
+| Sibling `_<name>.collecting` and `_<name>.collection.lock` | Collector: one current unpublished archive and exclusive Windows handle | Startup of a fresh collection removes only marked orphaned staging; success/failure removes staging; process exit closes/deletes its lock; pre-existing foreign locks are refused |
 | `_autopsy-video-export-*` beside chosen output | `ExportVideoMix.cpp`: owner marker, mix, filter instructions and pending result | Startup and each export remove abandoned owned work; live owner lock prevents deletion; success/cancel removes staging; one atomic same-volume publication |
 | `.build/_core` | CMake/CTest: portable checks and generated executables | Updated in place on each normal test call; disposable build cache, not an install or product version |
 | `.build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
 | Installer build `package` | `build_video_installer.py`: completed installer and build manifest | Deterministic builder retains its accepted matching output, cleans pending owned build work; a new candidate receives its own content identity |
 | Test work roots | `test_fork_features.py`: generated fixtures and bounded immutable stage receipts; `run_audacity_consumer.py`: private stock process trees and scratch | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
 | Failure diagnostic payloads, target lifecycle | Each operation's existing owner: evidence for a named unresolved question | Default: persist none; when needed, one unresolved report per operation/target, seven-day expiry, declared finite byte/group limits; matching success removes obsolete failure payloads |
-| Future complex-preview chunks | `PrepareVideoPreview` orchestration with renderer | Same source/plan version grouping and leases; finite cache bound before enabling; no unbounded per-play history |
+| Picture transition chunks | `PrepareVideoEffects.cpp` orchestrates the existing cache owner | A project keeps one current plan, and the decoder keeps only its active/replaced files; no unbounded per-play history; generated files are disposable |
 
 Do not create output groups without declaring owner, grouping, trigger and finite
 retention. Completed user exports are user-owned documents, replaced only with

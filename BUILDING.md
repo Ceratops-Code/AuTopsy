@@ -82,6 +82,23 @@ Native CTest clients use the persistent base Python runtime, rather than a
 temporary uv dependency environment. An explicit test session refreshes that
 CTest configuration without rebuilding or changing the accepted installer.
 
+The beginner workflow cases are `fork-delete-gap`, `fork-clip-properties`,
+`fork-clip-snapping`, `fork-visual-crop`, `fork-collect-media` and
+`fork-video-fades`. They exercise generated media through normal commands,
+native gestures/dialogs, Undo/Redo and save/reopen. Collection has a separate
+pinned stock-Audacity consumer stage. Picture fades are checked against decoded
+export pixels and the actual preview surface; audio is compared independently.
+The portable `media-collection` cases interrupt each publication effect, while
+the composition cases check retained envelopes and the shared frame clock.
+
+The collector owns only its selected destination, a marked sibling
+`_<name>.collecting` directory and a transient `_<name>.collection.lock` handle.
+Completion atomically publishes `Project.aup3`, `Media/` and `_collection.txt`.
+Failures remove owned staging; fresh calls remove owned orphaned staging and
+refuse unrelated contents. Completed archives belong to the user and are not
+pruned as disposable test output. Native case roots and diagnostic files remain
+under the existing marked test-workspace owner and its finite receipt policy.
+
 ## Building on Windows
 
 1. Ensure the Python installer option `Add Python 3.x to PATH` is checked. Go to Windows Settings "Add or Remove Programs" and check the `Add Python to environment variables` in Python settings if Python is not in `PATH`.

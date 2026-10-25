@@ -446,6 +446,12 @@ public:
                out.Key("sourceStart"); out.Double(clip.sourceStart); out.Key("duration"); out.Double(clip.duration);
                 out.Key("playbackRate"); out.Double(clip.playbackRate);
                out.Key("muted"); out.Bool(clip.muted);
+               out.Key("fades"); out.StartObject();
+               out.Key("inStart"); out.Double(clip.opacity.inStart);
+               out.Key("inDuration"); out.Double(clip.opacity.inDuration);
+               out.Key("outEnd"); out.Double(clip.opacity.outEnd);
+               out.Key("outDuration"); out.Double(clip.opacity.outDuration); out.EndObject();
+               out.Key("retainedFades"); out.String(VideoEditing::EncodeVideoOpacityRamps(clip.opacityModifiers).c_str());
                out.Key("crop"); out.StartObject();
                out.Key("left"); out.Double(clip.crop.left); out.Key("top"); out.Double(clip.crop.top);
                out.Key("right"); out.Double(clip.crop.right); out.Key("bottom"); out.Double(clip.crop.bottom);

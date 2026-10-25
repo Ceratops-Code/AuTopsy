@@ -1,6 +1,8 @@
 // Audacity adapters for native video tracks. The TrackList owns ordering,
 // lifetime, selection, clipboard cloning and Undo; video owns only picture data.
 #include "CreateVideoTrack.h"
+#include "PrepareVideoEffects.h"
+#include "../media/CollectProjectMedia.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "Project.h"
 #include "ProjectHistory.h"
@@ -16,6 +18,7 @@
 #include "CommonCommandFlags.h"
 #include <algorithm>
 #include <cmath>
+#include <atomic>
 
 namespace {
 template<typename Value> bool ReadAttribute(const AttributesList &attributes,
@@ -112,10 +115,15 @@ Track::Holder AuTopsyVideoTrack::Clone(bool) const
    auto result = std::make_shared<AuTopsyVideoTrack>(*this, ProtectedCreationArg{});
    result->Init(*this); return result;
 }
+uint64_t AuTopsyVideoTrack::NextPictureRevision()
+{
+   static std::atomic<uint64_t> revision{};
+   return revision.fetch_add(1, std::memory_order_relaxed) + 1;
+}
 void AuTopsyVideoTrack::SetTimeline(VideoTimeline::Timeline timeline)
 {
    VideoTimeline::RequireWellFormedTimeline(timeline);
-   mTimeline = std::move(timeline); Notify(false);
+   mTimeline = std::move(timeline); mPictureRevision = NextPictureRevision(); Notify(false);
 }
 void AuTopsyVideoTrack::SetVideoVisible(bool visible)
 { mVisible = visible; Notify(false); }
@@ -184,7 +192,12 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
          mSolo = solo != 0;
          if (!ReadAttribute(attributes, "videoNextId", mTimeline.nextId)) return false;
          std::string_view source;
-         if (ReadAttribute(attributes, "videoSource", source)) mTimeline.sourcePath = source;
+         if (ReadAttribute(attributes, "videoSource", source)) {
+            const auto owner = GetOwner();
+            std::string_view local;
+            if (!ReadOptionalAttribute(attributes, "videoLocalSource", local)) return false;
+            mTimeline.sourcePath = ProjectMedia::OpenVideoSourcePath(owner ? owner->GetOwner() : nullptr, std::string(source), std::string(local));
+         }
          if (!ReadOptionalAttribute(attributes, "videoDuration", mTimeline.sourceDuration) ||
              !ReadOptionalAttribute(attributes, "videoFps", mTimeline.frameRate) ||
              !ReadOptionalAttribute(attributes, "videoWidth", mTimeline.sourceWidth) ||
@@ -199,6 +212,9 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       int muted{};
       if (!ReadOptionalAttribute(attributes, "videoMuted", muted) || muted < 0 || muted > 1) return false;
       clip.muted = muted != 0;
+      int locked{};
+      if (!ReadOptionalAttribute(attributes, "videoTimingLocked", locked) || locked < 0 || locked > 1) return false;
+      clip.timingLocked = locked != 0;
       if (!ReadAttribute(attributes, "id", clip.id) || !ReadAttribute(attributes, "start", clip.start) ||
           !ReadAttribute(attributes, "sourceStart", clip.sourceStart) ||
           !ReadAttribute(attributes, "videoDuration", clip.duration) ||
@@ -206,14 +222,26 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
           !ReadOptionalAttribute(attributes, "videoCropLeft", clip.crop.left) ||
           !ReadOptionalAttribute(attributes, "videoCropTop", clip.crop.top) ||
           !ReadOptionalAttribute(attributes, "videoCropRight", clip.crop.right) ||
-          !ReadOptionalAttribute(attributes, "videoCropBottom", clip.crop.bottom)) return false;
+          !ReadOptionalAttribute(attributes, "videoCropBottom", clip.crop.bottom) ||
+          !ReadOptionalAttribute(attributes, "videoFadeInStart", clip.opacity.inStart) ||
+          !ReadOptionalAttribute(attributes, "videoFadeInDuration", clip.opacity.inDuration) ||
+          !ReadOptionalAttribute(attributes, "videoFadeOutEnd", clip.opacity.outEnd) ||
+          !ReadOptionalAttribute(attributes, "videoFadeOutDuration", clip.opacity.outDuration)) return false;
       std::string_view markers;
+      std::string_view ramps;
+      if (ReadAttribute(attributes, "videoOpacityRamps", ramps))
+         clip.opacityModifiers = VideoEditing::DecodeVideoOpacityRamps(std::string(ramps));
       if (ReadAttribute(attributes, "clipMarkers", markers))
          clip.markers = ClipMarkers::DecodeMarkers(std::string(markers));
       std::string_view link;
       if (ReadAttribute(attributes, "mediaLink", link)) clip.linkGroup = link;
       std::string_view source;
-      if (ReadAttribute(attributes, "mediaSource", source)) clip.media.path = source;
+      if (ReadAttribute(attributes, "mediaSource", source)) {
+         const auto owner = GetOwner();
+         std::string_view local;
+         if (!ReadOptionalAttribute(attributes, "mediaLocalSource", local)) return false;
+         clip.media.path = ProjectMedia::OpenVideoSourcePath(owner ? owner->GetOwner() : nullptr, std::string(source), std::string(local));
+      }
       if (!ReadOptionalAttribute(attributes, "mediaDuration", clip.media.duration) ||
           !ReadOptionalAttribute(attributes, "mediaFps", clip.media.frameRate) ||
           !ReadOptionalAttribute(attributes, "mediaWidth", clip.media.width) ||
@@ -262,6 +290,8 @@ XMLTagHandler *AuTopsyVideoTrack::HandleXMLChild(const std::string_view &tag)
 { return tag == "videoclip" ? this : nullptr; }
 void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
 {
+   const auto owner = GetOwner();
+   const auto *project = owner ? owner->GetOwner() : nullptr;
    VideoTimeline::RequireWellFormedTimeline(mTimeline);
    writer.StartTag("videotrack"); WriteCommonXMLAttributes(writer);
    writer.WriteAttr("videoSchema", 1);
@@ -269,7 +299,9 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
    writer.WriteAttr("videoSolo", mSolo ? 1 : 0);
    writer.WriteAttr("videoNextId", static_cast<long long>(mTimeline.nextId));
    if (!mTimeline.sourcePath.empty()) {
-      writer.WriteAttr("videoSource", wxString::FromUTF8(mTimeline.sourcePath));
+      writer.WriteAttr("videoSource", wxString::FromUTF8(ProjectMedia::StoreVideoSourcePath(project, mTimeline.sourcePath)));
+      const auto local = ProjectMedia::StoreLocalVideoSourcePath(project, mTimeline.sourcePath);
+      if (!local.empty()) writer.WriteAttr("videoLocalSource", wxString::FromUTF8(local));
       writer.WriteAttr("videoDuration", mTimeline.sourceDuration, 17);
       writer.WriteAttr("videoFps", mTimeline.frameRate, 17);
       writer.WriteAttr("videoWidth", mTimeline.sourceWidth); writer.WriteAttr("videoHeight", mTimeline.sourceHeight);
@@ -283,14 +315,25 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);
       writer.WriteAttr("videoDuration", clip.duration, 17);
       if (clip.muted) writer.WriteAttr("videoMuted", 1);
+      if (clip.timingLocked) writer.WriteAttr("videoTimingLocked", 1);
+      if (!clip.opacityModifiers.empty()) writer.WriteAttr("videoOpacityRamps",
+         wxString::FromUTF8(VideoEditing::EncodeVideoOpacityRamps(clip.opacityModifiers)));
       if (clip.playbackRate != 1) writer.WriteAttr("videoRate", clip.playbackRate, 17);
+      if (!(clip.opacity == VideoEditing::VideoOpacityEnvelope{})) {
+         writer.WriteAttr("videoFadeInStart", clip.opacity.inStart, 17);
+         writer.WriteAttr("videoFadeInDuration", clip.opacity.inDuration, 17);
+         writer.WriteAttr("videoFadeOutEnd", clip.opacity.outEnd, 17);
+         writer.WriteAttr("videoFadeOutDuration", clip.opacity.outDuration, 17);
+      }
       if (!(clip.crop == VideoEditing::VideoFrameCrop{})) {
          writer.WriteAttr("videoCropLeft", clip.crop.left, 17);
          writer.WriteAttr("videoCropTop", clip.crop.top, 17);
          writer.WriteAttr("videoCropRight", clip.crop.right, 17);
          writer.WriteAttr("videoCropBottom", clip.crop.bottom, 17);
       }
-      writer.WriteAttr("mediaSource", wxString::FromUTF8(source.path));
+      writer.WriteAttr("mediaSource", wxString::FromUTF8(ProjectMedia::StoreVideoSourcePath(project, source.path)));
+      const auto local = ProjectMedia::StoreLocalVideoSourcePath(project, source.path);
+      if (!local.empty()) writer.WriteAttr("mediaLocalSource", wxString::FromUTF8(local));
       writer.WriteAttr("mediaDuration", source.duration, 17); writer.WriteAttr("mediaFps", source.frameRate, 17);
       writer.WriteAttr("mediaWidth", source.width); writer.WriteAttr("mediaHeight", source.height);
       if (clip.content) {
@@ -502,6 +545,7 @@ bool HasProjectVideoClips(const AudacityProject &project)
 }
 void AppendVideoPlaybackClock(TrackList &tracks, TransportSequences &transport, double rate)
 {
+   if (auto *project = tracks.GetOwner()) VideoEditing::PrepareProjectVideoPlayback(*project);
    if (!transport.playbackSequences.empty() || !transport.otherPlayableSequences.empty()) return;
    AuTopsyVideoTrack *group{};
    double end{};

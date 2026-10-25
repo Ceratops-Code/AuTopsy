@@ -7,6 +7,8 @@
 struct TransportSequences;
 
 class AuTopsyVideoTrack final : public UniqueChannelTrack<> {
+   static uint64_t NextPictureRevision();
+   uint64_t mPictureRevision{NextPictureRevision()};
    VideoTimeline::Timeline mTimeline;
    double mClipboardDuration{};
    bool mVisible{true};
@@ -29,6 +31,7 @@ public:
    const TypeInfo &GetTypeInfo() const override;
    static const TypeInfo &ClassTypeInfo();
    const VideoTimeline::Timeline &Timeline() const { return mTimeline; }
+   uint64_t PictureRevision() const { return mPictureRevision; }
    void SetTimeline(VideoTimeline::Timeline timeline);
    bool VideoVisible() const { return mVisible; }
    void SetVideoVisible(bool visible);

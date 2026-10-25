@@ -2,11 +2,104 @@
 #include "EvaluateVideoTimeline.h"
 #include "RenderVideoComposition.h"
 #include "PlanVideoExport.h"
+#include "PlanVideoTransitions.h"
 #include "JoinVideoClips.h"
 #include <catch2/catch.hpp>
 #include <limits>
 
 using namespace VideoEditing;
+TEST_CASE("Separating nested picture envelopes preserves their product and saved content clocks", "[video-composition][video-fades]")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("neutral.mp4", 4, 30, 160, 100);
+   timeline.clips.front().opacity = {0, 1, 4, 1};
+   VideoTimeline::SplitClipAt(timeline, .5);
+   VideoTimeline::JoinVideoClips(timeline, 0, 4);
+   timeline.clips.front().opacity = {0, 2, 4, .5};
+   const auto original = timeline;
+   REQUIRE(VideoTimeline::SeparateVideoClips(timeline, 0, 4));
+   REQUIRE_FALSE(VideoTimeline::SeparateVideoClips(timeline, 0, 4));
+   for (const auto at : {.1, .4, .5, .75, 1.5, 2.5, 3.75, 3.99}) {
+      const auto *a = VideoTimeline::ClipAt(original, at), *b = VideoTimeline::ClipAt(timeline, at);
+      REQUIRE(a); REQUIRE(b);
+      const auto before = VideoTimeline::SampleVideoContent(*a, VideoTimeline::SourceFor(original, *a), a->ContentTimeAtProjectTime(at));
+      const auto after = VideoTimeline::SampleVideoContent(*b, VideoTimeline::SourceFor(timeline, *b), b->ContentTimeAtProjectTime(at));
+      REQUIRE(after.opacity == Approx(before.opacity)); REQUIRE(after.sourceTime == Approx(before.sourceTime));
+   }
+   for (const auto &clip : timeline.clips) {
+      REQUIRE_FALSE(clip.opacityModifiers.empty());
+      REQUIRE(DecodeVideoOpacityRamps(EncodeVideoOpacityRamps(clip.opacityModifiers)) == clip.opacityModifiers);
+   }
+   for (const auto *text : {"1 0 0 1", "1 0 1 2", "2 0 1 1", "0 trailing", "999999", "1 nan 2 0"})
+      REQUIRE_THROWS_AS(DecodeVideoOpacityRamps(text), std::runtime_error);
+}
+TEST_CASE("Picture opacity stays anchored through retained cuts and speed changes", "[video-composition][video-fades]")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("neutral.mp4", 16, 30, 640, 360);
+   auto clip = timeline.clips.front(); clip.start = 2; clip.duration = 8;
+   clip.opacity = {0, 2, 8, 2};
+   const auto source = VideoTimeline::SourceFor(timeline, clip);
+   VideoTimeline::RequireUsableVideoContent(clip, source);
+   for (int repeat{}; repeat < 2; ++repeat) {
+      REQUIRE(VideoTimeline::SampleVideoContent(clip, source, .5).opacity == Approx(.25));
+      auto right = clip; right.start = 5; right.sourceStart = 3; right.duration = 5;
+      REQUIRE(VideoTimeline::SampleVideoContent(right, source, 3).opacity == 1);
+      const auto fade = VideoTimeline::SampleVideoContent(right, source, 7);
+      REQUIRE(fade.opacity == Approx(.5));
+      REQUIRE(fade.opacityRamps.back().start == Approx(8));
+      REQUIRE(fade.opacityRamps.back().end == Approx(10));
+      auto fast = clip; fast.playbackRate = 2; fast.duration = 4;
+      const auto sample = VideoTimeline::SampleVideoContent(fast, source, 1);
+      REQUIRE(sample.opacity == Approx(.5));
+      REQUIRE(sample.opacityRamps.front().start == Approx(2));
+      REQUIRE(sample.opacityRamps.front().end == Approx(3));
+   }
+   auto different = clip; different.opacity.inDuration = 1;
+   REQUIRE_FALSE(VideoTimeline::SameVideoContent(clip, different));
+   clip.opacity.outEnd = 17;
+   REQUIRE_THROWS(VideoTimeline::RequireUsableVideoContent(clip, source));
+}
+
+TEST_CASE("Nested fades multiply in one project clock without moving source samples", "[video-composition][video-fades]")
+{
+   auto source = VideoTimeline::CreateVideoTimeline("neutral.mp4", 16, 30, 640, 360);
+   auto child = source.clips.front(); child.start = 2; child.duration = 8; child.opacity = {0, 2, 8, 0};
+   child.media = VideoTimeline::SourceFor(source, child);
+   auto content = std::make_shared<VideoTimeline::VideoClipContent>();
+   content->duration = 10; content->parts.push_back(child);
+   VideoTimeline::Clip joined{1, 10, 0, 10}; joined.content = content; joined.opacity = {0, 4, 0, 0};
+   VideoTimeline::RequireUsableVideoContent(joined, {});
+   const auto sample = VideoTimeline::SampleVideoContent(joined, {}, 2.5);
+   REQUIRE(sample.sourceTime == Approx(.5));
+   REQUIRE(sample.opacity == Approx(.625 * .25));
+   REQUIRE(sample.opacityRamps.size() == 2);
+   REQUIRE(sample.opacityRamps[0].start == 10);
+   REQUIRE(sample.opacityRamps[1].start == 12);
+}
+
+TEST_CASE("Crossfade plans reveal lower video and keep every output frame on the project clock", "[video-composition][video-fades]")
+{
+   auto top = VideoTimeline::CreateVideoTimeline("red.mp4", 8, 30, 640, 360);
+   auto bottom = VideoTimeline::CreateVideoTimeline("blue.mp4", 12, 24, 640, 360);
+   top.clips.front().opacity = {0, 2, 8, 2};
+   const auto plan = PlanVideoTransitions({&top, &bottom}, 12, 30);
+   REQUIRE(plan.size() == 4);
+   REQUIRE(plan[0].firstFrame == 0); REQUIRE(plan[0].frameCount == 60);
+   REQUIRE(plan[0].requiresBlend); REQUIRE(plan[0].layers.size() == 2);
+   REQUIRE(plan[0].layers[0].source.path == "blue.mp4");
+   REQUIRE(plan[0].layers[1].source.path == "red.mp4");
+   REQUIRE_FALSE(plan[1].requiresBlend); REQUIRE(plan[1].layers.size() == 1);
+   REQUIRE(plan[2].requiresBlend); REQUIRE(plan[2].firstFrame == 180);
+   REQUIRE_FALSE(plan[3].requiresBlend); REQUIRE(plan[3].layers[0].source.path == "blue.mp4");
+   std::int64_t frames{};
+   for (const auto &span : plan) { REQUIRE(span.firstFrame == frames); frames += span.frameCount; }
+   REQUIRE(frames == 360);
+   top.clips[0].muted = true;
+   for (const auto &span : PlanVideoTransitions({&top, &bottom}, 12, 30)) {
+      REQUIRE_FALSE(span.requiresBlend); REQUIRE(span.layers.size() == 1);
+      REQUIRE(span.layers[0].source.path == "blue.mp4");
+   }
+}
+
 namespace {
 VideoProjectSnapshot Project()
 {
@@ -14,6 +107,28 @@ VideoProjectSnapshot Project()
       {"back", 0, VideoTimeline::CreateVideoTimeline("back.mp4", 20, 24, 1280, 720)}}};
 }
 VideoCompositionSettings Settings() { return {1920, 1080, 25}; }
+}
+
+TEST_CASE("Picture crop handles retain an editable nonempty rectangle at every boundary", "[video-composition][video-crop]")
+{
+   const VideoFrameCrop original{.1, .2, .3, .1};
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto left = DragVideoCropHandle(original, CropLeft, 20, 0, .001, .002);
+      REQUIRE(left.left == Approx(.699)); REQUIRE(left.right == original.right);
+      const auto corner = DragVideoCropHandle(original, CropRight | CropBottom, -20, -20, .001, .002);
+      REQUIRE(corner.right == Approx(.899)); REQUIRE(corner.bottom == Approx(.798));
+      const auto restored = DragVideoCropHandle(left, CropLeft, -20, 0, .001, .002);
+      REQUIRE(restored.left == 0); REQUIRE(restored.right == original.right);
+      const auto moved = DragVideoCropHandle(original, CropMove, 20, -20, .001, .002);
+      REQUIRE(moved.left == Approx(.4)); REQUIRE(moved.right == 0);
+      REQUIRE(moved.top == 0); REQUIRE(moved.bottom == Approx(.3));
+      REQUIRE(1 - moved.left - moved.right == Approx(1 - original.left - original.right));
+      REQUIRE(1 - moved.top - moved.bottom == Approx(1 - original.top - original.bottom));
+      REQUIRE(DragVideoCropHandle(original, CropMove, 0, 0, .001, .002) == original);
+   }
+   REQUIRE_THROWS(DragVideoCropHandle(original, 0, 0, 0, .001, .002));
+   REQUIRE_THROWS(DragVideoCropHandle(original, CropLeft, 0, 0, 0, .002));
+   REQUIRE_THROWS(DragVideoCropHandle(original, CropLeft, std::numeric_limits<double>::quiet_NaN(), 0, .001, .002));
 }
 
 TEST_CASE("Retimed picture plans and flat exports agree on source clocks", "[video-composition][video-speed]")

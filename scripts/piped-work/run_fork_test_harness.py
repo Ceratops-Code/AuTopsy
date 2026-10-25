@@ -510,7 +510,7 @@ def ready_video_preview(client):
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
     gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False,
-    prior_click_time=None
+    prior_click_time=None, alt=False
 ):
     """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
 
@@ -527,6 +527,8 @@ def operate_owned_video_track(
         raise ValueError("Unknown native video gesture: " + gesture)
     if control and gesture not in ("click", "drag"):
         raise ValueError("Ctrl is supported for clip clicks and time-locked drags.")
+    if alt and gesture != "drag":
+        raise ValueError("Alt is supported only for unsnapped clip drags.")
     user = ctypes.WinDLL("user32", use_last_error=True)
     # Wait before reading window/paint facts: project-open callbacks may replace
     # those controls while the native double-click interval expires.
@@ -679,6 +681,7 @@ def operate_owned_video_track(
     hidden = []
     pressed = False
     control_pressed = False
+    alt_pressed = False
     positioned = False
 
     @callback
@@ -732,10 +735,10 @@ def operate_owned_video_track(
                 raise RuntimeError("Windows rejected the owned test's keyboard event.")
         time.sleep(0.08)
 
-    def set_control(down):
-        packet = Input(1, Union(keyboard=Key(0x11, user.MapVirtualKeyW(0x11, 0), 0 if down else 2, 0, 0)))
+    def set_modifier(code, down):
+        packet = Input(1, Union(keyboard=Key(code, user.MapVirtualKeyW(code, 0), 0 if down else 2, 0, 0)))
         if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
-            raise RuntimeError("Windows rejected the owned test's Ctrl transition.")
+            raise RuntimeError(f"Windows rejected the owned test's modifier transition: {code}.")
         time.sleep(0.03)
 
     def choose_popup_path():
@@ -905,8 +908,11 @@ def operate_owned_video_track(
             keyboard(0x1B)
             position_pointer(x0, y0)
         if control:
-            set_control(True)
+            set_modifier(0x11, True)
             control_pressed = True
+        if alt:
+            set_modifier(0x12, True)
+            alt_pressed = True
         if gesture == "context":
             button(8)
             pressed = True
@@ -951,12 +957,12 @@ def operate_owned_video_track(
                         position_pointer(round(x0 + (x1-x0)*step/5), round(y0 + (y1-y0)*step/5))
                         time.sleep(0.04)
                     if cancel:
-                        # Ctrl+Escape belongs to Windows. Releasing Ctrl first
-                        # also completes native time-shift gestures, so deliver
+                        # Ctrl/Alt+Escape belong to Windows. Releasing a modifier
+                        # can also finish native time-shift gestures, so deliver
                         # Escape through the owned pane's normal key-message
                         # route while the drag is still captured. Other drags
                         # keep the physical keyboard route.
-                        if control_pressed:
+                        if control_pressed or alt_pressed:
                             # Queue a full key transition so wx's application
                             # filter sees Escape before the mouse release. A
                             # synchronous HWND send bypasses that queue and can
@@ -971,7 +977,7 @@ def operate_owned_video_track(
                                 if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.capture != panel:
                                     break
                                 if time.monotonic() >= deadline:
-                                    raise RuntimeError("The owned Ctrl-drag did not cancel before mouse release.")
+                                    raise RuntimeError("The owned modified drag did not cancel before mouse release.")
                                 time.sleep(0.01)
                         else:
                             keyboard(0x1B)
@@ -992,9 +998,14 @@ def operate_owned_video_track(
 
     finally:
         control_release_error = None
+        if alt_pressed:
+            try:
+                set_modifier(0x12, False)
+            except RuntimeError as error:
+                control_release_error = error
         if control_pressed:
             try:
-                set_control(False)
+                set_modifier(0x11, False)
             except RuntimeError as error:
                 control_release_error = error
         if pressed:

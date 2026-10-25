@@ -41,6 +41,10 @@ bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    unsigned long long id, double start, bool recordHistory);
 bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &track,
    unsigned long long id, double playbackRate);
+// One final affine placement, checked before any linked picture/sound changes.
+bool ChangeLinkedMediaClipTiming(AudacityProject &project, Track &track,
+   WaveClip *audio, unsigned long long videoId, double start, double playbackRate,
+   bool recordHistory = true);
 void UpdateVideoGroupIds(AudacityProject &project,
    const std::vector<std::string> &oldGroups, const std::string &newGroup);
 // Called inside the native command's single Undo transaction. New right-hand

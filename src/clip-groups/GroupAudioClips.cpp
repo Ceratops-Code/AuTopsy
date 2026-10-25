@@ -1,4 +1,5 @@
 #include "GroupAudioClips.h"
+#include "EditClipPlacement.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "LinkMediaClips.h"
 #endif
@@ -33,6 +34,7 @@ namespace {
 // Group IDs have no process-local identity and survive ordinary project XML.
 struct ClipGroupAttachment final : WaveClipListener {
    std::string groupId;
+   bool timingLocked{};
    std::unique_ptr<WaveClipListener> Clone() const override
    { return std::make_unique<ClipGroupAttachment>(*this); }
    void MarkChanged() noexcept override {}
@@ -41,12 +43,19 @@ struct ClipGroupAttachment final : WaveClipListener {
    {
       if (!groupId.empty())
          writer.WriteAttr(wxT("autopsyGroup"), wxString::FromUTF8(groupId));
+      if (timingLocked) writer.WriteAttr("autopsyTimingLocked", 1);
    }
    bool HandleXMLAttribute(const std::string_view &name,
       const XMLAttributeValueView &value) override
    {
+      if (name == "autopsyTimingLocked") {
+         int locked{};
+         if (!value.TryGet(locked) || locked < 0 || locked > 1) return false;
+         timingLocked = locked != 0; return true;
+      }
       if (name != "autopsyGroup" || !value.IsStringView()) return false;
-      const auto text = wxString(value.ToWString()).ToUTF8();
+      const auto valueText = wxString(value.ToWString());
+      const auto text = valueText.ToUTF8();
       const std::string id{ text.data(), text.length() };
       if (id.size() != 32 || id.find_first_not_of("0123456789abcdef") != std::string::npos)
          return false;
@@ -67,6 +76,10 @@ const std::string &GetClipGroupId(const WaveClip &clip)
 
 void SetClipGroupId(WaveClip &clip, std::string groupId)
 { GroupFor(clip).groupId = std::move(groupId); }
+bool IsAudioClipTimingLocked(const WaveClip &clip)
+{ return GroupFor(const_cast<WaveClip &>(clip)).timingLocked; }
+void SetAudioClipTimingLocked(WaveClip &clip, bool locked)
+{ GroupFor(clip).timingLocked = locked; }
 
 std::string CreateClipGroupId()
 {
@@ -316,6 +329,9 @@ public:
       ClipMoveState state;
       state.Init(project, *found->track, TrackShifter::HitTestResult::Intervals,
          std::move(shifter), mAt, ViewInfo::Get(project), tracks, false);
+      if (ClipActions::MovingMediaHasLockedClips(state)) {
+         context.Error(_("Unlock the clip in Clip Properties before moving its group.")); return false;
+      }
       for (const auto &pair : state.shifters) {
          if (std::abs(pair.second->AdjustOffsetSmaller(desired) - desired) > 1e-10) {
             context.Error(_("There is not enough free space to move the entire clip group."));

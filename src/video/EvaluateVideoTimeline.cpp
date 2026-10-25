@@ -72,7 +72,7 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
       const auto rectangle = PlaceWithin(item.parent, style.rectangle);
       result.layers.push_back({track.id, clip->id, sample.source,
          sample.sourceTime,
-         sample.crop, rectangle, sample.playbackRate});
+         sample.crop, rectangle, sample.playbackRate, sample.opacity, sample.opacityRamps});
       // Lower roots are processed first. Children go above their own parent,
       // irrespective of where an upstream pane happens to display their rows.
       for (const auto child : children[item.index]) pending.push_back({child, rectangle});

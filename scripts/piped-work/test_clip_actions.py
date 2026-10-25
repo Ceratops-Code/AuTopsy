@@ -107,9 +107,17 @@ class ClipDialogWindows(PreviewNativeWindows):
         assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
         wait_for_native_state(lambda: self.visible(dialog) and self.enabled(dialog), "owned clip dialog ready")
         self.api.SetForegroundWindow(dialog)
-        wait_for_native_state(lambda: self.api.GetForegroundWindow() == dialog,
+        wait_for_native_state(lambda: self.active_in_thread(dialog),
                               lambda: f"owned clip dialog {dialog} active; foreground="
                               f"{self.api.GetForegroundWindow()} ({self.caption(self.api.GetForegroundWindow())!r})")
+
+    def click(self, handle):
+        # Standard Windows buttons may ignore BM_CLICK on an inactive dialog.
+        # Establish that precondition here, including direct-command cases that
+        # intentionally entered text without taking shared desktop focus.
+        if self.kind(handle) == "Button":
+            self.activate(self.api.GetAncestor(handle, 2))
+        super().click(handle)
 
 
 def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False, needs_focus=True):
@@ -143,8 +151,8 @@ def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False, n
         if needs_focus:
             windows.activate(dialog)
         else:
-            # Direct messages to owned buttons need no shared desktop focus.
-            # Still require the same PID/display and a ready native dialog.
+            # Text messages need no desktop focus; the button owner establishes
+            # its activation precondition immediately before a click.
             assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
             wait_for_native_state(lambda: windows.visible(dialog) and windows.enabled(dialog), "owned dialog ready")
         handle_dialog(windows, dialog)

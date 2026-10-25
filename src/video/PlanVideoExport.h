@@ -6,6 +6,7 @@
 #include <vector>
 
 namespace VideoExport {
+std::int64_t ProjectTimeFrameBoundary(double seconds, double frameRate);
 struct VideoExportFrameSpan {
    std::uint64_t clipId{}; // Zero identifies generated gap frames.
    std::int64_t firstFrame{}, frameCount{};

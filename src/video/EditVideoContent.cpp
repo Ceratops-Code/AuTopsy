@@ -1,6 +1,9 @@
 #include "EditVideoContent.h"
 #include "EditVideoTimeline.h"
 #include <set>
+#include <iomanip>
+#include <sstream>
+#include <locale>
 
 namespace VideoEditing {
 void RequireUsableVideoFrameCrop(const VideoFrameCrop &crop)
@@ -20,6 +23,47 @@ VideoFrameCrop ComposeVideoFrameCrops(const VideoFrameCrop &inner, const VideoFr
       inner.right + outer.right * width, inner.bottom + outer.bottom * height};
    RequireUsableVideoFrameCrop(result);
    return result;
+}
+double VideoOpacityAt(const VideoOpacityEnvelope &value, double time)
+{
+   double opacity = 1;
+   if (value.inDuration > 0) opacity *= std::clamp((time - value.inStart) / value.inDuration, 0.0, 1.0);
+   if (value.outDuration > 0) opacity *= std::clamp((value.outEnd - time) / value.outDuration, 0.0, 1.0);
+   return opacity;
+}
+bool HasVideoOpacity(const VideoTimeline::Clip &clip)
+{
+   if (clip.opacity.inDuration > 0 || clip.opacity.outDuration > 0 || !clip.opacityModifiers.empty()) return true;
+   return clip.content && std::any_of(clip.content->parts.begin(), clip.content->parts.end(),
+      [](const auto &part) { return HasVideoOpacity(part); });
+}
+void RequireUsableVideoOpacityRamps(const std::vector<VideoOpacityRamp> &ramps) {
+   if (ramps.size() > MaximumVideoOpacityRamps) throw std::runtime_error("Too many retained picture envelopes.");
+   for (const auto &ramp : ramps)
+      if (!std::isfinite(ramp.start) || !std::isfinite(ramp.end) || ramp.end <= ramp.start ||
+          std::abs(ramp.start) > 1e20 || std::abs(ramp.end) > 1e20)
+         throw std::runtime_error("A retained picture envelope has invalid endpoints.");
+}
+std::string EncodeVideoOpacityRamps(const std::vector<VideoOpacityRamp> &ramps) {
+   RequireUsableVideoOpacityRamps(ramps);
+   std::ostringstream out; out.imbue(std::locale::classic()); out << std::setprecision(17) << ramps.size();
+   for (const auto &ramp : ramps) out << ' ' << ramp.start << ' ' << ramp.end << ' ' << int(ramp.increasing);
+   return out.str();
+}
+std::vector<VideoOpacityRamp> DecodeVideoOpacityRamps(const std::string &text) {
+   if (text.size() > 16384) throw std::runtime_error("The saved picture envelope exceeds its size bound.");
+   std::istringstream input(text); input.imbue(std::locale::classic()); size_t count{};
+   if (!(input >> count) || count > MaximumVideoOpacityRamps) throw std::runtime_error("The saved picture envelope is invalid.");
+   std::vector<VideoOpacityRamp> result;
+   for (size_t i{}; i < count; ++i) {
+      VideoOpacityRamp ramp; int increasing{};
+      if (!(input >> ramp.start >> ramp.end >> increasing) || increasing < 0 || increasing > 1)
+         throw std::runtime_error("The saved picture envelope is incomplete.");
+      ramp.increasing = increasing != 0; result.push_back(ramp);
+   }
+   input >> std::ws;
+   if (!input.eof()) throw std::runtime_error("The saved picture envelope has unexpected data.");
+   RequireUsableVideoOpacityRamps(result); return result;
 }
 }
 
@@ -44,6 +88,13 @@ void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &
        clip.ContentTimeAtProjectTime(clip.End()) > duration + 1e-7)
       throw std::runtime_error("A video content window is outside its retained footage.");
    ClipMarkers::RequireUsableMarkers(clip.markers);
+   VideoEditing::RequireUsableVideoOpacityRamps(clip.opacityModifiers);
+   const auto &opacity = clip.opacity;
+   for (const auto value : {opacity.inStart, opacity.inDuration, opacity.outEnd, opacity.outDuration})
+      if (!std::isfinite(value) || value < 0) throw std::runtime_error("Picture fades require finite non-negative timing.");
+   if (opacity.inStart + opacity.inDuration > duration + 1e-7 || opacity.outEnd > duration + 1e-7 ||
+       opacity.outDuration > opacity.outEnd + 1e-7)
+      throw std::runtime_error("Picture fades must stay inside retained content.");
    if (!clip.linkGroup.empty() && (clip.linkGroup.size() != 32 ||
        clip.linkGroup.find_first_not_of("0123456789abcdef") != std::string::npos))
       throw std::runtime_error("A video clip has an invalid saved link.");
@@ -67,6 +118,13 @@ void Edges(const Clip &clip, double origin, double scale, double from, double to
    const auto end = std::min(to, origin + clip.End() * scale);
    if (end <= begin + 1e-7) return;
    out.push_back(begin); out.push_back(end);
+   const auto edge = [&](double contentTime) {
+      const auto at = origin + clip.ProjectTimeAtContentTime(contentTime) * scale;
+      if (at > begin && at < end) out.push_back(at);
+   };
+   if (clip.opacity.inDuration > 0) { edge(clip.opacity.inStart); edge(clip.opacity.inStart + clip.opacity.inDuration); }
+   if (clip.opacity.outDuration > 0) { edge(clip.opacity.outEnd - clip.opacity.outDuration); edge(clip.opacity.outEnd); }
+   for (const auto &ramp : clip.opacityModifiers) { edge(ramp.start); edge(ramp.end); }
    if (clip.content)
       for (const auto &part : clip.content->parts)
          Edges(part, origin + clip.start * scale - clip.sourceStart * scale / clip.playbackRate,
@@ -119,15 +177,31 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
    const Clip *current = &clip;
    double playbackRate = clip.playbackRate;
    auto crop = clip.crop;
+   double origin = clip.start - clip.sourceStart / clip.playbackRate, scale = 1 / clip.playbackRate;
+   double opacity = 1;
+   std::vector<VideoEditing::VideoOpacityRamp> ramps;
    for (size_t depth{}; depth <= MaximumVideoContentDepth; ++depth) {
       if (current->muted) return {};
-      if (!current->content) return {current, Source(*current, current == &clip ? fallback : MediaSource{}), time, playbackRate, crop};
+      opacity *= VideoEditing::VideoOpacityAt(current->opacity, time);
+      for (const auto &ramp : current->opacityModifiers) {
+         const auto phase = std::clamp((time - ramp.start) / (ramp.end - ramp.start), 0.0, 1.0);
+         opacity *= ramp.increasing ? phase : 1 - phase;
+         ramps.push_back({origin + ramp.start * scale, origin + ramp.end * scale, ramp.increasing});
+      }
+      if (current->opacity.inDuration > 0) ramps.push_back({origin + current->opacity.inStart * scale,
+         origin + (current->opacity.inStart + current->opacity.inDuration) * scale, true});
+      if (current->opacity.outDuration > 0) ramps.push_back({origin + (current->opacity.outEnd - current->opacity.outDuration) * scale,
+         origin + current->opacity.outEnd * scale, false});
+      if (!current->content) return {current, Source(*current, current == &clip ? fallback : MediaSource{}),
+         time, playbackRate, crop, opacity, std::move(ramps)};
       const auto &parts = current->content->parts;
       const auto found = std::upper_bound(parts.begin(), parts.end(), time,
          [](double t, const Clip &part) { return t < part.start; });
       if (found == parts.begin()) return {};
       current = &*std::prev(found);
       if (time >= current->End()) return {};
+      origin += (current->start - current->sourceStart / current->playbackRate) * scale;
+      scale /= current->playbackRate;
       time = current->ContentTimeAtProjectTime(time);
       playbackRate *= current->playbackRate;
       crop = VideoEditing::ComposeVideoFrameCrops(current->crop, crop);
@@ -155,7 +229,7 @@ Clip RetimeVideoClip(const Clip &clip, const MediaSource &fallback, const VideoC
 {
    RequireUsableVideoContent(clip, fallback);
    if (!std::isfinite(change.anchor) || change.anchor < 0 ||
-       !std::isfinite(change.timeScale) || change.timeScale <= 0)
+       !std::isfinite(change.timeScale) || change.timeScale <= 0 || !std::isfinite(change.shift))
       throw std::runtime_error("The video speed change has no usable timing map.");
    auto result = clip;
    result.start = change.ProjectTimeAfterRetiming(clip.start);
@@ -177,7 +251,7 @@ void RemapVideoContentLinks(Clip &clip, const std::vector<std::pair<std::string,
 }
 bool SameVideoContent(const Clip &a, const Clip &b)
 {
-   if (a.muted != b.muted || !(a.crop == b.crop) || a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
+   if (a.muted != b.muted || a.timingLocked != b.timingLocked || !(a.opacity == b.opacity) || a.opacityModifiers != b.opacityModifiers || !(a.crop == b.crop) || a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
        a.markers.size() != b.markers.size()) return false;
    for (size_t i{}; i < a.markers.size(); ++i)
       if (a.markers[i].id != b.markers[i].id || a.markers[i].position != b.markers[i].position ||

@@ -44,6 +44,8 @@ COMMON_INPUTS = (
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
+    CheckGroup("media-collection", ("src/media/CollectMediaFiles.*", "src/media/TestMediaCollection.cpp"),
+        "media-collection-test"),
     CheckGroup("media-clip-selection", ("src/clip-groups/SelectMediaClips.h",
         "src/clip-groups/TestMediaClipSelection.cpp"), "media-clip-selection-test"),
     CheckGroup("project-storage", ("libraries/lib-project-file-io/ConfigureProjectStorage.*",
@@ -57,10 +59,10 @@ GROUPS = (
         "src/video/SyncVideoPlayback.h", "src/video/ChoosePreviewQuality.h", "src/video/ChooseVideoExport.h",
         "src/video/RelinkVideoMedia.h", "src/video/TestVideoPlayback.cpp"), "video-playback-test"),
     CheckGroup("video-edits", TIMELINE_INPUTS + (
-        "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp"), "video-edits-test"),
+        "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp", "src/clip-groups/PlanClipPlacement.h"), "video-edits-test"),
     CheckGroup("video-composition", TIMELINE_INPUTS + (
         "src/video/PlanVideoEdits.*", "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*",
-        "src/video/PlanVideoExport.*",
+        "src/video/PlanVideoExport.*", "src/video/PlanVideoTransitions.*",
         "src/video/TestVideoComposition.cpp"), "video-composition-test"),
     CheckGroup("product-branding-core", (
         "libraries/lib-strings/ApplyProductBranding.*", "libraries/lib-strings/tests/TestProductBranding.cpp"),
@@ -88,6 +90,12 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*",
+    "src/media/CollectProjectMedia.*",
+    "scripts/piped-work/test_beginner_edits.py",
+    "src/tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp",
+    "src/clip-groups/EditClipPlacement.*",
+    "src/clip-groups/GuardMediaDialogs.*", "src/commands/ScriptCommandRelay.cpp",
     "src/clip-groups/SelectMediaClips.*", "scripts/piped-work/test_clip_selection.py",
     "src/tracks/ui/TimeShiftHandle.*", "src/tracks/ui/SelectHandle.cpp",
     "src/tracks/ui/AffordanceHandle.*", "src/export/ExportAudioDialog.*",
@@ -106,6 +114,7 @@ NATIVE_INPUTS = (
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
     "src/video/PlayVideoMedia.cpp", "src/video/PlayVideoMedia.h",
     "src/video/EditVideoComposition.cpp", "src/video/EditVideoComposition.h",
+    "src/video/ShowVideoCrop.*",
     "src/video/CreateVideoTrack.h", "src/video/CreateVideoTrack.cpp",
     "src/video/ShowVideoTrack.h", "src/video/ShowVideoTrack.cpp",
     "src/video/PrepareVideoPreview.h", "src/video/PrepareVideoPreview.cpp",
@@ -120,13 +129,23 @@ NATIVE_INPUTS = (
     "libraries/lib-project-history/*", "libraries/lib-project-file-io/*", "libraries/lib-viewport/*",
     "CMakeLists.txt", "CMakePresets.json",
 )
-OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
+OWNED_INPUTS = ("src/video/*", "src/media/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
 DOCUMENT_SUFFIXES = {".md", ".rst"}
 
 # Native names are adapter contracts checked against CTest's structured catalogue.
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("clip-snapping",), ("src/tracks/ui/TimeShiftHandle.*", "src/clip-groups/EditClipPlacement.*")),
+    (("video-fades", "preview-quality", "video-export-timing"), (
+        "src/video/PlanVideoTransitions.*", "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*")),
+    (("collect-media",), ("src/media/CollectProjectMedia.*", "src/media/CollectMediaFiles.*")),
+    (("delete-gap", "clip-properties", "visual-crop", "clip-selection", "video-linked-split-edges"), (
+        "src/clip-groups/EditClipPlacement.*", "src/clip-groups/PlanClipPlacement.h",
+        "src/clip-groups/GuardMediaDialogs.*", "src/commands/ScriptCommandRelay.cpp",
+        "src/clip-groups/GroupAudioClips.*", "src/clip-groups/LinkMediaClips.*",
+        "src/tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp",
+        "scripts/piped-work/test_beginner_edits.py")),
     (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport"), (
         "src/video/ShowVideoPreview.cpp", "src/video/PlayVideoMedia.*", "src/video/PrepareVideoPreview.*",
         "src/video/ChoosePreviewQuality.*", "src/video/SyncVideoPlayback.*",
@@ -138,9 +157,9 @@ INSTALLER_NATIVE_GROUPS = (
         "src/clip-groups/SelectMediaClips.*", "src/clip-groups/LinkMediaClips.*",
         "src/tracks/ui/TimeShiftHandle.*", "src/tracks/ui/SelectHandle.cpp", "src/tracks/ui/AffordanceHandle.*",
         "src/tracks/playabletrack/wavetrack/ui/WaveTrackShifter.cpp", "scripts/piped-work/test_clip_selection.py")),
-    (("video-crop", "video-crop-controls", "video-compound-render", "video-parent-links",
+    (("video-crop", "video-crop-controls", "visual-crop", "video-compound-render", "video-parent-links",
       "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage", "video-clip-storage"), (
-        "src/video/EditVideoComposition.*", "src/video/EvaluateVideoTimeline.*",
+        "src/video/EditVideoComposition.*", "src/video/ShowVideoCrop.*", "src/video/EvaluateVideoTimeline.*",
         "src/video/RenderVideoComposition.*", "src/video/PlanVideoExport.*")),
     (("clip-actions", "video-clip-export", "edit-cursor-line", "video-export-timing"), (
         "src/clip-groups/OpenClipActions.*", "src/video/ExportVideoMix.*", "src/video/ChooseVideoExport.*",
@@ -156,6 +175,7 @@ INSTALLER_NATIVE_GROUPS = (
         "libraries/lib-project-history/*", "libraries/lib-viewport/*", "src/toolbars/ControlToolBar.*")),
 )
 INSTALLER_SHARED_INPUTS = (
+    "src/commands/ScriptCommandRelay.cpp",
     "CMakeLists.txt", "CMakePresets.json", "src/video/CMakeLists.txt", "src/menus/*.cpp",
     "src/commands/GetInfoCommand.cpp", "src/ProjectAudioManager.*", "src/TrackPanel.cpp",
     "src/TrackUtilities.cpp", "src/tracks/ui/ChannelView.cpp", "libraries/lib-wave-track/WaveTrack.cpp",

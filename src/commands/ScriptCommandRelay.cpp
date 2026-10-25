@@ -26,6 +26,7 @@ code out of ModuleManager.
 #include "ActiveProject.h"
 #include "AppCommandEvent.h"
 #include "Project.h"
+#include "../clip-groups/GuardMediaDialogs.h"
 #include <wx/app.h>
 #include <exception>
 #include <future>
@@ -45,7 +46,7 @@ static int ExecCommand(wxString *pIn, wxString *pOut, bool fromMain)
          ? std::string{ requestBytes.data(), requestBytes.length() } : std::string{};
       auto completion = std::make_shared<std::promise<std::string>>();
       auto response = completion->get_future();
-      wxTheApp->CallAfter([request = std::move(request), completion] {
+      auto dispatch = [request = std::move(request), completion] {
          try {
             wxString command = wxString::FromUTF8(request.c_str(), request.size());
             wxString reply;
@@ -62,6 +63,12 @@ static int ExecCommand(wxString *pIn, wxString *pOut, bool fromMain)
             completion->set_value("Scripting dispatch failed with an unknown exception.\n"
                "BatchCommand finished: Failed!\n");
          }
+      };
+      wxTheApp->CallAfter([dispatch = std::move(dispatch)] {
+         // A modal window can be hidden before its stack frame has returned.
+         // Construct no native command until that owner has released its guard;
+         // waiting here on the GUI thread would deadlock the dialog itself.
+         if (!ClipActions::QueueCommandDuringMediaDialog(dispatch)) dispatch();
       });
       const auto reply = response.get();
       *pOut = wxString::FromUTF8(reply.c_str(), reply.size());

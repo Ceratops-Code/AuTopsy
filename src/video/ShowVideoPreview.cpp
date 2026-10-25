@@ -17,6 +17,7 @@
 #include "EditVideoTimeline.h"
 #include "EditVideoContent.h"
 #include "PrepareVideoPreview.h"
+#include "PrepareVideoEffects.h"
 #include "ShowVideoTrack.h"
 #include "CreateVideoTrack.h"
 #include "RelinkVideoMedia.h"
@@ -215,6 +216,8 @@ class VideoPreviewFrame final : public wxFrame {
    wxChoice *mQualityChoice{};
    VideoPreview::PreviewQuality mQuality{VideoPreview::PreviewQuality::Automatic};
    bool mChangingQuality{};
+   bool mInTimer{};
+   std::shared_ptr<const VideoEditing::PreparedVideoComposition> mEffects;
    std::vector<std::shared_ptr<const VideoPreview::PreparedMedia>> mQualityMedia;
    bool mDraggingTimeline{};
    std::unique_ptr<VideoPreview::VideoMediaPlayer> mPlayer;
@@ -353,6 +356,7 @@ class VideoPreviewFrame final : public wxFrame {
             }
          }
          auto current = mMedia;
+         auto effects = VideoEditing::PrepareProjectVideoPreview(*project, quality, false, this);
          for (const auto &media : prepared)
             if (media->sourcePath == mPath) { current = media; break; }
          const bool original = quality == VideoPreview::PreviewQuality::Original;
@@ -365,6 +369,7 @@ class VideoPreviewFrame final : public wxFrame {
          }
          mQuality = quality; mMedia = std::move(current);
          mQualityMedia = std::move(prepared);
+         mEffects = std::move(effects); mPath.clear();
          mPreciseFrames = false; mUsingOriginalFrames = original && mMedia && mMedia->lightweight;
          mDurationChecked = false; mLoadTime.Start();
          mChangingQuality = false; mTimeline->SetFocus();
@@ -386,6 +391,9 @@ class VideoPreviewFrame final : public wxFrame {
 
    void OnTimer(wxTimerEvent &)
    {
+      if (mInTimer || mChangingQuality) return;
+      struct TimerGuard { bool &active; ~TimerGuard() { active = false; } } guard{mInTimer};
+      mInTimer = true;
       if (IsBeingDeleted()) {
          mTimer.Stop();
          return;
@@ -396,6 +404,7 @@ class VideoPreviewFrame final : public wxFrame {
          Destroy();
          return;
       }
+      if (VideoEditing::IsPreparingVideoEffects(*project)) return;
       UpdateTransportControls(*project);
       if (!mQualityMedia.empty() && mQualityLeaseClock.Time() >= 1000) {
          mQualityLeaseClock.Start();
@@ -428,13 +437,26 @@ class VideoPreviewFrame final : public wxFrame {
          }
          mWasPlaying = transport.playing;
 
-          const auto picturePosition = VideoTimeline::FindProjectPicture(*project, transport.position);
+          auto picturePosition = VideoTimeline::FindProjectPicture(*project, transport.position);
+          const auto originalRate = picturePosition.visible ? picturePosition.source.frameRate : mSourceFrameRate;
+          if (transport.playing) mPreciseFrames = false;
+          mEffects = VideoEditing::PrepareProjectVideoPreview(*project, mQuality, mPreciseFrames, this);
+          if (mEffects) {
+             picturePosition = {};
+             if (const auto *clip = VideoTimeline::ClipAt(mEffects->timeline, transport.position)) {
+                const auto sample = VideoTimeline::SampleVideoContent(*clip,
+                   VideoTimeline::SourceFor(mEffects->timeline, *clip), clip->ContentTimeAtProjectTime(transport.position));
+                if (sample) picturePosition = {true, sample.source, sample.sourceTime, clip->id,
+                   sample.playbackRate, sample.crop};
+             }
+          }
          mProjectTime = transport.position;
          if (picturePosition.visible && mPath != wxString::FromUTF8(picturePosition.source.path)) {
             const auto &source = picturePosition.source;
             const auto metadata = VideoTimeline::CreateVideoTimeline(source.path,source.duration,
                source.frameRate,source.width,source.height);
-             Load(wxString::FromUTF8(source.path), &metadata);
+             Load(wxString::FromUTF8(source.path), &metadata, mEffects
+                ? VideoEditing::FindPreparedEffectMedia(*mEffects, source.path) : nullptr);
           }
           // Playback keeps its low-cost proxy. Frame inspection reads the source
           // so a 30 fps proxy cannot hide frames from a 60 fps original.
@@ -473,7 +495,7 @@ class VideoPreviewFrame final : public wxFrame {
          }
          if (!video.ready && mLoadTime.Time() > 15000)
             throw std::runtime_error{ "The video did not become ready within 15 seconds." };
-          const auto rate = picturePosition.visible ? picturePosition.source.frameRate : mSourceFrameRate;
+          const auto rate = originalRate;
           // Native audio selections and preroll may precede video time zero.
           const auto timecode = (transport.position < 0 ? wxString{"-"} : wxString{}) +
              wxString::FromUTF8(VideoPreview::FormatFrameTimecode(std::abs(transport.position), rate));
@@ -644,7 +666,8 @@ public:
       mPlayer.reset();
    }
 
-   bool Load(const wxString &path, const VideoTimeline::Timeline *saved = nullptr)
+   bool Load(const wxString &path, const VideoTimeline::Timeline *saved = nullptr,
+      std::shared_ptr<const VideoPreview::PreparedMedia> rendered = {})
    {
       if (mMedia) {
          mPreviousMedia.push_back(mMedia);
@@ -660,7 +683,7 @@ public:
          mSourceWidth = saved->sourceWidth; mSourceHeight = saved->sourceHeight;
          const auto profile = VideoPreview::ChoosePreviewQualityProfile(mQuality,
             mSourceWidth, mSourceHeight, mSourceFrameRate);
-         mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, profile.lightweight,
+         mMedia = rendered ? rendered : VideoPreview::PrepareVideoMedia(path, mSourceDuration, profile.lightweight,
             this, false, profile.maximumHeight);
          if (!mMedia) mMedia = VideoPreview::PrepareVideoMedia(path, mSourceDuration, false, this, false);
       }
@@ -1127,7 +1150,14 @@ public:
          return false;
       }
       try {
-          const bool exported = VideoExport::ExportMix(context.project, timeline,
+          auto effects = VideoEditing::PrepareProjectVideoExport(context.project, VideoTimeline::GetProjectVisibleVideoLayers(context.project),
+             VideoTimeline::GetProjectVideoDuration(context.project),
+             {mWidth, mHeight, 0, mFrameRate > 0 ? mFrameRate : timeline.frameRate, true},
+             &ProjectWindow::Get(context.project));
+          auto rendering = effects ? effects->timeline : timeline;
+          rendering.protectedSourcePaths.insert(rendering.protectedSourcePaths.end(),
+             timeline.protectedSourcePaths.begin(), timeline.protectedSourcePaths.end());
+          const bool exported = VideoExport::ExportMix(context.project, rendering,
             VideoTimeline::GetProjectVideoDuration(context.project), mFileName, mOverwrite, &ProjectWindow::Get(context.project),
             {Utf8(mPreset), mWidth, mHeight, mFrameRate, mQuality});
          if (exported) context.Status(_("Exported video with the project audio mix: ") + mFileName);

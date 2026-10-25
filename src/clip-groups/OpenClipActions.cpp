@@ -1,4 +1,5 @@
 #include "OpenClipActions.h"
+#include "EditClipPlacement.h"
 #include "CommandContext.h"
 #include "CommonCommandFlags.h"
 #include "DoEffect.h"
@@ -138,6 +139,25 @@ void ClipActions::ShowAudioClipExport(const CommandContext& context)
    });
 }
 
+void ClipActions::ShowAudioClipProperties(const CommandContext& context)
+{
+   WithClipError(context.project, [&] {
+      const auto target = FindAudioClip(context);
+      for (const auto &clip : target.track->Intervals()) if (clip->GetPlayStartTime() == target.start) {
+         ShowAudioClipProperties(context.project, *target.track, *clip, &ProjectWindow::Get(context.project)); return;
+      }
+   });
+}
+void ClipActions::CloseAudioClipGap(const CommandContext& context)
+{
+   WithClipError(context.project, [&] {
+      const auto target = FindAudioClip(context);
+      for (const auto &clip : target.track->Intervals()) if (clip->GetPlayStartTime() == target.start) {
+         CloseGapBeforeAudioClip(context.project, *target.track, *clip); return;
+      }
+   });
+}
+
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 void ClipActions::ShowVideoClipExport(AudacityProject& project,
    const AuTopsyVideoTrack& track, uint64_t clipId, wxWindow* parent)
@@ -177,6 +197,13 @@ namespace {
 using namespace MenuRegistry;
 AttachedItem sClipVolume{
    Command("ChangeAudioClipVolume", XXO("Clip &Volume..."), ClipActions::ShowAudioClipVolume,
+      AudioIONotBusyFlag()), wxT("Edit/Other/Clip")};
+AttachedItem sClipProperties{
+   Command("AudioClipProperties", XXO("Clip &Properties..."),
+      [](const CommandContext &context) { ClipActions::ShowAudioClipProperties(context); },
+      AudioIONotBusyFlag()), wxT("Edit/Other/Clip")};
+AttachedItem sClipCloseGap{
+   Command("CloseAudioClipGap", XXO("Close Gap Before Clip"), ClipActions::CloseAudioClipGap,
       AudioIONotBusyFlag()), wxT("Edit/Other/Clip")};
 AttachedItem sClipExport{
    Command("ExportAudioClip", XXO("&Export Clip..."), ClipActions::ShowAudioClipExport,

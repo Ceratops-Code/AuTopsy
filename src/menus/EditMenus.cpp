@@ -1,6 +1,7 @@
 #include "../AdornedRulerPanel.h"
 #include "../Clipboard.h"
 #include "../CommonCommandFlags.h"
+#include "../clip-groups/EditClipPlacement.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "../video/CreateVideoTrack.h"
 #include "../video/PlanVideoEdits.h"
@@ -275,10 +276,17 @@ void ClearClipboard()
    }
 }
 
+bool PermitTimingEdit(AudacityProject &project,
+   ClipActions::TimingEditScope scope = ClipActions::TimingEditScope::Selection, bool syncLock = false)
+{
+   try { ClipActions::RequireUnlockedSelectedMedia(project, scope, syncLock); return true; }
+   catch (const std::runtime_error &) {
+      AudacityMessageBox(XO("Unlock the clip in Clip Properties before changing its timing."), XO("Locked Clip")); return false;
+   }
+}
+
 void OnCut(const CommandContext &context)
 {
-   ClearClipboard();
-
    auto &project = context.project;
    auto &tracks = TrackList::Get( project );
    auto &trackPanel = TrackPanel::Get( project );
@@ -307,6 +315,8 @@ void OnCut(const CommandContext &context)
       }
    }
 
+   if (!PermitTimingEdit(project, ClipActions::TimingEditScope::Following, true)) return;
+   ClearClipboard();
    auto &clipboard = Clipboard::Get();
    clipboard.Clear();
 
@@ -370,9 +380,10 @@ void OnCut(const CommandContext &context)
    ruler.DrawOverlays( true );
 }
 
-void OnDelete(const CommandContext &context)
+void OnRippleDelete(const CommandContext &context)
 {
    auto &project = context.project;
+   if (!PermitTimingEdit(project, ClipActions::TimingEditScope::Following, true)) return;
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
    VideoTimeline::SelectVideoClipForDeletion(project);
 #endif
@@ -395,6 +406,18 @@ void OnDelete(const CommandContext &context)
       XO("Deleted %.2f seconds at t=%.2f")
          .Format( seconds, selectedRegion.t0()),
       XO("Delete"));
+}
+
+void OnSplitDelete(const CommandContext &context);
+bool DeleteSelectionLeavingGap(const CommandContext &context);
+void OnDelete(const CommandContext &context)
+{
+   const SelectedRegion previous = ViewInfo::Get(context.project).selectedRegion;
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   VideoTimeline::SelectVideoClipForDeletion(context.project);
+#endif
+   if (DeleteSelectionLeavingGap(context)) ViewInfo::Get(context.project).selectedRegion.collapseToT0();
+   else ViewInfo::Get(context.project).selectedRegion = previous;
 }
 
 
@@ -597,6 +620,7 @@ void OnPaste(const CommandContext &context)
    const auto &clipboard = Clipboard::Get();
    if (clipboard.GetTracks().empty())
       return;
+   if (!PermitTimingEdit(project, ClipActions::TimingEditScope::Following, true)) return;
 
    const auto srcTracks = FindSourceTracks(context);
    if (!srcTracks)
@@ -639,6 +663,15 @@ void OnPaste(const CommandContext &context)
    }
    auto iPair = correspondence.begin();
    const auto endPair = correspondence.cend();
+   // Native multi-track paste may also target following unselected tracks.
+   // Check those actual destinations before any track receives its first paste.
+   try {
+      for (const auto &pair : correspondence)
+         ClipActions::RequireUnlockedTrackMedia(*pair.first, t0, t1, ClipActions::TimingEditScope::Following);
+   }
+   catch (const std::runtime_error &) {
+      AudacityMessageBox(XO("Unlock the destination clip in Clip Properties before pasting into it."), XO("Locked Clip")); return;
+   }
 
    // Outer loop by sync-lock groups
    auto next = tracks.begin();
@@ -840,9 +873,10 @@ void OnSplitCut(const CommandContext &context)
       .PushState(XO("Cut to clipboard and leave gap"), XO("Cut and leave gap"));
 }
 
-void OnSplitDelete(const CommandContext &context)
+bool DeleteSelectionLeavingGap(const CommandContext &context)
 {
    auto &project = context.project;
+   if (!PermitTimingEdit(project)) return false;
    auto &tracks = TrackList::Get(project);
    auto &selectedRegion = ViewInfo::Get(project).selectedRegion;
 
@@ -860,7 +894,10 @@ void OnSplitDelete(const CommandContext &context)
       XO("Split-deleted %.2f seconds at t=%.2f")
          .Format(selectedRegion.duration(), selectedRegion.t0()),
       XO("Split Delete"));
+   return true;
 }
+
+void OnSplitDelete(const CommandContext &context) { DeleteSelectionLeavingGap(context); }
 
 void OnSilence(const CommandContext &context)
 {
@@ -889,6 +926,7 @@ void OnSilence(const CommandContext &context)
 void OnTrim(const CommandContext &context)
 {
    auto &project = context.project;
+   if (!PermitTimingEdit(project, ClipActions::TimingEditScope::OutsideSelection)) return;
    auto &tracks = TrackList::Get( project );
    auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
 
@@ -1266,6 +1304,8 @@ auto EditMenu()
                      NotBusyTimeAndTracksFlags,
                      Options{ wxT("Ctrl+Alt+X") } ),
                   /* i18n-hint: (verb) Do a special kind of DELETE*/
+                  Command( wxT("RippleDelete"), XXO("Ripple Delete (Close Gap)"), OnRippleDelete,
+                     NotBusyTimeAndTracksFlags ),
                   Command( wxT("SplitDelete"), XXO("&Delete and leave gap"), OnSplitDelete,
                      NotBusyTimeAndTracksFlags,
                      Options{ wxT("Ctrl+Alt+K") } )

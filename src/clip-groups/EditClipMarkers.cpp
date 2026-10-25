@@ -35,7 +35,8 @@ struct MarkerAttachment final : WaveClipListener {
    bool HandleXMLAttribute(const std::string_view &name, const XMLAttributeValueView &value) override {
       if (name != "autopsyMarkers" || !value.IsStringView()) return false;
       try {
-         const auto text = wxString(value.ToWString()).ToUTF8();
+         const auto valueText = wxString(value.ToWString());
+         const auto text = valueText.ToUTF8();
          markers = ClipMarkers::DecodeMarkers({text.data(), text.length()}); return true;
       }
       catch (...) { return false; }
