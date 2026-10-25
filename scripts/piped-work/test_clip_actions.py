@@ -203,6 +203,28 @@ def check_audio_clip_actions(client, root, ffmpeg):
     baseline = selected_audio(client, root, "_volume-before.wav", 0, 0, end, ffmpeg)
     other = selected_audio(client, root, "_other-before.wav", 1, 0, end, ffmpeg)
 
+    def dismiss_with_project_query(windows, dialog, button):
+        # A context menu opens asynchronously, so another normal scripting
+        # request can arrive inside its modal loop. It must wait until the
+        # stack-owned window and selection adapter have returned, not merely
+        # until that window becomes hidden.
+        completed, failures, replies = threading.Event(), [], []
+
+        def query():
+            try:
+                replies.append(client.data("GetInfo: Type=Tracks Format=JSON"))
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                completed.set()
+
+        pending = threading.Thread(target=query, daemon=True)
+        pending.start()
+        assert not completed.wait(0.25), "A project command ran inside the live clip dialog."
+        windows.click(windows.button(dialog, button))
+        pending.join(timeout=10)
+        assert not pending.is_alive() and not failures and replies, (failures, replies)
+
     def change(db, commit, context=False):
         client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
         client.send("SetTrackStatus: Focused=1")
@@ -210,7 +232,10 @@ def check_audio_clip_actions(client, root, ffmpeg):
 
         def fill(windows, dialog):
             windows.text(windows.field(dialog, "Amplification (dB):"), db)
-            windows.click(windows.button(dialog, "Apply" if commit else "Cancel"))
+            if context:
+                dismiss_with_project_query(windows, dialog, "Apply" if commit else "Cancel")
+            else:
+                windows.click(windows.button(dialog, "Apply" if commit else "Cancel"))
 
         with_native_dialog(lambda: audio_context(client, 0.75, 0, "Clip Volume...") if context
                            else client.send("ChangeAudioClipVolume"), "Amplify", fill, menu_gesture=context)
@@ -247,7 +272,7 @@ def check_audio_clip_actions(client, root, ffmpeg):
             if repeat:
                 windows.text(windows.field(dialog, "File Name:"), "_audio-clip.wav")
                 windows.text(windows.field(dialog, "Folder:"), root)
-            windows.click(windows.button(dialog, "Export" if repeat else "Cancel"))
+            dismiss_with_project_query(windows, dialog, "Export" if repeat else "Cancel")
 
         with_native_dialog(lambda: audio_context(client, 0.75, 0, "Export Clip..."),
                            "Export Audio", export_dialog, menu_gesture=True)

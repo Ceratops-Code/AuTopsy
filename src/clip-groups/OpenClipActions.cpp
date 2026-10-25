@@ -1,5 +1,6 @@
 #include "OpenClipActions.h"
 #include "EditClipPlacement.h"
+#include "GuardMediaDialogs.h"
 #include "CommandContext.h"
 #include "CommonCommandFlags.h"
 #include "DoEffect.h"
@@ -105,6 +106,10 @@ AudioClipTarget FindAudioClip(const CommandContext& context)
 }
 template<typename Action> void WithClipError(AudacityProject& project, Action&& action)
 {
+   // A native menu can leave its modal loop before its stack-owned dialog has
+   // finished destruction. Defer scripting requests (especially Close) through
+   // the action and its error window, so neither can outlive its project.
+   ClipActions::MediaDialogCommandGuard commandGuard;
    try { action(); }
    catch (const std::exception& error) {
       wxMessageBox(wxString::FromUTF8(error.what()), _("Clip Actions"),
