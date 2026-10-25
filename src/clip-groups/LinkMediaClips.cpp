@@ -1,5 +1,6 @@
 #include "LinkMediaClips.h"
 #include "GroupAudioClips.h"
+#include "EditClipPlacement.h"
 #include "../video/CreateVideoTrack.h"
 #include "WaveClip.h"
 #include "WaveTrack.h"
@@ -136,6 +137,10 @@ void ApplyMediaBounds(AudacityProject &project, const std::vector<MediaBounds> &
    std::map<WaveClip*, std::pair<double, double>> audio;
    for (const auto &change : bounds) {
       const auto &member = change.member;
+      if (member.audio ? ClipGroups::IsAudioClipTimingLocked(*member.audio)
+                       : std::any_of(member.video->Timeline().clips.begin(), member.video->Timeline().clips.end(),
+                          [&](const auto &clip) { return clip.id == member.id && clip.timingLocked; }))
+         throw std::runtime_error("Unlock the linked clip in Clip Properties before trimming it.");
       if (member.audio) {
          if ((change.end > change.start || change.retainEmpty) &&
              (change.start < member.audio->GetSequenceStartTime() - 1e-7 ||
@@ -392,6 +397,8 @@ bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    ClipMoveState state;
    state.Init(project, track, TrackShifter::HitTestResult::Intervals, std::move(shifter),
       (found->start + found->End()) / 2, ViewInfo::Get(project), TrackList::Get(project), false);
+   if (ClipActions::MovingMediaHasLockedClips(state))
+      throw std::runtime_error("Unlock the linked clip in Clip Properties before moving it.");
    for (const auto &pair : state.shifters)
       if (std::abs(pair.second->AdjustOffsetSmaller(desired) - desired) > 1e-10)
          throw std::runtime_error("There is not enough free space for the linked clips.");
@@ -405,16 +412,41 @@ bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
 bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &track,
    unsigned long long id, double playbackRate)
 {
+   const auto found = std::find_if(track.Timeline().clips.begin(), track.Timeline().clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == track.Timeline().clips.end()) throw std::runtime_error("The video clip was removed.");
+   return ChangeLinkedMediaClipTiming(project, track, nullptr, id, found->start, playbackRate);
+}
+bool ChangeLinkedMediaClipTiming(AudacityProject &project, Track &track,
+   WaveClip *audioAnchor, unsigned long long id, double start, double playbackRate, bool recordHistory)
+{
    if (track.GetOwner().get() != &TrackList::Get(project))
-      throw std::runtime_error("The video track was removed while the speed dialog was open.");
+      throw std::runtime_error("The clip's track was removed while its properties were open.");
    if (ProjectAudioIO::Get(project).IsAudioActive())
-      throw std::runtime_error("Stop playback or recording before changing video speed.");
-   const auto &clips = track.Timeline().clips;
-   const auto anchor = std::find_if(clips.begin(), clips.end(), [id](const auto &clip) { return clip.id == id; });
-   if (anchor == clips.end()) throw std::runtime_error("The video clip was removed.");
-   const auto timing = VideoTimeline::PrepareVideoClipRetiming(*anchor, playbackRate);
-   if (std::abs(timing.timeScale - 1) < 1e-12) return false;
-   const auto selectedStart = anchor->start, selectedEnd = anchor->start + anchor->duration * timing.timeScale;
+      throw std::runtime_error("Stop playback or recording before changing clip timing.");
+   VideoTimeline::Clip anchor;
+   auto *videoAnchor = dynamic_cast<AuTopsyVideoTrack*>(&track);
+   if (videoAnchor) {
+      const auto &clips = videoAnchor->Timeline().clips;
+      const auto found = std::find_if(clips.begin(), clips.end(), [id](const auto &clip) { return clip.id == id; });
+      if (found == clips.end()) throw std::runtime_error("The video clip was removed.");
+      anchor = *found;
+   }
+   else {
+      auto *wave = dynamic_cast<WaveTrack*>(&track);
+      if (!wave || !audioAnchor) throw std::runtime_error("The audio clip was removed.");
+      const auto clips = wave->Intervals();
+      if (std::none_of(clips.begin(), clips.end(), [&](const auto &clip) { return clip.get() == audioAnchor; }))
+         throw std::runtime_error("The audio clip was removed.");
+      anchor.start = audioAnchor->GetPlayStartTime();
+      anchor.duration = audioAnchor->GetPlayEndTime() - anchor.start;
+      anchor.playbackRate = 1 / audioAnchor->GetStretchRatio();
+   }
+   auto timing = VideoTimeline::PrepareVideoClipRetiming(anchor, playbackRate);
+   if (!std::isfinite(start) || start < 0) throw std::runtime_error("Enter a non-negative clip start.");
+   timing.shift = start - anchor.start;
+   if (std::abs(timing.timeScale - 1) < 1e-12 && std::abs(timing.shift) < 1e-10) return false;
+   const auto selectedStart = start, selectedEnd = start + anchor.duration * timing.timeScale;
    const auto choices = MediaChoices(project);
    std::vector<bool> included(choices.size());
    std::vector<std::vector<std::string>> ownGroups;
@@ -423,7 +455,8 @@ bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &tra
    for (size_t i{}; i < choices.size(); ++i) {
       ownGroups.push_back(ChoiceGroups(choices[i]));
       for (const auto &group : ownGroups.back()) linked[group].push_back(i);
-      if (choices[i].video == &track && choices[i].id == id) {
+      if ((videoAnchor && choices[i].video == videoAnchor && choices[i].id == id) ||
+          (audioAnchor && choices[i].audio == audioAnchor)) {
          included[i] = true; pending.push_back(i);
       }
    }
@@ -440,6 +473,7 @@ bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &tra
    for (size_t i{}; i < choices.size(); ++i) if (included[i]) {
       const auto &choice = choices[i];
       if (choice.audio) {
+         if (IsAudioClipTimingLocked(*choice.audio)) throw std::runtime_error("Unlock the linked audio clip before changing its timing.");
          const auto start = timing.ProjectTimeAfterRetiming(choice.start);
          const auto end = timing.ProjectTimeAfterRetiming(choice.end);
          const auto ratio = choice.audio->GetStretchRatio() * timing.timeScale;
@@ -455,6 +489,7 @@ bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &tra
          const auto part = std::find_if(candidate.clips.begin(), candidate.clips.end(),
             [&](const auto &clip) { return clip.id == choice.id; });
          if (part == candidate.clips.end()) throw std::runtime_error("A linked video clip was removed.");
+         if (part->timingLocked) throw std::runtime_error("Unlock the linked video clip before changing its timing.");
          *part = VideoTimeline::RetimeVideoClip(*part, VideoTimeline::SourceFor(candidate, *part), timing);
       }
    }
@@ -489,7 +524,7 @@ bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &tra
       }
       ViewInfo::Get(project).selectedRegion.setTimes(selectedStart, selectedEnd);
       Viewport::Get(project).HandleResize();
-      ProjectHistory::Get(project).PushState(XO("Changed linked media speed"), XO("Change Clip Speed"));
+      if (recordHistory) ProjectHistory::Get(project).PushState(XO("Changed linked clip timing"), XO("Clip Properties"));
    }
    catch (...) { ProjectHistory::Get(project).RollbackState(); throw; }
    return true;

@@ -4,6 +4,16 @@
 #include <stdexcept>
 
 namespace VideoExport {
+std::int64_t ProjectTimeFrameBoundary(double seconds, double frameRate)
+{
+   if (!std::isfinite(seconds) || seconds < 0 || !std::isfinite(frameRate) || frameRate <= 0 || frameRate > 1000)
+      throw std::runtime_error("The picture clock needs non-negative time and a usable frame rate.");
+   const auto exact = static_cast<long double>(seconds) * frameRate;
+   const auto frames = std::ceil(exact - std::min(1e-7L, exact / 2));
+   if (!std::isfinite(frames) || frames < 0 || frames > 4503599627370495.0L)
+      throw std::runtime_error("The video frame count is outside supported bounds.");
+   return static_cast<std::int64_t>(frames);
+}
 std::pair<int, int> CalculateVideoExportCanvas(int width, int height,
    const VideoEditing::VideoFrameCrop &crop)
 {
@@ -19,13 +29,7 @@ std::vector<VideoExportFrameSpan> PlanVideoExportFrames(
        !std::isfinite(frameRate) || frameRate <= 0 || frameRate > 1000)
       throw std::runtime_error("Video export requires a usable duration and frame rate.");
    const auto boundary = [frameRate](double seconds) {
-      const auto exact = static_cast<long double>(seconds) * frameRate;
-      // Grid tolerance must not erase the only frame of a very slow source.
-      const auto frames = std::ceil(exact - std::min(1e-7L, exact / 2));
-      // Beyond this range double project times cannot distinguish frame edges.
-      if (!std::isfinite(frames) || frames < 0 || frames > 4503599627370495.0L)
-         throw std::runtime_error("The video export frame count is outside supported bounds.");
-      return static_cast<std::int64_t>(frames);
+      return ProjectTimeFrameBoundary(seconds, frameRate);
    };
    std::vector<VideoExportFrameSpan> result;
    std::int64_t cursor{};

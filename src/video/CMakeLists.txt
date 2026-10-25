@@ -2,7 +2,7 @@
 set(autopsy_video_playback_test_sources EditVideoContent.cpp JoinVideoClips.cpp TestVideoPlayback.cpp)
 set(autopsy_video_edits_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp)
 set(autopsy_video_composition_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp
-   EvaluateVideoTimeline.cpp RenderVideoComposition.cpp PlanVideoExport.cpp TestVideoComposition.cpp)
+   EvaluateVideoTimeline.cpp RenderVideoComposition.cpp PlanVideoExport.cpp PlanVideoTransitions.cpp TestVideoComposition.cpp)
 
 #[[
 AuTopsy video tracks and synchronized preview. The SDK is an external libmpv development
@@ -33,6 +33,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       GIT_TAG 6bf41f4f71bf25641befe33365b9d3da4d940920)
    FetchContent_MakeAvailable(Catch2)
    include("${catch2_SOURCE_DIR}/contrib/Catch.cmake")
+   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_collection-tests")
+   add_executable(media-collection-test ../media/CollectMediaFiles.cpp ../media/TestMediaCollection.cpp
+      ../../tests/Catch2Main.cpp)
+   target_compile_features(media-collection-test PRIVATE cxx_std_17)
+   target_link_libraries(media-collection-test PRIVATE Catch2::Catch2)
+   catch_discover_tests(media-collection-test TEST_PREFIX "media-collection::" PROPERTIES TIMEOUT 30
+      ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_collection-tests")
    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libraries/lib-project-file-io/tests"
       "${CMAKE_BINARY_DIR}/project-storage")
    add_executable(media-clip-selection-test ../clip-groups/TestMediaClipSelection.cpp ../../tests/Catch2Main.cpp)
@@ -134,16 +141,23 @@ if(NOT EXISTS "${audacity_video_ffmpeg_runtime}/LICENSE.txt")
 endif()
 
 target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVideoClips.cpp JoinVideoClips.h
+   ../media/CollectMediaFiles.cpp ../media/CollectMediaFiles.h
+   ../media/CollectProjectMedia.cpp ../media/CollectProjectMedia.h
    ShowVideoPreview.cpp SyncVideoPlayback.h ChoosePreviewQuality.h PlayVideoMedia.cpp PlayVideoMedia.h
    ExportVideoMix.cpp ExportVideoMix.h EditVideoTimeline.cpp EditVideoTimeline.h
    PlanVideoEdits.cpp PlanVideoEdits.h EvaluateVideoTimeline.cpp EvaluateVideoTimeline.h
    RenderVideoComposition.cpp RenderVideoComposition.h EditVideoComposition.cpp EditVideoComposition.h
+   ShowVideoCrop.cpp ShowVideoCrop.h
+   PrepareVideoEffects.cpp PrepareVideoEffects.h
+   EditVideoFades.cpp EditVideoFades.h
    PlanVideoExport.cpp PlanVideoExport.h
+   PlanVideoTransitions.cpp PlanVideoTransitions.h
    PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h
    CreateVideoTrack.cpp CreateVideoTrack.h ChooseVideoExport.cpp ChooseVideoExport.h RelinkVideoMedia.cpp RelinkVideoMedia.h
    ../clip-groups/LinkMediaClips.cpp ../clip-groups/LinkMediaClips.h
    ../clip-groups/EditClipMarkers.cpp ../clip-groups/EditClipMarkers.h)
 target_include_directories(Audacity PRIVATE "${audacity_video_mpv_include}")
+target_link_libraries(Audacity PRIVATE bcrypt)
 # Only the enabled video build changes the numeric-runtime requirement. Keep
 # this definition on the owning translation unit rather than every app source.
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../prefs/GUISettings.cpp"
@@ -154,6 +168,7 @@ set_property(SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/GroupAudioClips.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/SelectMediaClips.cpp"
      "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/OpenClipActions.cpp"
+     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/EditClipPlacement.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/CommonTrackControls.cpp"
@@ -219,7 +234,7 @@ if(TARGET video-playback-test)
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-        foreach(_case clip-selection clip-actions video-clip-export video-clip-mute edit-cursor-line groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-crop-controls video-export-timing video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view transport-toolbar preview-navigation preview-controls preview-quality video-cursor project-compatibility)
+        foreach(_case delete-gap clip-properties visual-crop collect-media video-fades clip-snapping clip-selection clip-actions video-clip-export video-clip-mute edit-cursor-line groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-crop-controls video-export-timing video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view transport-toolbar preview-navigation preview-controls preview-quality video-cursor project-compatibility)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"

@@ -2,10 +2,45 @@
 #include "PlanVideoEdits.h"
 #include "JoinVideoClips.h"
 #include "RelinkVideoMedia.h"
+#include "../clip-groups/PlanClipPlacement.h"
 #include <catch2/catch.hpp>
 #include <limits>
 
 using namespace VideoEditing;
+
+TEST_CASE("Clip placement distinguishes touching edges, gaps and occupied destinations", "[video-edits][clip-placement]")
+{
+   using namespace ClipActions;
+   const std::vector<ClipPlacementInterval> neighbours{{0, 2}, {7, 9}, {3, 4}};
+   for (int repeat{}; repeat < 2; ++repeat) {
+      REQUIRE(FindGapBeforeClip(5, neighbours) == 4);
+      REQUIRE_NOTHROW(RequireFreeClipPlacement({4, 7, 1}, neighbours));
+      REQUIRE_THROWS(RequireFreeClipPlacement({3.5, 5, 1}, neighbours));
+      REQUIRE_THROWS(FindGapBeforeClip(3.5, neighbours));
+      REQUIRE_THROWS(RequireClipTiming({2, 2, 1}));
+      REQUIRE_THROWS(RequireClipTiming({0, 2, std::numeric_limits<double>::quiet_NaN()}));
+      REQUIRE_NOTHROW(RequireConsistentClipRetiming(4, 1, {8, 10, 2}));
+      REQUIRE_THROWS(RequireConsistentClipRetiming(4, 1, {8, 11, 2}));
+   }
+}
+
+TEST_CASE("Combined speed and placement preserve linked offsets at final free destinations", "[video-edits][clip-placement]")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("source.mp4", 12, 30);
+   auto original = timeline.clips[0]; original.start = 4; original.duration = 4;
+   original.timingLocked = true;
+   const VideoTimeline::VideoClipRetiming change{4, .5, 6};
+   const auto moved = VideoTimeline::RetimeVideoClip(original, VideoTimeline::SourceFor(timeline, original), change);
+   REQUIRE(moved.start == 10);
+   REQUIRE(moved.duration == 2);
+   REQUIRE(moved.playbackRate == 2);
+   REQUIRE(moved.timingLocked);
+   REQUIRE(change.ProjectTimeAfterRetiming(6) == 11);
+   auto unprotected = moved; unprotected.timingLocked = false;
+   REQUIRE_FALSE(VideoTimeline::SameVideoContent(moved, unprotected));
+   REQUIRE_THROWS(VideoTimeline::RetimeVideoClip(original, VideoTimeline::SourceFor(timeline, original),
+      {4, .5, std::numeric_limits<double>::infinity()}));
+}
 namespace {
 VideoProjectSnapshot Project()
 {

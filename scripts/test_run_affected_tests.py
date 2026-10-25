@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import io
+import itertools
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +23,107 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    @staticmethod
+    def native_catalogue(executable: Path) -> list[dict[str, Any]]:
+        names = set(runner.INSTALLER_BASELINE_TESTS)
+        names.update("fork-" + case for cases, _ in runner.INSTALLER_NATIVE_GROUPS for case in cases)
+        return [{"name": name, "command": [sys.executable, "native.py", "--executable", str(executable),
+                    "--case", name.removeprefix("fork-")]} for name in sorted(names)]
+
+    def test_installer_selection_uses_native_impact_and_rejects_missing_scope(self) -> None:
+        catalogue = self.native_catalogue(Path("AuTopsy.exe"))
+        baseline = set(runner.INSTALLER_BASELINE_TESTS)
+        self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
+        expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
+                               "fork-video-cursor", "fork-video-transport"}
+        self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
+        self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
+        for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
+                                      ([], "does-not-exist", False), ([], None, True)):
+            with self.subTest(paths=paths, extra=extra, unknown=unknown), self.assertRaises(RuntimeError):
+                runner.select_installer_tests(paths, catalogue, extra, unknown)
+        with self.assertRaisesRegex(RuntimeError, "absent"):
+            runner.select_installer_tests([], [test for test in catalogue if test["name"] != "fork-preview"])
+        self.assertIn("fork-video-crop", runner.select_installer_tests([], catalogue, "^fork-video-crop$", True))
+
+    def test_prepackage_checks_keep_acceptance_across_interruption_and_block_changed_runtime(self) -> None:
+        for target, boundary in itertools.product(("fork-preview", "fork-project-compatibility"),
+                                                  ("before", "after", "changed payload")):
+            with self.subTest(target=target, boundary=boundary), tempfile.TemporaryDirectory(prefix="_prepackage-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                root = Path(temporary)
+                build = root / "build"
+                runtime = build / "Release"
+                runtime.mkdir(parents=True)
+                (build / "_fork-tests").mkdir()
+                executable = runtime / "AuTopsy.exe"
+                executable.write_bytes(b"compiled host")
+                catalogue = [test for test in self.native_catalogue(executable)
+                             if test["name"] in runner.INSTALLER_BASELINE_TESTS]
+                interrupted, fixture_calls = False, 0
+                effects: list[str] = []
+
+                def command(arguments, _root, catalogue=catalogue, target=target, boundary=boundary,
+                            build=build, executable=executable, effects=effects):
+                    nonlocal interrupted, fixture_calls
+                    if "--show-only=json-v1" in arguments:
+                        return json.dumps({"tests": catalogue})
+                    name = next(test["name"] for test in catalogue if re.search(arguments[-1], test["name"]))
+                    if name == "fork-fixtures":
+                        fixture_calls += 1
+                        return ""
+                    if name == target and not interrupted and boundary == "before":
+                        interrupted = True
+                        raise InterruptedError("before native effect")
+                    with redirect_stdout(io.StringIO()):
+                        result = native.run_native_check(build / "_fork-tests", name.removeprefix("fork-"),
+                            lambda: {"executable": runner.file_digest(executable)},
+                            lambda _run, _inputs: effects.append(name) or {"result": "passed"})
+                    if name == target and not interrupted:
+                        interrupted = True
+                        if boundary == "changed payload":
+                            executable.write_bytes(b"different host")
+                            return ""
+                        raise InterruptedError("after native effect")
+                    return "1: " + json.dumps(result) + "\n"
+
+                with patch.object(runner, "run_command", side_effect=command), \
+                        patch.object(runner, "changed_paths", return_value=([], "a" * 40)):
+                    with self.assertRaises((InterruptedError, RuntimeError)):
+                        runner.run_prepackage_checks(root, build, None, None)
+                    executable.write_bytes(b"compiled host")
+                    first = runner.run_prepackage_checks(root, build, None, None)
+                    second = runner.run_prepackage_checks(root, build, None, None)
+                self.assertEqual(first["payload"], second["payload"])
+                self.assertEqual([item.get("acceptance") for item in first["checks"]],
+                                 [item.get("acceptance") for item in second["checks"]])
+                self.assertEqual(fixture_calls, 1)
+                self.assertEqual(sorted(effects), ["fork-preview", "fork-project-compatibility"])
+                self.assertFalse((build / "package").exists())
+
+    def test_prepackage_consumes_nested_native_results_and_rejects_missing_or_conflicting_receipts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="_native-results-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            build = Path(temporary)
+            work = build / "_fork-tests"
+            work.mkdir()
+            children = {}
+            with redirect_stdout(io.StringIO()):
+                for phase in ("application", "stock-audacity"):
+                    children[phase] = native.run_native_check(work, "project-compatibility-" + phase,
+                        lambda: {"work": "same host", "check": "same recipe"},
+                        lambda _run, _inputs: {"result": "passed"})
+            value = {"case": "project-compatibility", "result": "passed", **children}
+            output = "1: " + json.dumps(value) + "\n"
+            test = {"name": "fork-project-compatibility", "command": ["client", "--case", "project-compatibility"]}
+            first = runner.read_native_acceptance(output, test, build)
+            self.assertEqual(len(first["acceptance"]), 2)
+            self.assertEqual(first, runner.read_native_acceptance(output, test, build))
+            for failed_output in ("", "1: {malformed}\n", output + output):
+                with self.subTest(output=failed_output), self.assertRaises(RuntimeError):
+                    runner.read_native_acceptance(failed_output, test, build)
+            children["application"]["original_run"] = "f" * 32
+            with self.assertRaisesRegex(RuntimeError, "disagree"):
+                runner.read_native_acceptance("1: " + json.dumps(value), test, build)
+
     def test_unpainted_track_keeps_original_state_when_optional_capture_fails(self) -> None:
         harness = sys.modules[native.painted_video_tracks.__module__]
         info = {"videoTrackThumbnails": False, "videoTrackRows": [{"dataWidth": 0}],
@@ -37,6 +141,50 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn(str(failure), details["screenshot_error"])
                 self.assertEqual(capture.call_count, 1)
 
+    def test_project_capture_publishes_complete_png_and_keeps_last_picture_on_failure(self) -> None:
+        harness = sys.modules[native.painted_video_tracks.__module__]
+        encoded = b"\x89PNG\r\n\x1a\nowned picture"
+        real_write, real_replace = Path.write_bytes, Path.replace
+        for effect, after in itertools.product(("encode", "write", "publish"), (False, True)):
+            with self.subTest(effect=effect, after=after), tempfile.TemporaryDirectory(prefix="_capture-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                picture = Path(temporary) / "_project.png"
+                pending = picture.with_name("_" + picture.name + ".pending")
+                picture.write_bytes(b"previous complete picture")
+
+                def interrupt(operation, label, selected_effect=effect, selected_after=after):
+                    def invoke(*args, **kwargs):
+                        if selected_effect == label and not selected_after:
+                            raise InterruptedError("before " + label)
+                        result = operation(*args, **kwargs)
+                        if selected_effect == label and selected_after:
+                            raise InterruptedError("after " + label)
+                        return result
+                    return invoke
+
+                with patch.object(harness, "run_process", side_effect=interrupt(lambda *a, **k: encoded, "encode")), \
+                        patch.object(Path, "write_bytes", interrupt(real_write, "write")), \
+                        patch.object(Path, "replace", interrupt(real_replace, "publish")):
+                    with self.assertRaises(InterruptedError):
+                        harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                self.assertEqual(picture.read_bytes(), encoded if effect == "publish" and after else b"previous complete picture")
+                self.assertFalse(pending.exists())
+                pending.write_bytes(b"orphaned write")
+                with patch.object(harness, "run_process", return_value=encoded) as encoder:
+                    harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                    timestamp = picture.stat().st_mtime_ns
+                    harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                self.assertEqual(picture.read_bytes(), encoded)
+                self.assertEqual(picture.stat().st_mtime_ns, timestamp)
+                self.assertEqual(encoder.call_args.kwargs["input"], bytes(8))
+                self.assertFalse(pending.exists())
+                for width, height, pixels in ((0, 1, b""), (2, 1, b"")):
+                    with self.assertRaises(ValueError):
+                        harness.write_project_capture("ffmpeg", picture, width, height, pixels)
+                with patch.object(harness, "run_process", return_value=b"incomplete PNG"):
+                    with self.assertRaisesRegex(RuntimeError, "no PNG picture"):
+                        harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                self.assertEqual(picture.read_bytes(), encoded)
+
     def test_renumbered_displays_never_select_the_primary_screen(self) -> None:
         primary = {"device": r"\\.\DISPLAY10", "primary": True, "work": [0, 0, 1280, 672]}
         secondary = {"device": r"\\.\DISPLAY11", "primary": False, "work": [-1280, 113, 0, 785]}
@@ -44,6 +192,19 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(native.select_test_display(layout), secondary)
         with self.assertRaises(RuntimeError):
             native.select_test_display([primary, dict(secondary, primary=True)])
+
+    def test_pane_pointer_scaling_uses_physical_pixels_without_cursor_feedback(self) -> None:
+        harness = sys.modules[native.painted_video_tracks.__module__]
+        cases = (((475, 17), (1067, 382), (1067, 382), (475, 17)),
+                 ((475, 17), (1600, 573), (1067, 382), (712, 26)),
+                 ((100, 80), (1250, 750), (1000, 600), (125, 100)),
+                 ((-4, 700), (2000, 1200), (1000, 600), (-8, 1400)))
+        for _ in range(2):
+            for point, physical, reported, expected in cases:
+                self.assertEqual(harness.scale_pane_pointer_position(point, physical, reported), expected)
+        for physical, reported in (((0, 600), (1000, 600)), ((1000, 600), (1000, 0))):
+            with self.assertRaises(ValueError):
+                harness.scale_pane_pointer_position((10, 10), physical, reported)
 
     def names(self, paths: list[str], all_checks: bool = False) -> set[str]:
         return {group.name for group in runner.select_groups(paths, all_checks)[0]}
@@ -422,13 +583,58 @@ class NativeReceiptTests(unittest.TestCase):
 
     def inputs(self) -> dict[str, Any]:
         return {"executable_sha256": "app", "check_sha256": "check",
+                "script_module_sha256": "module", "payload_dependencies": {"media.dll": "dependency"},
                 "execution_scope": {"platform": "one", "test_display": "screen-two"}}
 
     def execute(self, run_id, inputs):
         return {"result": "passed", "version": "fixture",
                 "observations": {"native_object_seen": True}}
 
-    def test_clip_mute_recipe_changes_prevent_reuse_of_old_fixture_results(self):
+    def test_native_buttons_use_their_own_click_protocol_without_replaying_effects(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        import test_video_clip_edits as edits
+        for kind in ("Button", "wxWindowClassNR"):
+            def class_name(_handle, buffer, _size, name=kind):
+                buffer.value = name
+                return len(name)
+            def rectangle(_handle, pointer):
+                pointer._obj.right, pointer._obj.bottom = 80, 40
+                return True
+            active = [42]
+            def gui_state(_thread, pointer, active_window=active):
+                pointer._obj.active = active_window[0]
+                return True
+            api = SimpleNamespace(GetClassNameW=Mock(side_effect=class_name),
+                                  GetAncestor=Mock(return_value=42),
+                                  GetForegroundWindow=Mock(return_value=99),
+                                  GetWindowThreadProcessId=Mock(return_value=123),
+                                  GetGUIThreadInfo=Mock(side_effect=gui_state),
+                                  GetClientRect=Mock(side_effect=rectangle),
+                                  SendMessageTimeoutW=Mock(return_value=True))
+            window: Any = object.__new__(edits.PreviewNativeWindows)
+            window.api, window.owner, window.enabled = api, lambda _h: 123, lambda _h: True
+            with patch.dict(os.environ, {"AUTOPSY_OWNED_APP_PID": "123"}):
+                for _ in range(2):
+                    window.click(9)
+            expected = [0xF5] * 2 if kind == "Button" else [0x201, 0x202, 0x202] * 2
+            self.assertEqual([call.args[1] for call in api.SendMessageTimeoutW.call_args_list], expected)
+            if kind == "Button":
+                api.GetClientRect.assert_not_called()
+                # An inactive dialog is an unmet input precondition. It may not
+                # receive the click and then be retried as though it had failed.
+                active[0] = 99
+                api.SendMessageTimeoutW.reset_mock()
+                def ready(condition, _description):
+                    if not condition():
+                        raise RuntimeError("inactive dialog")
+                with patch.dict(os.environ, {"AUTOPSY_OWNED_APP_PID": "123"}), patch.object(edits, "wait_for_native_state", side_effect=ready):
+                    with self.assertRaisesRegex(RuntimeError, "inactive dialog"):
+                        window.click(9)
+                api.SendMessageTimeoutW.assert_not_called()
+
+    def test_clip_mute_check_edits_keep_the_unchanged_products_original_acceptance(self):
         # Exact basenames are the native runner contract, not executable fixtures.
         driver = self.root / "_test_driver.py"
         recipe = self.root / "test_video_clip_edits.py"
@@ -444,8 +650,8 @@ class NativeReceiptTests(unittest.TestCase):
                 recipe.write_bytes(b"new complete-audio fixture recipe")
                 changed = native.run_native_check(self.root, arguments.case, read, self.execute)
                 again = native.run_native_check(self.root, arguments.case, read, self.execute)
-            self.assertEqual(app.call_count, 2)
-            self.assertNotEqual(first["original_run"], changed["original_run"])
+            self.assertEqual(app.call_count, 1)
+            self.assertEqual(first["original_run"], changed["original_run"])
             self.assertEqual(again["result"], "reused")
             self.assertEqual(again["original_run"], changed["original_run"])
 
@@ -462,7 +668,7 @@ class NativeReceiptTests(unittest.TestCase):
         self.assertEqual(Path(first["receipt"]).read_bytes(), original)
         self.assertFalse(list((self.root / "_accepted").glob("_pending-*")))
 
-    def test_preview_case_recipe_changes_run_only_the_requested_case(self):
+    def test_preview_check_edits_preserve_the_original_check_version(self):
         driver = self.root / "_test_driver.py"
         recipe = self.root / "test_preview_controls.py"
         executable, module = self.root / "_app.exe", self.root / "_script.dll"
@@ -475,13 +681,15 @@ class NativeReceiptTests(unittest.TestCase):
                 def read(arguments=arguments):
                     return native.native_test_inputs(arguments, executable, module, {"device": "screen-two"})
                 first = native.run_native_check(self.root, case, read, self.execute)
+                original = Path(first["receipt"]).read_bytes()
                 recipe.write_bytes(case.encode())
                 with patch.object(self, "execute", wraps=self.execute) as app:
                     changed = native.run_native_check(self.root, case, read, self.execute)
                     again = native.run_native_check(self.root, case, read, self.execute)
-                self.assertEqual(app.call_count, 1)
-                self.assertNotEqual(first["original_run"], changed["original_run"])
+                self.assertEqual(app.call_count, 0)
+                self.assertEqual(first["original_run"], changed["original_run"])
                 self.assertEqual(again["original_run"], changed["original_run"])
+                self.assertEqual(Path(first["receipt"]).read_bytes(), original)
 
     def test_native_newer_matching_failure_blocks_pass_until_a_later_matching_success(self):
         inputs = self.inputs()
@@ -497,8 +705,8 @@ class NativeReceiptTests(unittest.TestCase):
         self.assertEqual(app.call_count, 1)
         self.assertEqual(reused["original_run"], repaired["original_run"])
 
-    def test_native_changed_artifact_check_or_environment_runs_only_its_affected_case(self):
-        for field in ("executable_sha256", "check_sha256", "execution_scope"):
+    def test_native_changed_artifact_or_environment_runs_only_its_affected_case(self):
+        for field in ("executable_sha256", "script_module_sha256", "payload_dependencies", "execution_scope", "required_coverage"):
             with self.subTest(field=field):
                 root = self.root / field
                 root.mkdir()
@@ -511,6 +719,28 @@ class NativeReceiptTests(unittest.TestCase):
                 self.assertEqual(app.call_count, 1)
                 self.assertNotEqual(first["original_run"], changed["original_run"])
                 self.assertEqual(changed["original_run"], again["original_run"])
+
+    def test_native_check_edit_does_not_hide_a_newer_failure_or_rewrite_a_pass(self):
+        inputs = self.inputs()
+        first = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+        original = Path(first["receipt"]).read_bytes()
+        inputs["check_sha256"] = "edited check"
+        with patch.object(self, "execute", wraps=self.execute) as app:
+            reused = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+        self.assertEqual(app.call_count, 0)
+        self.assertEqual(reused["original_run"], first["original_run"])
+        self.assertEqual(Path(first["receipt"]).read_bytes(), original)
+        failed = json.loads(original)
+        failed.update(run=native.uuid.uuid4().hex, result="failed", check_inputs=inputs,
+                      finished_ns=failed["finished_ns"] + 1)
+        native.retain_behavior_result(self.root, failed)
+        inputs["check_sha256"] = "another edited check"
+        self.assertEqual(native.plan_native_check(self.root, "video", inputs)["decision"], "execute")
+        with patch.object(self, "execute", wraps=self.execute) as app:
+            repaired = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+            again = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+        self.assertEqual(app.call_count, 1)
+        self.assertEqual(again["original_run"], repaired["original_run"])
 
     def test_native_legacy_acceptance_keeps_original_bytes_without_inventing_scope(self):
         record: dict[str, Any] = {"run": native.uuid.uuid4().hex, "case": "video", "result": "passed",

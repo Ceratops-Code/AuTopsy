@@ -92,6 +92,8 @@ WaveClipUIUtilities::GetWaveClipMenuItems()
       { L"RenderPitchAndSpeed", XO("Render Pitch and Speed") },
       {},
       { L"ChangeAudioClipVolume", XO("Clip Volume...") },
+      { L"AudioClipProperties", XO("Clip Properties...") },
+      { L"CloseAudioClipGap", XO("Close Gap Before Clip") },
       { L"ExportAudioClip", XO("Export Clip...") },
    };
    ;

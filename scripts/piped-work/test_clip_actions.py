@@ -107,9 +107,17 @@ class ClipDialogWindows(PreviewNativeWindows):
         assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
         wait_for_native_state(lambda: self.visible(dialog) and self.enabled(dialog), "owned clip dialog ready")
         self.api.SetForegroundWindow(dialog)
-        wait_for_native_state(lambda: self.api.GetForegroundWindow() == dialog,
+        wait_for_native_state(lambda: self.active_in_thread(dialog),
                               lambda: f"owned clip dialog {dialog} active; foreground="
                               f"{self.api.GetForegroundWindow()} ({self.caption(self.api.GetForegroundWindow())!r})")
+
+    def click(self, handle):
+        # Standard Windows buttons may ignore BM_CLICK on an inactive dialog.
+        # Establish that precondition here, including direct-command cases that
+        # intentionally entered text without taking shared desktop focus.
+        if self.kind(handle) == "Button":
+            self.activate(self.api.GetAncestor(handle, 2))
+        super().click(handle)
 
 
 def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False, needs_focus=True):
@@ -143,8 +151,8 @@ def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False, n
         if needs_focus:
             windows.activate(dialog)
         else:
-            # Direct messages to owned buttons need no shared desktop focus.
-            # Still require the same PID/display and a ready native dialog.
+            # Text messages need no desktop focus; the button owner establishes
+            # its activation precondition immediately before a click.
             assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
             wait_for_native_state(lambda: windows.visible(dialog) and windows.enabled(dialog), "owned dialog ready")
         handle_dialog(windows, dialog)
@@ -195,6 +203,28 @@ def check_audio_clip_actions(client, root, ffmpeg):
     baseline = selected_audio(client, root, "_volume-before.wav", 0, 0, end, ffmpeg)
     other = selected_audio(client, root, "_other-before.wav", 1, 0, end, ffmpeg)
 
+    def dismiss_with_project_query(windows, dialog, button):
+        # A context menu opens asynchronously, so another normal scripting
+        # request can arrive inside its modal loop. It must wait until the
+        # stack-owned window and selection adapter have returned, not merely
+        # until that window becomes hidden.
+        completed, failures, replies = threading.Event(), [], []
+
+        def query():
+            try:
+                replies.append(client.data("GetInfo: Type=Tracks Format=JSON"))
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                completed.set()
+
+        pending = threading.Thread(target=query, daemon=True)
+        pending.start()
+        assert not completed.wait(0.25), "A project command ran inside the live clip dialog."
+        windows.click(windows.button(dialog, button))
+        pending.join(timeout=10)
+        assert not pending.is_alive() and not failures and replies, (failures, replies)
+
     def change(db, commit, context=False):
         client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
         client.send("SetTrackStatus: Focused=1")
@@ -202,7 +232,10 @@ def check_audio_clip_actions(client, root, ffmpeg):
 
         def fill(windows, dialog):
             windows.text(windows.field(dialog, "Amplification (dB):"), db)
-            windows.click(windows.button(dialog, "Apply" if commit else "Cancel"))
+            if context:
+                dismiss_with_project_query(windows, dialog, "Apply" if commit else "Cancel")
+            else:
+                windows.click(windows.button(dialog, "Apply" if commit else "Cancel"))
 
         with_native_dialog(lambda: audio_context(client, 0.75, 0, "Clip Volume...") if context
                            else client.send("ChangeAudioClipVolume"), "Amplify", fill, menu_gesture=context)
@@ -239,7 +272,7 @@ def check_audio_clip_actions(client, root, ffmpeg):
             if repeat:
                 windows.text(windows.field(dialog, "File Name:"), "_audio-clip.wav")
                 windows.text(windows.field(dialog, "Folder:"), root)
-            windows.click(windows.button(dialog, "Export" if repeat else "Cancel"))
+            dismiss_with_project_query(windows, dialog, "Export" if repeat else "Cancel")
 
         with_native_dialog(lambda: audio_context(client, 0.75, 0, "Export Clip..."),
                            "Export Audio", export_dialog, menu_gesture=True)

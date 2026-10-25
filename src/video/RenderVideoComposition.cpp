@@ -1,4 +1,5 @@
 #include "RenderVideoComposition.h"
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <locale>
@@ -6,6 +7,30 @@
 #include <stdexcept>
 
 namespace VideoEditing {
+VideoFrameCrop DragVideoCropHandle(const VideoFrameCrop &initial, unsigned handle,
+   double horizontal, double vertical, double minimumWidth, double minimumHeight)
+{
+   RequireUsableVideoFrameCrop(initial);
+   if (!std::isfinite(horizontal) || !std::isfinite(vertical) ||
+       !std::isfinite(minimumWidth) || !std::isfinite(minimumHeight) ||
+       minimumWidth <= 0 || minimumHeight <= 0 || minimumWidth > 1 || minimumHeight > 1 ||
+       !handle || (handle & ~31u) || (handle != CropMove && (handle & CropMove)))
+      throw std::runtime_error("Choose a usable picture crop handle and drag distance.");
+   auto value = initial;
+   if (handle == CropMove) {
+      const auto dx = std::clamp(horizontal, -initial.left, initial.right);
+      const auto dy = std::clamp(vertical, -initial.top, initial.bottom);
+      value.left += dx; value.right -= dx; value.top += dy; value.bottom -= dy;
+   }
+   else {
+      if (handle & CropLeft) value.left = std::clamp(initial.left + horizontal, 0.0, std::max(0.0, 1 - initial.right - minimumWidth));
+      if (handle & CropRight) value.right = std::clamp(initial.right - horizontal, 0.0, std::max(0.0, 1 - value.left - minimumWidth));
+      if (handle & CropTop) value.top = std::clamp(initial.top + vertical, 0.0, std::max(0.0, 1 - initial.bottom - minimumHeight));
+      if (handle & CropBottom) value.bottom = std::clamp(initial.bottom - vertical, 0.0, std::max(0.0, 1 - value.top - minimumHeight));
+   }
+   RequireUsableVideoFrameCrop(value); return value;
+}
+
 VideoPixelRectangle CalculateVideoCropRectangle(const VideoFrameCrop &crop,
    int width, int height, int rotation)
 {

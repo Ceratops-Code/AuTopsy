@@ -1,6 +1,7 @@
 #include "ExportVideoMix.h"
 #include "RenderVideoComposition.h"
 #include "PlanVideoExport.h"
+#include "PrepareVideoEffects.h"
 #include "Export.h"
 #include "ExportPluginRegistry.h"
 #include "Prefs.h"
@@ -190,11 +191,16 @@ std::string DescribeProcessOutput(const std::string &text)
 // exceptions and termination of AuTopsy cannot leave an encoder running.
 class FfmpegProcess final {
    NativeHandle mJob, mProcess, mOutputRead, mErrorRead;
+   size_t mOutputLimit;
+   bool mOutputOverflow{};
 public:
    std::wstring invocation;
    std::string output, errors;
-   explicit FfmpegProcess(const std::vector<std::wstring> &arguments)
+   explicit FfmpegProcess(const std::vector<std::wstring> &arguments, size_t outputLimit = 16384)
+      : mOutputLimit(outputLimit)
    {
+      if (!outputLimit || outputLimit > 8 * 1024 * 1024)
+         throw std::runtime_error("The media tool output limit is outside supported bounds.");
       for (const auto &argument : arguments) {
          if (!invocation.empty()) invocation += L' ';
          invocation += QuoteArgument(argument);
@@ -253,17 +259,19 @@ public:
       mJob.reset();
       if (mProcess) WaitForSingleObject(mProcess.get(), INFINITE);
    }
-   static void Drain(HANDLE pipe, std::string &text)
+   static bool Drain(HANDLE pipe, std::string &text, size_t limit = 16384)
    {
       DWORD available{};
       size_t budget = 256 * 1024;
+      bool truncated{};
       while (budget && PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) && available) {
          char buffer[4096]; DWORD received{};
          if (!ReadFile(pipe, buffer, DWORD(std::min<size_t>({ sizeof(buffer), available, budget })), &received, nullptr) || !received) break;
          text.append(buffer, received);
-         if (text.size() > 16384) text.erase(0, text.size() - 16384);
+         if (text.size() > limit) { text.erase(0, text.size() - limit); truncated = true; }
          budget -= received;
       }
+      return truncated;
    }
    bool Wait(wxWindow *parent,
       const wxString &title = _("Export Video with Audio Mix"),
@@ -272,13 +280,13 @@ public:
       wxProgressDialog progress{ title, status,
          100, parent, wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE | wxPD_ELAPSED_TIME };
       while (true) {
-         Drain(mOutputRead.get(), output); Drain(mErrorRead.get(), errors);
+         mOutputOverflow |= Drain(mOutputRead.get(), output, mOutputLimit); Drain(mErrorRead.get(), errors);
          const auto state = WaitForSingleObject(mProcess.get(), 20);
          if (!progress.Pulse()) return false;
          if (state == WAIT_OBJECT_0) break;
          if (state == WAIT_FAILED) throw WindowsError("Waiting for FFmpeg");
       }
-      Drain(mOutputRead.get(), output); Drain(mErrorRead.get(), errors);
+      mOutputOverflow |= Drain(mOutputRead.get(), output, mOutputLimit); Drain(mErrorRead.get(), errors);
       DWORD exit{};
       if (!GetExitCodeProcess(mProcess.get(), &exit)) throw WindowsError("Reading the FFmpeg exit status");
       if (exit != 0)
@@ -286,6 +294,8 @@ public:
             Utf8(wxString(invocation)) + "\nstdout:\n" + DescribeProcessOutput(output) +
             "\nstderr:\n" + DescribeProcessOutput(errors) +
             "\nIf this video codec cannot be stored in MP4, try MKV.");
+      if (mOutputLimit != 16384 && mOutputOverflow)
+         throw std::runtime_error("The decoded picture exceeds the media tool's bounded output buffer.");
       return true;
    }
 };
@@ -324,6 +334,9 @@ std::optional<std::pair<int, int>> ReadExportPictureSize(const fs::path &source,
 }
 } // namespace
 
+std::optional<std::pair<int, int>> ReadVideoSourcePictureSize(const wxString &source, wxWindow *parent)
+{ return ReadExportPictureSize(fs::absolute(fs::path(source.ToStdWstring())), parent); }
+
 // Called when the project attachments start, and before every export.
 void CleanAbandonedWorkspace()
 {
@@ -332,7 +345,7 @@ void CleanAbandonedWorkspace()
 }
 
 bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *parent,
-   const wxString &title, const wxString &status, std::string *output, VideoTool tool)
+   const wxString &title, const wxString &status, std::string *output, VideoTool tool, size_t maximumOutputBytes)
 {
    const auto name = tool == VideoTool::Probe ? "ffprobe.exe" : "ffmpeg.exe";
    const auto executable = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPathWithSep() + name;
@@ -340,17 +353,22 @@ bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *paren
       throw std::runtime_error(std::string{"The bundled "} + name + " is missing. Reinstall AuTopsy.");
    std::vector<std::wstring> native{executable.ToStdWstring()};
    for (const auto &argument : arguments) native.push_back(argument.ToStdWstring());
-   FfmpegProcess process{native};
+   FfmpegProcess process{native, maximumOutputBytes};
    if (!process.Wait(parent, title, status)) return false;
    if (output) *output = std::move(process.output);
    return true;
 }
 
-bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline,
+bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTimeline,
    double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent,
    const ExportSettings &settings, double projectAudioStart)
 {
    RequireUsableExportSettings(settings);
+   // Clip-only exports keep their selected picture and its fades, while mixing
+   // the audible project audio over the original project-time window.
+   const auto prepared = VideoEditing::PrepareProjectVideoExport(project, {&inputTimeline}, projectVideoDuration,
+      {settings.width, settings.height, 0, settings.frameRate > 0 ? settings.frameRate : inputTimeline.frameRate, true}, parent);
+   const auto &timeline = prepared ? prepared->timeline : inputTimeline;
    VideoTimeline::RequireWellFormedTimeline(timeline, VideoTimeline::MaximumVideoRenderSegments);
    const auto duration = projectVideoDuration;
    if (!std::isfinite(projectAudioStart) || projectAudioStart < 0 ||
@@ -378,6 +396,8 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline
          throw std::runtime_error("The output must be different from every source video.");
    };
    for (const auto &path : timeline.protectedSourcePaths)
+      protectSource(fs::absolute(fs::path(wxString::FromUTF8(path).ToStdWstring())));
+   for (const auto &path : inputTimeline.protectedSourcePaths)
       protectSource(fs::absolute(fs::path(wxString::FromUTF8(path).ToStdWstring())));
    for (const auto &clip : timeline.clips) {
       const auto source = VideoTimeline::SourceFor(timeline, clip);

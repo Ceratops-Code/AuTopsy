@@ -18,6 +18,129 @@ import build_video_installer as builder
 
 
 class InstallerBuildTests(unittest.TestCase):
+    def test_native_engine_identity_survives_relocated_temporary_launchers(self):
+        with tempfile.TemporaryDirectory(prefix="_cmake-engine-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            source, build = root / "source", root / "build"
+            source.mkdir()
+            build.mkdir()
+            (source / "main.cpp").write_text("product", encoding="utf-8")
+            native = root / "_native-cmake.exe"
+            native.write_bytes(b"pinned native CMake engine")
+            first, second = root / "_launcher-one.exe", root / "_launcher-two.exe"
+            first.write_bytes(b"temporary Python path one")
+            second.write_bytes(b"temporary Python path two")
+            cache = build / "CMakeCache.txt"
+            cache.write_text(f"# Generated at first location\nCMAKE_COMMAND:INTERNAL={native}\nCMAKE_ROOT:INTERNAL=first\nCMAKE_CXX_FLAGS:STRING=/O2\n", encoding="utf-8")
+            with mock.patch.object(builder, "run_command", return_value="main.cpp\0"):
+                original = builder.compiled_runtime_inputs(source, build, [str(first), "-B", str(build)], {}, root / "_failure.json")
+                cache.write_text(cache.read_text(encoding="utf-8").replace("first", "second"), encoding="utf-8")
+                self.assertEqual(builder.compiled_runtime_inputs(source, build, [str(second), "-B", str(build)], {}, root / "_failure.json"), original)
+                native.write_bytes(b"different native CMake engine")
+                self.assertNotEqual(builder.compiled_runtime_inputs(source, build, [str(second), "-B", str(build)], {}, root / "_failure.json"), original)
+
+    def test_compiled_runtime_inputs_distinguish_product_changes_from_check_edits(self):
+        with tempfile.TemporaryDirectory(prefix="_compile-inputs-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            source, build = root / "source", root / "build"
+            source.mkdir()
+            build.mkdir()
+            tracked = ("main.cpp", "scripts/piped-work/test_video_clip_edits.py", "docs/design.md", "README.md",
+                       "scripts/build/windows/test_build_video_installer.py")
+            for name in tracked:
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("original", encoding="utf-8")
+            tool, cache = root / "cmake.exe", build / "CMakeCache.txt"
+            tool.write_bytes(b"compiler driver")
+            cache.write_text("CMAKE_CXX_FLAGS:STRING=/O2", encoding="utf-8")
+            configure = [str(tool), "-S", str(source), "-B", str(build)]
+            with mock.patch.object(builder, "run_command", return_value="\0".join(tracked) + "\0"):
+                initial = builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json")
+                for name in tracked[1:]:
+                    (source / name).write_text("edited check/document", encoding="utf-8")
+                    self.assertEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
+                for path in (source / "main.cpp", cache, tool):
+                    original = path.read_bytes()
+                    path.write_bytes(b"changed product input")
+                    self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
+                    path.write_bytes(original)
+                with mock.patch.dict(os.environ, {"CL": "/fsanitize=address"}):
+                    self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
+
+    def test_compiled_runtime_repeats_and_interruptions_keep_only_completed_provenance(self):
+        for effect, after in itertools.product(("compile", "record"), (False, True)):
+            with self.subTest(effect=effect, after=after), tempfile.TemporaryDirectory(prefix="_compile-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                build = Path(temporary)
+                runtime = build / "Release"
+                runtime.mkdir()
+                executable = runtime / "AuTopsy.exe"
+                inputs = {"source_files": {"main.cpp": "original"}, "settings": "release"}
+                calls: list[str] = []
+                stopped = False
+                real_write = builder.write_json
+
+                def boundary(label, operation, *args, selected_effect=effect, selected_after=after, **kwargs):
+                    nonlocal stopped
+                    stop = selected_effect == label and not stopped
+                    if stop:
+                        stopped = True
+                    if stop and not selected_after:
+                        raise InterruptedError("before " + label)
+                    value = operation(*args, **kwargs)
+                    if stop and selected_after:
+                        raise InterruptedError("after " + label)
+                    return value
+
+                def compile_effect(*_args, calls=calls, executable=executable):
+                    calls.append("compile")
+                    executable.write_bytes(b"compiled product")
+
+                with mock.patch.object(builder, "compiled_runtime_inputs", side_effect=lambda *a, inputs=inputs: dict(inputs)), \
+                        mock.patch.object(builder, "run_command", side_effect=lambda *a, boundary=boundary, compile_effect=compile_effect: boundary("compile", compile_effect, *a)), \
+                        mock.patch.object(builder, "write_json", side_effect=lambda *a, boundary=boundary, real_write=real_write: boundary("record", real_write, *a)):
+                    with self.assertRaises(InterruptedError):
+                        builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "a" * 40, build / "_failure.json")
+                    completed = builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "a" * 40, build / "_failure.json")
+                    assert completed is not None
+                    record = build / "_compiled-runtime.json"
+                    original, count = record.read_bytes(), len(calls)
+                    self.assertEqual(builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "b" * 40, build / "_failure.json"), completed)
+                    self.assertEqual(len(calls), count)
+                    self.assertEqual(record.read_bytes(), original)
+                    self.assertEqual(completed["source_revision"], "a" * 40)
+                    executable.write_bytes(b"unexpected runtime change")
+                    builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "b" * 40, build / "_failure.json")
+                    self.assertEqual(len(calls), count + 1)
+                    inputs["settings"] = "different requested build"
+                    builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "c" * 40, build / "_failure.json")
+                    self.assertEqual(len(calls), count + 2)
+                self.assertFalse((build / "__compiled-runtime.json.pending").exists())
+
+    def test_changed_product_during_compilation_cannot_publish_provenance(self):
+        with tempfile.TemporaryDirectory(prefix="_compile-change-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            build = Path(temporary)
+            inputs = {"source_files": {"main.cpp": "before"}}
+            def compile_changed_source(*_args):
+                inputs["source_files"] = {"main.cpp": "after"}
+            with mock.patch.object(builder, "compiled_runtime_inputs", side_effect=lambda *a: dict(inputs)), \
+                    mock.patch.object(builder, "run_command", side_effect=compile_changed_source):
+                with self.assertRaisesRegex(RuntimeError, "changed during compilation"):
+                    builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "a" * 40, build / "_failure.json")
+            self.assertFalse((build / "_compiled-runtime.json").exists())
+
+    @staticmethod
+    def native_report(build):
+        runtime = build / "Release"
+        runtime.mkdir(exist_ok=True)
+        executable = runtime / "AuTopsy.exe"
+        if not executable.exists():
+            executable.write_bytes(b"checked native host")
+        return {"result": "passed", "scope": "prepackage", "payload_directory": "Release",
+                "payload": {executable.name: builder.sha256(executable)},
+                "checks": [{"name": name, "result": "passed"} for name in (
+                    "fork-fixtures", "fork-preview", "fork-project-compatibility")]}
+
     def test_package_location_does_not_activate_or_follow_native_test_selection(self):
         for _ in range(2):
             with mock.patch.dict(os.environ, {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
@@ -199,7 +322,7 @@ class InstallerBuildTests(unittest.TestCase):
                     process.Close()
 
     def test_repeat_and_interrupt_each_build_command(self):
-        for boundary in range(1, 9):
+        for boundary in range(1, 13):
             for after in (False, True):
                 with self.subTest(boundary=boundary, after=after), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
                     root = Path(temporary)
@@ -228,6 +351,8 @@ class InstallerBuildTests(unittest.TestCase):
                             builder.write_json(package / "_installer-x64.json",
                                                {"filename": name, "sha256": builder.sha256(target)})
                         result = "a" * 40 + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
+                        if "--before-package" in arguments:
+                            result = json.dumps(self.native_report(build))
                         if stop and after:
                             interrupted = True
                             raise InterruptedError("after command")
@@ -261,7 +386,7 @@ class InstallerBuildTests(unittest.TestCase):
 
             def run(arguments, _source, _diagnostics):
                 commands.append(arguments)
-                if "^fork-fixtures$" in arguments:
+                if "--before-package" in arguments:
                     raise RuntimeError("encoded-media check failed")
                 return "a" * 40 + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
 
@@ -273,6 +398,46 @@ class InstallerBuildTests(unittest.TestCase):
                     builder.build_installer(source, build, inno)
             self.assertFalse(any("innosetup" in arguments for arguments in commands))
             self.assertFalse((build / "package/_build-manifest.json").exists())
+
+    def test_desktop_gate_blocks_packaging_on_failure_missing_acceptance_and_changed_payload(self):
+        for fault in ("desktop failure", "missing check", "changed payload", "changed source"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="_gate-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                root = Path(temporary)
+                source, build = root / "source", root / "build"
+                source.mkdir()
+                (source / "CMakeLists.txt").write_text("project(test)")
+                inno = root / "ISCC.exe"
+                inno.write_bytes(b"compiler")
+                commands: list[list[str]] = []
+                checked = False
+
+                def run(arguments, _source, _diagnostics, commands=commands, fault=fault, build=build):
+                    nonlocal checked
+                    commands.append(arguments)
+                    if arguments[1:3] == ["rev-parse", "HEAD"]:
+                        return "a" * 40
+                    if arguments[1:3] == ["diff", "--binary"]:
+                        return "source changed" if checked and fault == "changed source" else ""
+                    if "--before-package" in arguments:
+                        checked = True
+                        if fault == "desktop failure":
+                            raise RuntimeError("GUI input unavailable")
+                        report = self.native_report(build)
+                        if fault == "missing check":
+                            report["checks"].pop()
+                        if fault == "changed payload":
+                            (build / "Release/AuTopsy.exe").write_bytes(b"untested host")
+                        return json.dumps(report)
+                    return ""
+
+                with mock.patch.object(builder, "prepare_sdk", return_value=root), \
+                        mock.patch.object(builder.shutil, "which", return_value="cmake"), \
+                        mock.patch.object(builder, "run_command", side_effect=run), \
+                        mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                    with self.assertRaises(RuntimeError):
+                        builder.build_installer(source, build, inno)
+                self.assertFalse(any("innosetup" in arguments for arguments in commands))
+                self.assertFalse((build / "package/_build-manifest.json").exists())
 
     def test_sdk_publication_survives_process_exit_at_each_file_effect(self):
         with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:

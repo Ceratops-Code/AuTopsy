@@ -20,6 +20,7 @@ Paul Licameli split from TrackPanel.cpp
 #include "SyncLock.h"
 #include "../../clip-groups/GroupAudioClips.h"
 #include "../../clip-groups/SelectMediaClips.h"
+#include "../../clip-groups/EditClipPlacement.h"
 #include "Track.h"
 #include "../../TrackArt.h"
 #include "../../TrackArtist.h"
@@ -500,6 +501,8 @@ UIHandle::Result TimeShiftHandle::BeginClipShift(
    const wxMouseEvent &event = evt.event;
    const wxRect &rect = evt.rect;
    auto &viewInfo = ViewInfo::Get( *pProject );
+   const auto snapStart = viewInfo.selectedRegion.t0();
+   const auto snapEnd = viewInfo.selectedRegion.t1();
 
    const auto pView =
       std::dynamic_pointer_cast<CommonTrackPanelCell>(evt.pCell);
@@ -546,13 +549,23 @@ UIHandle::Result TimeShiftHandle::BeginClipShift(
       hitTestResult, move(pShifter), clickTime,
       viewInfo, trackList,
       SyncLockState::Get( *pProject ).IsSyncLocked(), useTemporaryClipSelection );
+   if (ClipActions::MovingMediaHasLockedClips(mClipMoveState)) {
+      mClipMoveState.clear(); return Cancelled;
+   }
 
    mSlideUpDownOnly = event.CmdDown() && !multiToolModeActive;
    mRect = rect;
    mClipMoveState.mMouseClickX = event.m_x;
    mSnapManager =
    std::make_shared<SnapManager>(*trackList.GetOwner(),
-       FindCandidates( trackList, mClipMoveState.shifters ),
+       [&] {
+          auto candidates = FindCandidates(trackList, mClipMoveState.shifters);
+          // The edit cursor/selection is a stable snap target for this gesture,
+          // shared by picture and sound. Native guides and collision checks stay in charge.
+          candidates.emplace_back(snapStart);
+          if (snapEnd != snapStart) candidates.emplace_back(snapEnd);
+          return candidates;
+       }(),
        viewInfo);
    mClipMoveState.snapLeft = -1;
    mClipMoveState.snapRight = -1;
@@ -918,9 +931,6 @@ UIHandle::Result TimeShiftHandle::Drag
          viewInfo.PositionToTime(event.m_x) -
          viewInfo.PositionToTime(mClipMoveState.mMouseClickX);
 
-      if (!mClipMoveState.shifters.empty())
-         desiredSlideAmount =
-            mClipMoveState.shifters[track]->QuantizeOffset(desiredSlideAmount);
    }
 
    if(mClipMoveState.mCapturedTrack != pTrack)
@@ -937,11 +947,18 @@ UIHandle::Result TimeShiftHandle::Drag
 
    if(!mSlideUpDownOnly)
    {
+      mClipMoveState.snapLeft = mClipMoveState.snapRight = -1;
       AdjustToSnap(viewInfo, mRect.x,
-         mSnapManager.get(),
+         event.AltDown() ? nullptr : mSnapManager.get(),
          mSnapPreferRightEdge,
          mClipMoveState,
          desiredSlideAmount);
+      // Magnetic targets are measured in pixels before frame/sample rounding.
+      // Quantizing first can jump outside the magnet radius at ordinary zoom.
+      // A chosen cursor/edge is an explicit timestamp; free drags retain each
+      // media shifter's normal source-frame or sample granularity.
+      if (mClipMoveState.snapLeft < 0 && mClipMoveState.snapRight < 0 && !mClipMoveState.shifters.empty())
+         desiredSlideAmount = mClipMoveState.shifters[track]->QuantizeOffset(desiredSlideAmount);
    }
 
    if (desiredSlideAmount == 0.0)

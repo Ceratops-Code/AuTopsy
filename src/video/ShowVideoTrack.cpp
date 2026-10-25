@@ -3,12 +3,14 @@
 #include "ShowVideoTrack.h"
 #include "PrepareVideoPreview.h"
 #include "CreateVideoTrack.h"
+#include "EditVideoFades.h"
 #include "EditVideoComposition.h"
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
 #include "../clip-groups/SelectMediaClips.h"
 #include "../clip-groups/OpenClipActions.h"
+#include "../clip-groups/EditClipPlacement.h"
 #include "Project.h"
 #include "ProjectHistory.h"
 #include "ProjectAudioIO.h"
@@ -516,6 +518,7 @@ public:
              : wxFileName(wxString::FromUTF8(source.path)).GetFullName();
          if (clip.playbackRate != 1) title = wxString::Format("%.8g%%  ", clip.playbackRate * 100) + title;
          if (clip.muted) title = _("[Muted] ") + title;
+         if (clip.timingLocked) title = _("[Locked] ") + title;
          dc.DrawText(title,left+5,rect.y+5);
          {
             wxDCClipper clipFlags{dc, wxRect{left, rect.y, right-left, 24}};
@@ -548,6 +551,8 @@ UIHandle::Result VideoClipHandle::Click(const TrackPanelMouseEvent &event,Audaci
    }
    const auto found = std::find_if(mOriginal.clips.begin(),mOriginal.clips.end(),
       [&](const auto &clip) { return clip.id == mId; });
+   if (!mContext && mEdge && found != mOriginal.clips.end() && found->timingLocked)
+      return RefreshCode::Cancelled;
    auto &selection = ViewInfo::Get(*project).selectedRegion;
    if (!mContext || !track->GetSelected() || selection.isPoint() ||
        mClickTime < selection.t0() || mClickTime >= selection.t1()) {
@@ -572,6 +577,7 @@ UIHandle::Result VideoClipHandle::Drag(const TrackPanelMouseEvent &event,Audacit
       const auto edge = ChooseVideoTrimEdge(mOriginal, mId, mEdge < 0, motion);
       const auto found = std::find_if(mOriginal.clips.begin(),mOriginal.clips.end(),
          [&](const auto &clip) { return clip.id == edge.id; });
+      if (found != mOriginal.clips.end() && found->timingLocked) return RefreshCode::RefreshNone;
       const auto at = (edge.left ? found->start : found->End()) + motion;
       DragVideoClipEdge(candidate, edge.id, edge.left, at);
       mEditedId = edge.id;
@@ -609,6 +615,10 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(9,_("Separate Joined Clip"));
          menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, clipId != 0);
          menu.Append(11, _("Crop Picture...")); menu.Enable(11, clipId != 0);
+         menu.Append(16, _("Fade Picture...")); menu.Enable(16, clipId != 0);
+         menu.Append(17, _("Crossfade from Video Below...")); menu.Enable(17, clipId != 0);
+         menu.Append(14, _("Clip Properties...")); menu.Enable(14, clipId != 0);
+         menu.Append(15, _("Close Gap Before Clip")); menu.Enable(15, clipId != 0);
          menu.AppendCheckItem(13, _("Mute Clip")); menu.Enable(13, clipId != 0);
          for (const auto &clip : track->Timeline().clips)
             if (clip.id == clipId) menu.Check(13, clip.muted);
@@ -631,6 +641,12 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],clipId,found->start);
          }
+         else if (choice == 16 || choice == 17)
+            VideoEditing::ShowVideoClipFades(*project, *track, clipId, parent, choice == 17);
+         else if (choice == 14)
+            ClipActions::ShowVideoClipProperties(*project, *track, clipId, parent);
+         else if (choice == 15)
+            ClipActions::CloseGapBeforeVideoClip(*project, *track, clipId);
          else if (choice == 13) {
             const auto found = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
                [&](const auto &clip) { return clip.id == clipId; });

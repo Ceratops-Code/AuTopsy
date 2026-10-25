@@ -154,6 +154,15 @@ static bool SeparateOneLevel(Timeline &timeline, double from, double to)
          part.playbackRate *= clip.playbackRate;
          part.crop = VideoEditing::ComposeVideoFrameCrops(part.crop, clip.crop);
          part.muted = part.muted || clip.muted;
+         part.timingLocked = part.timingLocked || clip.timingLocked;
+         auto inherited = clip.opacityModifiers;
+         if (clip.opacity.inDuration > 0) inherited.push_back({clip.opacity.inStart,
+            clip.opacity.inStart + clip.opacity.inDuration, true});
+         if (clip.opacity.outDuration > 0) inherited.push_back({clip.opacity.outEnd - clip.opacity.outDuration,
+            clip.opacity.outEnd, false});
+         for (const auto &ramp : inherited) part.opacityModifiers.push_back({
+            original.ContentTimeAtProjectTime(ramp.start), original.ContentTimeAtProjectTime(ramp.end), ramp.increasing});
+         VideoEditing::RequireUsableVideoOpacityRamps(part.opacityModifiers);
          changed.clips.push_back(std::move(part));
       }
    }

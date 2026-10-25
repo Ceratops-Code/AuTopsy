@@ -8,6 +8,8 @@ class TrackList;
 namespace ClipGroups {
 const std::string &GetClipGroupId(const WaveClip &clip);
 void SetClipGroupId(WaveClip &clip, std::string groupId);
+bool IsAudioClipTimingLocked(const WaveClip &clip);
+void SetAudioClipTimingLocked(WaveClip &clip, bool locked);
 std::string CreateClipGroupId();
 // Owned media intervals expose group identity without upstream video types.
 struct LinkedClipInterval {

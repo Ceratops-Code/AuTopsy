@@ -507,10 +507,23 @@ def ready_video_preview(client):
         time.sleep(0.1)
 
 
+def scale_pane_pointer_position(native_point, physical_size, reported_size):
+    """Map the app's pane units to physical client pixels exactly once.
+
+    Captured drags may extend beyond a pane for scrolling or track migration;
+    only unusable geometry is rejected here. The press owner checks the actual
+    screen target before sending a button transition.
+    """
+    if any(size <= 0 for size in (*physical_size, *reported_size)):
+        raise ValueError("The owned pane has no usable physical/reported dimensions.")
+    return tuple(round(position * physical / reported)
+                 for position, physical, reported in zip(native_point, physical_size, reported_size, strict=True))
+
+
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
     gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False,
-    prior_click_time=None
+    prior_click_time=None, alt=False
 ):
     """Exercise native clip/visibility gestures and menus, targeting only the owned PID.
 
@@ -527,6 +540,8 @@ def operate_owned_video_track(
         raise ValueError("Unknown native video gesture: " + gesture)
     if control and gesture not in ("click", "drag"):
         raise ValueError("Ctrl is supported for clip clicks and time-locked drags.")
+    if alt and gesture != "drag":
+        raise ValueError("Alt is supported only for unsnapped clip drags.")
     user = ctypes.WinDLL("user32", use_last_error=True)
     # Wait before reading window/paint facts: project-open callbacks may replace
     # those controls while the native double-click interval expires.
@@ -638,7 +653,10 @@ def operate_owned_video_track(
         ctypes.c_uint,
     ]
     user.GetClientRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
-    user.GetCursorPos.argtypes = [ctypes.POINTER(Point)]
+    user.GetPhysicalCursorPos.argtypes = [ctypes.POINTER(Point)]
+    user.GetPhysicalCursorPos.restype = ctypes.c_int
+    user.SetPhysicalCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user.SetPhysicalCursorPos.restype = ctypes.c_int
     user.ClientToScreen.argtypes = [ctypes.c_void_p, ctypes.POINTER(Point)]
     user.ScreenToClient.argtypes = [ctypes.c_void_p, ctypes.POINTER(Point)]
     user.WindowFromPoint.argtypes = [Point]
@@ -668,17 +686,18 @@ def operate_owned_video_track(
     foreground = user.GetForegroundWindow()
     pinned = bool(user.GetWindowLongPtrW(root, -20) & 8)
     original = Point()
-    user.GetCursorPos(ctypes.byref(original))
+    if not user.GetPhysicalCursorPos(ctypes.byref(original)):
+        raise RuntimeError("The owned input worker cannot read the physical cursor.")
     rectangle = (ctypes.c_long * 4)()
     user.GetClientRect(panel, ctypes.byref(rectangle))
-    point = Point(
-        round(x0 * rectangle[2] / info["videoTrackPanelWidth"]),
-        round(y0 * rectangle[3] / info["videoTrackPanelHeight"]),
-    )
+    point = Point(*scale_pane_pointer_position((x0, y0), (rectangle[2], rectangle[3]),
+        (info["videoTrackPanelWidth"], info["videoTrackPanelHeight"])))
     user.ClientToScreen(panel, ctypes.byref(point))
+    initial_screen_point = (point.x, point.y)
     hidden = []
     pressed = False
     control_pressed = False
+    alt_pressed = False
     positioned = False
 
     @callback
@@ -694,25 +713,30 @@ def operate_owned_video_track(
         return 1
 
     def position_pointer(x, y):
-        """Reach the native client point before sending input across DPI contexts."""
-        for _ in range(3):
-            prior = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
-            native = Point()
-            user.GetCursorPos(ctypes.byref(native))
-            user.ScreenToClient(panel, ctypes.byref(native))
-            user.SetThreadDpiAwarenessContext(prior)
-            dx, dy = x-native.x, y-native.y
-            user.GetCursorPos(ctypes.byref(point))
-            if abs(dx) <= 1 and abs(dy) <= 1:
-                return
-            point.x += round(dx * rectangle[2] / info["videoTrackPanelWidth"])
-            point.y += round(dy * rectangle[3] / info["videoTrackPanelHeight"])
-            user.SetCursorPos(point.x, point.y)
-        raise RuntimeError(f"Cannot reach owned native point {(x,y)}; actual={(native.x,native.y)}.")
+        """Use physical pixels throughout, without virtualizing cursor reads."""
+        destination = Point(*scale_pane_pointer_position((x, y), (rectangle[2], rectangle[3]),
+            (info["videoTrackPanelWidth"], info["videoTrackPanelHeight"])))
+        if not user.ClientToScreen(panel, ctypes.byref(destination)) or not user.SetPhysicalCursorPos(destination.x, destination.y):
+            raise RuntimeError(f"Cannot place the owned physical pointer: {ctypes.WinError(ctypes.get_last_error())}")
+        current = Point()
+        if not user.GetPhysicalCursorPos(ctypes.byref(current)) or abs(current.x - destination.x) > 1 or abs(current.y - destination.y) > 1:
+            raise RuntimeError(f"The physical pointer did not reach the owned pane; expected={(destination.x,destination.y)}, actual={(current.x,current.y)}.")
+        point.x, point.y = destination.x, destination.y
 
-    def button(flags):
+    def button(flags, expected_window=panel):
         # Position and button transition share one OS event, so another mouse
         # movement cannot turn a narrow edge press into a clip-header press.
+        if flags & (2 | 8) and user.WindowFromPoint(point) != expected_window:
+            bounds = (ctypes.c_long * 4)()
+            user.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
+            user.GetWindowRect(expected_window, ctypes.byref(bounds))
+            raise RuntimeError(
+                f"Owned mouse press target changed before input; expected_window={expected_window}; "
+                f"hit={user.WindowFromPoint(point)}; initial_screen={initial_screen_point}; "
+                f"screen={(point.x, point.y)}; bounds={list(bounds)}; native_point={(x0, y0)}; "
+                f"physical_client={list(rectangle)}; reported_client="
+                f"{(info['videoTrackPanelWidth'], info['videoTrackPanelHeight'])}."
+            )
         left, top, width, height = (user.GetSystemMetrics(index) for index in (76, 77, 78, 79))
         x = round((point.x - left) * 65535 / max(1, width - 1))
         y = round((point.y - top) * 65535 / max(1, height - 1))
@@ -732,10 +756,10 @@ def operate_owned_video_track(
                 raise RuntimeError("Windows rejected the owned test's keyboard event.")
         time.sleep(0.08)
 
-    def set_control(down):
-        packet = Input(1, Union(keyboard=Key(0x11, user.MapVirtualKeyW(0x11, 0), 0 if down else 2, 0, 0)))
+    def set_modifier(code, down):
+        packet = Input(1, Union(keyboard=Key(code, user.MapVirtualKeyW(code, 0), 0 if down else 2, 0, 0)))
         if user.SendInput(1, ctypes.byref(packet), ctypes.sizeof(packet)) != 1:
-            raise RuntimeError("Windows rejected the owned test's Ctrl transition.")
+            raise RuntimeError(f"Windows rejected the owned test's modifier transition: {code}.")
         time.sleep(0.03)
 
     def choose_popup_path():
@@ -810,9 +834,9 @@ def operate_owned_video_track(
             point.y = round(physical[1] + ((bounds[1] + bounds[3]) / 2 - logical[1]) * (physical[3] - physical[1]) / (logical[3] - logical[1]))
             if user.WindowFromPoint(point) != popup or user.GetForegroundWindow() != root:
                 raise RuntimeError("The owned popup item is obstructed or lost foreground: " + label)
-            user.SetCursorPos(point.x, point.y)
+            user.SetPhysicalCursorPos(point.x, point.y)
             try:
-                button(2)
+                button(2, popup)
             finally:
                 button(4)
             submenu = bool(user.GetSubMenu(menu, index))
@@ -889,7 +913,7 @@ def operate_owned_video_track(
                     f"point={(point.x, point.y)}; view={(info['viewStart'], info['viewEnd'])}; row={source}."
                 )
             time.sleep(0.01)
-        user.SetCursorPos(point.x, point.y)
+        user.SetPhysicalCursorPos(point.x, point.y)
         positioned = True
         position_pointer(x0, y0)
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
@@ -905,8 +929,11 @@ def operate_owned_video_track(
             keyboard(0x1B)
             position_pointer(x0, y0)
         if control:
-            set_control(True)
+            set_modifier(0x11, True)
             control_pressed = True
+        if alt:
+            set_modifier(0x12, True)
+            alt_pressed = True
         if gesture == "context":
             button(8)
             pressed = True
@@ -936,7 +963,12 @@ def operate_owned_video_track(
                             break
                         if time.monotonic() >= deadline:
                             current = Point()
-                            user.GetCursorPos(ctypes.byref(current))
+                            user.GetPhysicalCursorPos(ctypes.byref(current))
+                            if abs(current.x - point.x) > 2 or abs(current.y - point.y) > 2:
+                                raise RuntimeError(
+                                    f"Shared pointer input moved away from the owned test window; "
+                                    f"expected={(point.x, point.y)}, actual={(current.x, current.y)}."
+                                )
                             raise RuntimeError(
                                 f"The owned pane did not capture held input; GUI={(state.flags, state.active, state.focus, state.capture, state.menu)}; "
                                 f"button={user.GetAsyncKeyState(1) & 0x8000}; cursor={(current.x, current.y)}; "
@@ -951,12 +983,12 @@ def operate_owned_video_track(
                         position_pointer(round(x0 + (x1-x0)*step/5), round(y0 + (y1-y0)*step/5))
                         time.sleep(0.04)
                     if cancel:
-                        # Ctrl+Escape belongs to Windows. Releasing Ctrl first
-                        # also completes native time-shift gestures, so deliver
+                        # Ctrl/Alt+Escape belong to Windows. Releasing a modifier
+                        # can also finish native time-shift gestures, so deliver
                         # Escape through the owned pane's normal key-message
                         # route while the drag is still captured. Other drags
                         # keep the physical keyboard route.
-                        if control_pressed:
+                        if control_pressed or alt_pressed:
                             # Queue a full key transition so wx's application
                             # filter sees Escape before the mouse release. A
                             # synchronous HWND send bypasses that queue and can
@@ -971,7 +1003,7 @@ def operate_owned_video_track(
                                 if user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.capture != panel:
                                     break
                                 if time.monotonic() >= deadline:
-                                    raise RuntimeError("The owned Ctrl-drag did not cancel before mouse release.")
+                                    raise RuntimeError("The owned modified drag did not cancel before mouse release.")
                                 time.sleep(0.01)
                         else:
                             keyboard(0x1B)
@@ -992,9 +1024,14 @@ def operate_owned_video_track(
 
     finally:
         control_release_error = None
+        if alt_pressed:
+            try:
+                set_modifier(0x12, False)
+            except RuntimeError as error:
+                control_release_error = error
         if control_pressed:
             try:
-                set_control(False)
+                set_modifier(0x11, False)
             except RuntimeError as error:
                 control_release_error = error
         if pressed:
@@ -1008,9 +1045,9 @@ def operate_owned_video_track(
                 button(16 if gesture == "context" else 4)
         user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
         current = Point()
-        user.GetCursorPos(ctypes.byref(current))
+        user.GetPhysicalCursorPos(ctypes.byref(current))
         if positioned and (current.x, current.y) == (point.x, point.y):
-            user.SetCursorPos(original.x, original.y)
+            user.SetPhysicalCursorPos(original.x, original.y)
         if not pinned:
             user.SetWindowPos(root, ctypes.c_void_p(-2), 0, 0, 0, 0, 0x13)
         for window in hidden:
@@ -1027,11 +1064,38 @@ def operate_owned_video_track(
     return panel
 
 
+def write_project_capture(ffmpeg, path, width, height, pixels):
+    """Encode owned-window pixels with the test suite's existing media runtime.
+
+    The caller's marked case root owns both the picture and its pending sibling.
+    A failed encoder or interrupted write cannot replace the last complete PNG;
+    a fresh call clears abandoned staging before publishing the current picture.
+    """
+    path = Path(path)
+    if not (0 < width < 6000 and 0 < height < 4000) or len(pixels) != width * height * 4:
+        raise ValueError("Unexpected project capture dimensions or pixel count.")
+    pending = path.with_name("_" + path.name + ".pending")
+    pending.unlink(missing_ok=True)
+    encoded = run_process(
+        [ffmpeg, "-v", "error", "-nostdin", "-f", "rawvideo", "-pixel_format", "bgr0",
+         "-video_size", f"{width}x{height}", "-i", "pipe:0", "-frames:v", "1",
+         "-c:v", "png", "-f", "image2pipe", "pipe:1"],
+        input=bytes(pixels), timeout=30,
+    )
+    if not encoded.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError("The project capture encoder returned no PNG picture.")
+    if path.is_file() and path.read_bytes() == encoded:
+        return
+    try:
+        pending.write_bytes(encoded)
+        pending.replace(path)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
 def capture_owned_project(panel, path):
     """Capture this test's project window to an artifact, without reading other windows."""
     from ctypes import wintypes
-
-    from PIL import Image
 
     user, gdi = ctypes.WinDLL("user32"), ctypes.WinDLL("gdi32")
     user.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
@@ -1099,7 +1163,7 @@ def capture_owned_project(panel, path):
             != height
         ):
             raise RuntimeError("The owned project pixels could not be read.")
-        Image.frombuffer("RGB", (width, height), pixels, "raw", "BGRX", 0, 1).save(path)
+        write_project_capture(os.environ["AUTOPSY_TEST_FFMPEG"], path, width, height, pixels.raw)
     finally:
         gdi.SelectObject(memory, previous)
         gdi.DeleteObject(bitmap)
@@ -1142,7 +1206,7 @@ def check_video_interactions(client, root, case):
         # The same single click must make Delete work through the keyboard command,
         # not a script that bypasses its selection preconditions.
         operate_owned_video_track(client, 0.8, track=0, gesture="click", area="picture", key=0x2E)
-        bounds([(1, 3)])
+        bounds([(3, 5)])
         client.send("Undo")
         assert clips() == original
         operate_owned_video_track(client, 3.8, track=0, gesture="double-click", area="picture", key=0x08)

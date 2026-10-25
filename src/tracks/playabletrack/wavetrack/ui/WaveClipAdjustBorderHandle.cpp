@@ -27,6 +27,7 @@
 #include "TrackPanelMouseEvent.h"
 #include "ViewInfo.h"
 #include "ProjectHistory.h"
+#include "../../../../clip-groups/GroupAudioClips.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "../../../../clip-groups/LinkMediaClips.h"
 #endif
@@ -219,6 +220,8 @@ public:
 
    bool Init(const TrackPanelMouseEvent& event) override
    {
+      if (ClipGroups::IsAudioClipTimingLocked(*mInterval))
+         return false;
       if (event.event.LeftDown())
       {
          mDragStartX = event.event.GetX();

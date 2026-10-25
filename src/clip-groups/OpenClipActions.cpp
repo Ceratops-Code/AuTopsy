@@ -1,4 +1,6 @@
 #include "OpenClipActions.h"
+#include "EditClipPlacement.h"
+#include "GuardMediaDialogs.h"
 #include "CommandContext.h"
 #include "CommonCommandFlags.h"
 #include "DoEffect.h"
@@ -104,6 +106,10 @@ AudioClipTarget FindAudioClip(const CommandContext& context)
 }
 template<typename Action> void WithClipError(AudacityProject& project, Action&& action)
 {
+   // A native menu can leave its modal loop before its stack-owned dialog has
+   // finished destruction. Defer scripting requests (especially Close) through
+   // the action and its error window, so neither can outlive its project.
+   ClipActions::MediaDialogCommandGuard commandGuard;
    try { action(); }
    catch (const std::exception& error) {
       wxMessageBox(wxString::FromUTF8(error.what()), _("Clip Actions"),
@@ -135,6 +141,25 @@ void ClipActions::ShowAudioClipExport(const CommandContext& context)
       ExportAudioDialog dialog{&ProjectWindow::Get(context.project), context.project,
          target.name, "", ExportAudioDialog::ExportMode::SelectedOnly};
       dialog.ShowModal();
+   });
+}
+
+void ClipActions::ShowAudioClipProperties(const CommandContext& context)
+{
+   WithClipError(context.project, [&] {
+      const auto target = FindAudioClip(context);
+      for (const auto &clip : target.track->Intervals()) if (clip->GetPlayStartTime() == target.start) {
+         ShowAudioClipProperties(context.project, *target.track, *clip, &ProjectWindow::Get(context.project)); return;
+      }
+   });
+}
+void ClipActions::CloseAudioClipGap(const CommandContext& context)
+{
+   WithClipError(context.project, [&] {
+      const auto target = FindAudioClip(context);
+      for (const auto &clip : target.track->Intervals()) if (clip->GetPlayStartTime() == target.start) {
+         CloseGapBeforeAudioClip(context.project, *target.track, *clip); return;
+      }
    });
 }
 
@@ -177,6 +202,13 @@ namespace {
 using namespace MenuRegistry;
 AttachedItem sClipVolume{
    Command("ChangeAudioClipVolume", XXO("Clip &Volume..."), ClipActions::ShowAudioClipVolume,
+      AudioIONotBusyFlag()), wxT("Edit/Other/Clip")};
+AttachedItem sClipProperties{
+   Command("AudioClipProperties", XXO("Clip &Properties..."),
+      [](const CommandContext &context) { ClipActions::ShowAudioClipProperties(context); },
+      AudioIONotBusyFlag()), wxT("Edit/Other/Clip")};
+AttachedItem sClipCloseGap{
+   Command("CloseAudioClipGap", XXO("Close Gap Before Clip"), ClipActions::CloseAudioClipGap,
       AudioIONotBusyFlag()), wxT("Edit/Other/Clip")};
 AttachedItem sClipExport{
    Command("ExportAudioClip", XXO("&Export Clip..."), ClipActions::ShowAudioClipExport,

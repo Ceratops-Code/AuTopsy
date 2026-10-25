@@ -3,6 +3,9 @@
 #include <wx/string.h>
 #include <memory>
 #include <stdexcept>
+#include <functional>
+#include <string>
+#include <vector>
 class wxWindow;
 namespace VideoPreview {
 class PreviewPreparationCancelled final : public std::runtime_error {
@@ -25,4 +28,10 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
 std::shared_ptr<const PreparedMedia> FindPreparedVideoThumbnails(const wxString &source,
    double duration, wxWindow *parent);
 void CleanPreviewCache();
+// Derived picture-only spans use the same bounded, leased cache as proxies.
+// The callback owns only the supplied pending filename; publication and cleanup
+// remain here. Source files are held read-only for the whole operation.
+std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string &group,
+   const std::string &recipe, const std::vector<std::string> &sources, double duration,
+   const std::function<void(const wxString&)> &render);
 }

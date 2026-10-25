@@ -82,6 +82,23 @@ Native CTest clients use the persistent base Python runtime, rather than a
 temporary uv dependency environment. An explicit test session refreshes that
 CTest configuration without rebuilding or changing the accepted installer.
 
+The beginner workflow cases are `fork-delete-gap`, `fork-clip-properties`,
+`fork-clip-snapping`, `fork-visual-crop`, `fork-collect-media` and
+`fork-video-fades`. They exercise generated media through normal commands,
+native gestures/dialogs, Undo/Redo and save/reopen. Collection has a separate
+pinned stock-Audacity consumer stage. Picture fades are checked against decoded
+export pixels and the actual preview surface; audio is compared independently.
+The portable `media-collection` cases interrupt each publication effect, while
+the composition cases check retained envelopes and the shared frame clock.
+
+The collector owns only its selected destination, a marked sibling
+`_<name>.collecting` directory and a transient `_<name>.collection.lock` handle.
+Completion atomically publishes `Project.aup3`, `Media/` and `_collection.txt`.
+Failures remove owned staging; fresh calls remove owned orphaned staging and
+refuse unrelated contents. Completed archives belong to the user and are not
+pruned as disposable test output. Native case roots and diagnostic files remain
+under the existing marked test-workspace owner and its finite receipt policy.
+
 ## Building on Windows
 
 1. Ensure the Python installer option `Add Python 3.x to PATH` is checked. Go to Windows Settings "Add or Remove Programs" and check the `Add Python to environment variables` in Python settings if Python is not in `PATH`.
@@ -394,6 +411,33 @@ when that case starts afresh. The fixture producer atomically publishes only
 completed footage and discards its private pending file after interruption.
 `fork-fixtures` checks the encoded picture/audio and repeated/interrupted calls
 without opening AuTopsy; its temporary media is removed after the check.
+The SDLC Windows installer build compiles first, then calls the same affected-test
+runner with `--before-package BUILD_DIR`. Its baseline is `fork-fixtures`,
+`fork-preview` and `fork-project-compatibility`; the native input map adds named
+cases for changed features. `AUTOPSY_TEST_BASE` chooses the comparison revision.
+An unavailable base requires an explicit native scope through the builder's
+`--test-name` option; an unmapped native input or missing named test stops the build.
+That option adds checks and never removes the baseline or known affected cases.
+The native harness reuses its own matching passes without opening another editor.
+Only after the checks pass does Inno Setup stage the same compiled runtime. A
+failed desktop check, unavailable desktop, changed source or changed runtime
+blocks packaging. No installed application is stopped, updated or used as a host.
+`BUILD_DIR/_prepackage-results` belongs to the affected-test runner and stores only
+the headless fixture's bounded immutable receipts; its ordinary startup/completion
+cleanup keeps three outcomes per check and removes abandoned pending writes.
+GUI receipts remain under the existing `_fork-tests/_accepted` owner. The completed
+result keeps its original check version when only check code changes; matching
+product bytes, execution scope and no newer applicable failure are still required.
+New coverage can declare an additional input instead of rewriting old acceptance.
+The build root's `_compiled-runtime.json` binds one completed runtime to its
+product source, CMake settings, tools and dependencies. Python-check/document-only commits
+reuse matching bytes with their original compiled revision; current checks still
+run through SDLC. Missing provenance or a changed input/output requires compilation.
+This record and its atomic pending sibling belong to the installer builder; a
+fresh call removes abandoned staging and replaces only its current record.
+The completed
+installer manifest includes the selected checks and runtime hashes; existing
+accepted installers retain their original acceptance without retrospective tests.
 The gesture case waits for the native pane to be enabled, then supplies held
 mouse input only to the owned test window through its normal window procedure.
 The GUI runner selects Windows DISPLAY2 when connected. With several displays

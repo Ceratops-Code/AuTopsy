@@ -22,6 +22,26 @@ struct VideoFrameCrop {
 void RequireUsableVideoFrameCrop(const VideoFrameCrop &crop);
 // Apply outer crop to an already cropped inner picture.
 VideoFrameCrop ComposeVideoFrameCrops(const VideoFrameCrop &inner, const VideoFrameCrop &outer);
+// Anchors are in retained content seconds, so splitting or trimming a clip
+// preserves its original opacity curve rather than starting new fades at cuts.
+struct VideoOpacityEnvelope {
+   double inStart{}, inDuration{}, outEnd{}, outDuration{};
+   bool operator==(const VideoOpacityEnvelope &other) const {
+      return inStart == other.inStart && inDuration == other.inDuration &&
+         outEnd == other.outEnd && outDuration == other.outDuration;
+   }
+};
+struct VideoOpacityRamp {
+   double start{}, end{}; bool increasing{};
+   bool operator==(const VideoOpacityRamp &other) const {
+      return start == other.start && end == other.end && increasing == other.increasing;
+   }
+};
+inline constexpr size_t MaximumVideoOpacityRamps = 128;
+void RequireUsableVideoOpacityRamps(const std::vector<VideoOpacityRamp> &ramps);
+std::string EncodeVideoOpacityRamps(const std::vector<VideoOpacityRamp> &ramps);
+std::vector<VideoOpacityRamp> DecodeVideoOpacityRamps(const std::string &text);
+double VideoOpacityAt(const VideoOpacityEnvelope &envelope, double contentTime);
 }
 
 namespace VideoTimeline {
@@ -48,6 +68,11 @@ struct Clip {
    double playbackRate{1}; // Content seconds per second in the containing timeline.
    VideoEditing::VideoFrameCrop crop;
    bool muted{}; // Picture only; retained media and separately editable sound remain intact.
+   bool timingLocked{}; // Optional fork state; a locked member protects linked timing edits too.
+   VideoEditing::VideoOpacityEnvelope opacity;
+   // Parent envelopes projected into this content clock by Separate. Products
+   // cannot be replaced with a single linear ramp without changing the picture.
+   std::vector<VideoEditing::VideoOpacityRamp> opacityModifiers;
    double End() const { return start + duration; }
    double ContentTimeAtProjectTime(double at) const { return sourceStart + (at - start) * playbackRate; }
    double ProjectTimeAtContentTime(double at) const { return start + (at - sourceStart) / playbackRate; }
@@ -64,6 +89,8 @@ struct VideoContentSample {
    double sourceTime{};
    double playbackRate{1}; // Product of the rates along the retained-content path.
    VideoEditing::VideoFrameCrop crop;
+   double opacity{1};
+   std::vector<VideoEditing::VideoOpacityRamp> opacityRamps; // In root project coordinates.
    explicit operator bool() const { return leaf != nullptr; }
 };
 double VideoContentDuration(const Clip &clip, const MediaSource &fallback);
@@ -75,8 +102,8 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
 std::vector<double> VideoContentEdges(const Clip &clip);
 std::vector<MediaSource> VideoContentSources(const Clip &clip, const MediaSource &fallback);
 struct VideoClipRetiming {
-   double anchor{}, timeScale{1};
-   double ProjectTimeAfterRetiming(double at) const { return anchor + (at - anchor) * timeScale; }
+   double anchor{}, timeScale{1}, shift{};
+   double ProjectTimeAfterRetiming(double at) const { return anchor + (at - anchor) * timeScale + shift; }
 };
 // Prepare one affine timing change for the complete linked group. Retained
 // content and flags stay in content coordinates; no media is rewritten.
@@ -97,4 +124,7 @@ bool SameVideoContent(const Clip &left, const Clip &right);
 // snapshots untouched. The caller checks the complete candidate before publishing.
 bool ReplaceVideoContentSource(Clip &clip, const MediaSource &fallback,
    const std::string &oldPath, const MediaSource &replacement);
+}
+namespace VideoEditing {
+bool HasVideoOpacity(const VideoTimeline::Clip &clip);
 }

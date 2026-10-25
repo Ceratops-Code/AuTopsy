@@ -330,6 +330,14 @@ time, and a double click selects just that clip. Delete also removes the clip
 under a point cursor when its video track alone is selected.
 Use the normal **Edit > Clips > Split**, **Split New**, **Trim**, Cut, Copy,
 Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
+Selecting a middle section and pressing **Delete** leaves a gap in both picture
+and sound; later clips stay where they are. **Edit > Ripple Delete (Close Gap)**
+is available when you deliberately want later material to move earlier.
+**Clip Properties...** in either clip menu offers precise Start, End, Duration,
+Speed and a timing lock. End/Duration retime the clip; dragging edges trims it.
+**Close Gap Before Clip** moves the clip and its linked media to the preceding
+clip boundary. Movement snaps to nearby edges and the cursor/selection;
+hold **Alt** during a drag to bypass magnetic snapping.
 Splits and video moves snap to source frames. Linked splits create separate
 left and right groups, so moving the right pair leaves the left pair in place.
 Each paste or duplication creates an independent linked set.
@@ -346,6 +354,23 @@ unchanged bounds adds no Undo entry. **SetVideoClipSpeed** uses the same clip
 identity and a **Speed** multiplier (2 means 200%).
 Unlink clips when synchronizing picture and sound independently. Tracks can be resized, reordered,
 scrolled, selected, renamed, and removed with the native controls.
+
+Right-click a video clip and choose **Crop Picture...** to drag frame handles or
+enter exact margins. Cancel leaves the picture unchanged. **Fade Picture...**
+adds picture fade-in/out in seconds, revealing lower video or black. For a
+dissolve, overlap videos on separate tracks and choose **Crossfade from Video
+Below...** on the upper clip. These controls preserve clip positions and audio.
+Fades remain attached to retained footage through split, trim/untrim and speed
+changes, and appear in both preview and export. Preparation can be cancelled
+before an edit is applied. **Remove Fades** restores an opaque picture.
+
+**File > Collect Project Media...** creates a new portable folder with
+**Project.aup3** and **Media/**. It includes audio and the original footage needed
+for every retained video clip, including trimmed handles and joined pieces.
+Move the entire folder together. The open project and original files stay intact.
+Repeating the same collection into the same destination leaves it unchanged;
+choose a new folder after making further edits. A different or damaged existing
+archive is never overwritten.
 
 **Edit > Clips > Add Clip Flag...** attaches a short label at the cursor inside
 an audio or video clip. Flags follow their clip when it moves, and stay attached
@@ -393,6 +418,11 @@ It groups entries by source path and file identity, retains at most the current
 version and two predecessors per source (36 entries total), and protects live
 entries with leases. Component startup and completed preparation remove orphaned
 builds and prune old entries. Only completed preview/thumbnail pairs are reused.
+Picture-transition spans use this same owner, bounded retention and leases.
+Only completed picture files are published; cancellation removes incomplete
+rendering, and original-quality export uses original footage plus lossless
+transition intermediates. Derived transition files are disposable, never project
+media to distribute or the authority for saved edits.
 Reopening uses an available cache without a nested loading dialog.
 `GetVideoPreviewInfo` reports decoded size and a bounded observation of the last
 playback, including dropped frames and video/audio clock positions.

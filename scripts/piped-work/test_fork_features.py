@@ -54,6 +54,15 @@ from run_fork_test_harness import (
     write_neutral_preview_video,
     write_tone,
 )
+from test_beginner_edits import (
+    BEGINNER_VIDEO_CASES,
+    check_clip_properties,
+    check_clip_snapping,
+    check_collect_media,
+    check_delete_gap,
+    check_video_fades,
+    check_visual_crop,
+)
 from test_clip_actions import (
     check_audio_clip_actions,
     check_edit_cursor_line,
@@ -509,6 +518,10 @@ def check_video(client, root, ffmpeg, ffprobe):
     moved = client.data("GetVideoClips")
     assert len(moved["clips"]) == 1 and moved["clips"][0]["start"] == 1
     capture_owned_project(panel, root / "_main-video-track.png")
+    capture = json.loads(run_process(
+        [ffprobe, "-v", "error", "-show_streams", "-of", "json",
+         str(root / "_main-video-track.png")], text=True, timeout=30))["streams"][0]
+    assert capture["codec_name"] == "png" and capture["width"] > 0 and capture["height"] > 0, capture
     operate_owned_video_track(client, 1.5, 1.5)
     assert client.data("GetVideoClips") == moved
     client.send("MoveVideoClip: Id=2 Start=1")
@@ -991,6 +1004,18 @@ def worker(args, root):
         check_audio_clip_actions(client, root, args.ffmpeg)
     elif args.case == "clip-selection":
         check_clip_selection(client, root)
+    elif args.case == "delete-gap":
+        check_delete_gap(client, root, args.ffmpeg)
+    elif args.case == "clip-properties":
+        check_clip_properties(client, root)
+    elif args.case == "clip-snapping":
+        check_clip_snapping(client, root)
+    elif args.case == "visual-crop":
+        check_visual_crop(client, root)
+    elif args.case == "collect-media":
+        check_collect_media(client, root)
+    elif args.case == "video-fades":
+        check_video_fades(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-clip-export":
         check_video_clip_export(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "edit-cursor-line":
@@ -1101,7 +1126,10 @@ def retain_behavior_result(work_root, record=None, metrics=None):
         keep = {row[1] for row in passes + other}
         for _, _, passed in passes:
             identity = passed.get("input_identity")
-            matching = [row for row in scoped if identity and row[2].get("input_identity") == identity]
+            work = native_work_scope(passed.get("check_inputs"))
+            matching = [row for row in scoped if identity and (
+                row[2].get("input_identity") == identity or
+                (work is not None and native_work_scope(row[2].get("check_inputs")) == work))]
             if matching:
                 keep.add(matching[0][1])
         for _, path, _ in scoped:
@@ -1156,6 +1184,10 @@ def native_test_inputs(args, executable, module, display):
         inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
     if args.case == "clip-selection":
         inputs["clip_selection_sha256"] = sha(here / "test_clip_selection.py")
+    if args.case in BEGINNER_VIDEO_CASES:
+        inputs["beginner_edits_sha256"] = sha(here / "test_beginner_edits.py")
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+        inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "video-export-timing":
         inputs["export_timing_sha256"] = sha(here / "test_video_export_timing.py")
     if args.case in ("preview-controls", "preview-quality", "video-cursor"):
@@ -1197,15 +1229,35 @@ def read_behavior_results(work_root):
 def plan_native_check(work_root, case, inputs):
     """Return original evidence, never a newly invented pass or execution."""
     identity = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+    work = native_work_scope(inputs)
     rows = [row for row in read_behavior_results(work_root) if row[2]["case"] == case]
-    matching = [row for row in rows if row[2].get("input_identity") == identity]
+    matching = [row for row in rows if row[2].get("input_identity") == identity or (
+        work is not None and native_work_scope(row[2].get("check_inputs")) == work)]
     latest = matching[0] if matching else None
     if latest and latest[2]["result"] == "passed":
-        return {"case": case, "decision": "reused", "input_identity": identity,
+        return {"case": case, "decision": "reused", "input_identity": latest[2]["input_identity"],
                 "receipt": str(latest[1]), "original_run": latest[2]["run"]}
     reason = ("previous failure or incomplete attempt" if latest else
               "changed artifact, check or execution scope" if rows else "missing receipt")
     return {"case": case, "decision": "execute", "input_identity": identity, "reason": reason}
+
+
+def native_work_scope(inputs):
+    """Separate accepted product/scope bytes from the checks that earned a pass.
+
+    A check-only edit does not revoke an unchanged product's acceptance. Keep
+    that result's original check version instead of manufacturing a new pass.
+    Unknown inputs remain requirements: adding a coverage/scope input demands
+    its own result. Partial historical records never acquire missing evidence.
+    A newer failure still blocks older passes across check versions.
+    """
+    required = {"executable_sha256", "script_module_sha256", "payload_dependencies", "execution_scope"}
+    if not isinstance(inputs, dict) or not required.issubset(inputs):
+        return None
+    check_fields = {"check_sha256", "harness_sha256", "pipe_client_sha256", "shared_process_checks",
+        "clip_edits_sha256", "clip_actions_sha256", "track_groups_sha256", "clip_selection_sha256",
+        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256"}
+    return {name: value for name, value in inputs.items() if name not in check_fields}
 
 
 def finish_interrupted_native_checks(work_root):
@@ -1326,6 +1378,7 @@ def main():
     parser.add_argument(
         "--case",
         choices=(
+            *BEGINNER_VIDEO_CASES,
             "groups",
             "tracks",
             "history-view",
@@ -1433,7 +1486,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in ("clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in BEGINNER_VIDEO_CASES or args.case in ("clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,
@@ -1531,6 +1584,7 @@ def main():
             TMP=str(gui),
             PYTHONDONTWRITEBYTECODE="1",
             AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
+            AUTOPSY_TEST_FFMPEG=args.ffmpeg,
             AUTOPSY_TEST_DISPLAY=display["device"]
             if not args.reject_display
             else "missing-test-display",
@@ -1691,7 +1745,7 @@ def main():
                     "input": source_identity,
                     **identities,
                 }
-                if args.case in ("project-compatibility", "track-groups", "video-clip-mute"):
+                if args.case in ("project-compatibility", "track-groups", "video-clip-mute", "collect-media", "video-fades"):
                     record["compatibility_fixtures"] = read_compatibility_fixture_inputs(root)
                 observations = root / "_playback.json"
                 if observations.is_file():
@@ -1720,7 +1774,7 @@ def main():
     def read_inputs():
         return native_test_inputs(args, executable, module, display)
 
-    if args.case in ("project-compatibility", "track-groups", "video-clip-mute"):
+    if args.case in ("project-compatibility", "track-groups", "video-clip-mute", "collect-media", "video-fades"):
         result = run_project_compatibility_checks(
             root.parent, args.case, read_inputs, execute, root, display, args.ffmpeg)
     else:

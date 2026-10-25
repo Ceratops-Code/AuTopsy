@@ -1600,7 +1600,7 @@ void WaveTrack::HandleClear(double t0, double t1, bool addCutLines,
             if (split || clearByTrimming) {
                // Three cases:
 
-               if (clip->BeforePlayRegion(t0)) {
+               if (clip->AtOrBeforePlayRegion(t0)) {
                   // Delete from the left edge
 
                   // Don't modify this clip in place, because we want a strong

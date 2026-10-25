@@ -23,6 +23,8 @@ struct VideoFrameSample {
    VideoFrameCrop crop; // Fractions of oriented ORIGINAL source, before placement.
    VideoFrameRectangle rectangle; // Resolved canvas fractions; never proxy pixels.
    double playbackRate{1};
+   double opacity{1};
+   std::vector<VideoOpacityRamp> opacityRamps;
 };
 struct VideoFramePlan {
    int canvasWidth{}, canvasHeight{};

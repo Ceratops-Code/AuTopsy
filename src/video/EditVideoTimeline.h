@@ -474,6 +474,9 @@ inline VideoClipExportPlan PlanVideoClipExport(const Timeline& timeline, uint64_
    oneClip.clips = {*found};
    const auto range = CopyVideoRange(oneClip, found->start, found->End());
    VideoClipExportPlan result{ComposeVideoTracks({&range}), found->start, found->duration};
+   // Retain the envelope tree until the shared picture renderer has evaluated
+   // it; flattening an opaque cut list would discard fades on joined content.
+   if (VideoEditing::HasVideoOpacity(*found) && !found->muted) result.picture = range;
    // A hidden occurrence still defines its export canvas and source identity.
    // Keep no render segments: black frames use the explicit clip duration and
    // independently mixed project audio, without reopening the muted source.

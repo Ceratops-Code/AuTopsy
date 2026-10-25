@@ -130,7 +130,8 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
    BY_HANDLE_FILE_INFORMATION info{};
    if (sourceFile.get() == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(sourceFile.get(), &info))
       throw std::runtime_error("Cannot read the source video for preview.");
-   const auto utf8 = wxString(sourcePath.wstring()).ToUTF8();
+   const auto sourceName = wxString(sourcePath.wstring());
+   const auto utf8 = sourceName.ToUTF8();
    const std::string canonical{utf8.data(), utf8.length()};
    std::ostringstream revision;
    revision << std::hex << info.dwVolumeSerialNumber << '-' << info.nFileIndexHigh << '-'
@@ -170,7 +171,6 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
          // they do not recover or trust a saved execution checkpoint.
          for (const auto *file : {"_complete", "_building.mp4", "_building.jpg", "_preview.mp4", "_frames.jpg"})
             fs::remove(path / file);
-         const auto sourceName = wxString(sourcePath.wstring());
          const auto buildingVideo = wxString((path / "_building.mp4").wstring());
          const auto preview = wxString((path / "_preview.mp4").wstring());
          const auto sheet = wxString((path / "_building.jpg").wstring());
@@ -210,5 +210,67 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
       if (!complete) RemoveEntry(path);
       throw;
    }
+}
+
+std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string &group,
+   const std::string &recipe, const std::vector<std::string> &sources, double duration,
+   const std::function<void(const wxString&)> &render)
+{
+   if (!std::isfinite(duration) || duration <= 0 || !render)
+      throw std::runtime_error("A rendered picture needs a usable duration and renderer.");
+   std::vector<Handle> inputs;
+   std::ostringstream identity; identity.imbue(std::locale::classic());
+   identity << "picture-transition=1\n" << recipe;
+   for (const auto &source : sources) {
+      const auto path = fs::absolute(fs::path(wxString::FromUTF8(source).ToStdWstring()));
+      Handle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+      BY_HANDLE_FILE_INFORMATION info{};
+      if (file.get() == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(file.get(), &info))
+         throw std::runtime_error("Cannot read a picture transition source: " + source);
+      identity << '\n' << source << ':' << info.dwVolumeSerialNumber << ':' << info.nFileIndexHigh
+         << ':' << info.nFileIndexLow << ':' << info.ftLastWriteTime.dwHighDateTime << ':'
+         << info.ftLastWriteTime.dwLowDateTime << ':' << info.nFileSizeHigh << ':' << info.nFileSizeLow;
+      inputs.push_back(std::move(file));
+   }
+   const auto value = identity.str();
+   const auto root = CacheRoot();
+   fs::create_directories(root);
+   if (!PlainDirectory(root)) throw std::runtime_error("The preview cache must be a plain directory.");
+   const auto path = root / ("_preview-" + SourceKey(group) + "-fx-" + SourceKey(value));
+   if (auto live = liveMedia[path].lock()) {
+      if (Read(path / "_source") != value) throw std::runtime_error("A picture cache identity collided.");
+      return live;
+   }
+   CleanPreviewCache(); fs::create_directory(path);
+   if (!PlainDirectory(path)) throw std::runtime_error("Cannot create the picture transition cache.");
+   if (fs::exists(path / "_lease") && !PlainFile(path / "_lease"))
+      throw std::runtime_error("The picture cache lease is not a regular file.");
+   auto lease = std::make_shared<Lease>();
+   lease->handle.reset(CreateFileW((path / "_lease").c_str(), GENERIC_READ | GENERIC_WRITE,
+      0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+   if (lease->handle.get() == INVALID_HANDLE_VALUE)
+      throw std::runtime_error("Another process is preparing this picture transition.");
+   if (fs::exists(path / "_owner") && (!PlainFile(path / "_owner") || Read(path / "_owner") != Signature))
+      throw std::runtime_error("The picture cache entry has another owner.");
+   Write(path / "_owner", Signature);
+   bool complete = PlainFile(path / "_complete") && PlainFile(path / "_preview.mp4") &&
+      PlainFile(path / "_source") && Read(path / "_source") == value;
+   try {
+      if (!complete) {
+         fs::remove(path / "_complete"); fs::remove(path / "_building.mp4");
+         fs::remove(path / "_preview.mp4");
+         render(wxString((path / "_building.mp4").wstring()));
+         if (!PlainFile(path / "_building.mp4") || !fs::file_size(path / "_building.mp4"))
+            throw std::runtime_error("The transition renderer produced no picture.");
+         fs::rename(path / "_building.mp4", path / "_preview.mp4");
+         Write(path / "_source", value); Write(path / "_complete", Signature); complete = true;
+      }
+      auto result = std::make_shared<PreparedMedia>();
+      result->sourcePath = result->playbackPath = wxString((path / "_preview.mp4").wstring());
+      result->duration = duration; result->lease = lease;
+      liveMedia[path] = result; CleanPreviewCache(); return result;
+   }
+   catch (...) { lease->handle.reset(); if (!complete) RemoveEntry(path); throw; }
 }
 }
