@@ -362,6 +362,7 @@ def check_clip_properties(client, root):
     # The normal dialog shares the command's behavior. Cancel is checked twice
     # before any visible timing effect, including a partially typed value.
     select(client, 1, 0.5, 0.5)
+    client.send("SetTrackStatus: Focused=1")
     stable = model(client)
     for text in ("7", "-"):
         def cancel(windows, dialog, value=text):
