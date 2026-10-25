@@ -6,6 +6,7 @@ media and the existing cache owner supply fixtures; no personal files are read.
 import ctypes
 import json
 import os
+import shutil
 import time
 
 from run_fork_test_harness import (
@@ -155,6 +156,24 @@ def check_preview_quality(client, root, ffmpeg, ffprobe):
     for _ in range(2):
         client.file("ImportVideo", source)
         assert ready_video_preview(client)["previewQualitySources"] == 1, "Repeated imports retained duplicate source leases."
+    native = PreviewInput(ready_video_preview(client))
+    native.quality(int(client.data("GetVideoPreviewInfo")["previewQualityHandle"]), 1)
+    other = root / "_quality-import.mp4"
+    shutil.copyfile(source, other)
+    for _ in range(2):
+        client.file("ImportVideo", other)
+        imported = ready_video_preview(client)
+        assert imported["previewQuality"] == 1 and imported["previewQualitySources"] == 2, imported
+        clips = client.data("GetVideoClips")["clips"]
+        index = max(row["track"] for row in clips if row["source"] == other.as_posix())
+        deadline = time.monotonic() + 5
+        while True:
+            painted = painted_video_tracks(client)
+            row = next(row for row in painted["videoTrackRows"] if row["index"] == index)
+            if row["thumbnails"]:
+                break
+            assert time.monotonic() < deadline, ("Custom-quality import has no filmstrip", row)
+            time.sleep(0.1)
     client.send("SelectAll")
     client.send("RemoveTracks")
     deadline = time.monotonic() + 5
@@ -246,7 +265,11 @@ def check_preview_controls(client, root):
     wait_for_native_state(lambda: preview_project_seconds(status) > 0.55, "loop before a seek")
     press_preview_button(int(info["previewForwardHandle"]))
     wait_for_native_state(lambda: preview_project_seconds(status) > 1.4, "one-second seek within a loop")
-    time.sleep(2)
+    # Observe a real wrap to the original loop's left edge, not merely a clock
+    # somewhere inside the region. A restart accidentally bounded by the seek
+    # destination would loop from that destination and fail this observation.
+    wait_for_native_state(lambda: preview_project_seconds(status) > 2.5, "approaching the retained loop endpoint")
+    wait_for_native_state(lambda: 0.38 <= preview_project_seconds(status) < 1.2, "wraps to the original loop start")
     loop_observation = {"playing": native.windows.enabled(buttons["stop"]),
                         "position": preview_project_seconds(status)}
     if not (loop_observation["playing"] and 0.38 <= loop_observation["position"] < 2.85):

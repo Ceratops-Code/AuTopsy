@@ -70,6 +70,15 @@ std::string SourceKey(const std::string &source) {
 }
 }
 
+std::shared_ptr<const PreparedMedia> FindPreparedVideoThumbnails(const wxString &source,
+   double duration, wxWindow *parent)
+{
+   for (const int height : {540, 360, 720, 1080})
+      if (auto media = PrepareVideoMedia(source, duration, true, parent, false, height))
+         return media;
+   return PrepareVideoMedia(source, duration, false, parent, false);
+}
+
 void CleanPreviewCache()
 {
    const auto root = CacheRoot();

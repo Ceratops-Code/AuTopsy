@@ -145,8 +145,11 @@ public:
       const auto state = ReadNavigation();
       // Preserve the main player's live loop policy when a seek restarts audio.
       const auto options = ProjectAudioIO::GetDefaultOptions(mProject, true);
+      const auto &region = ViewInfo::Get(mProject).playRegion;
+      const bool inLoop = region.Active() && !region.Empty() && state.cursor < region.GetEnd();
       ProjectAudioManager::Get(mProject).PlayPlayRegion(
-         SelectedRegion(state.cursor, state.duration), options, PlayMode::loopedPlay);
+         SelectedRegion(inLoop ? region.GetStart() : state.cursor,
+            inLoop ? region.GetEnd() : state.duration), options, PlayMode::loopedPlay);
       if (!ReadState().playing) throw std::runtime_error("Project playback could not start at the preview destination.");
    }
    double ReadPlaybackGain() const {
@@ -365,6 +368,7 @@ class VideoPreviewFrame final : public wxFrame {
          mPreciseFrames = false; mUsingOriginalFrames = original && mMedia && mMedia->lightweight;
          mDurationChecked = false; mLoadTime.Start();
          mChangingQuality = false; mTimeline->SetFocus();
+         VideoTimeline::ShowProjectVideoTrack(*project);
          VideoPreview::CleanPreviewCache();
       }
       catch (const VideoPreview::PreviewPreparationCancelled &) {
@@ -942,6 +946,7 @@ public:
          out.Key("dataLeft"); out.Int(row.dataLeft); out.Key("dataWidth"); out.Int(row.dataWidth);
          out.Key("dataTop"); out.Int(row.dataTop);
          out.Key("selected"); out.Bool(row.selected);
+         out.Key("thumbnails"); out.Bool(row.thumbnails);
          for (const auto &entry : {std::pair{"mute", row.mute}, std::pair{"solo", row.solo}}) {
             const auto &button = entry.second;
             out.Key(entry.first); out.StartObject();
@@ -1015,7 +1020,7 @@ bool ImportVideo(const CommandContext &context, const wxString &path)
           throw;
        }
        SelectUtilities::SelectNone(project); pictureTrack->SetSelected(true);
-       VideoTimeline::ShowProjectVideoTrack(project, candidate->Media());
+       VideoTimeline::ShowProjectVideoTrack(project);
       auto &viewport = Viewport::Get(project);
       viewport.ZoomFitHorizontally();
       TrackFocus::Get(project).Set(pictureTrack.get(), true);
@@ -1195,7 +1200,7 @@ void VideoTimeline::ShowProjectVideoPreview(AudacityProject &project, bool raise
       if (preview.frame && !preview.frame->IsBeingDeleted()) candidate->AdoptQuality(*preview.frame);
       try {
          if (!candidate->Load(path, &timeline)) return;
-         ShowProjectVideoTrack(project, candidate->Media());
+         ShowProjectVideoTrack(project);
          if (preview.frame && !preview.frame->IsBeingDeleted()) preview.frame->Destroy();
          candidate->StartPreview();
          preview.frame = candidate.release();

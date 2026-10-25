@@ -20,5 +20,9 @@ constexpr int ThumbnailColumns = 16, ThumbnailCount = 128;
 constexpr int ThumbnailWidth = 160, ThumbnailHeight = 90;
 std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
    double duration, bool lightweight, wxWindow *parent, bool buildIfMissing = true, int maximumHeight = 540);
+// Filmstrips may read any completed quality profile. This never builds media or
+// selects the playback quality, and retains the cache owner's normal lease.
+std::shared_ptr<const PreparedMedia> FindPreparedVideoThumbnails(const wxString &source,
+   double duration, wxWindow *parent);
 void CleanPreviewCache();
 }

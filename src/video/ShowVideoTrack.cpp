@@ -1,6 +1,7 @@
 // Native TrackPanel adapters. The host owns scrolling, sizing, focus, track
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
+#include "PrepareVideoPreview.h"
 #include "CreateVideoTrack.h"
 #include "EditVideoComposition.h"
 #include "PlanVideoEdits.h"
@@ -361,10 +362,8 @@ class VideoTrackView final : public CommonChannelView {
       if (found == mSources.end()) {
          Thumbnails data;
          try {
-         data.media = VideoPreview::PrepareVideoMedia(wxString::FromUTF8(source.path),
-            source.duration, true, parent, false);
-         if (!data.media) data.media = VideoPreview::PrepareVideoMedia(wxString::FromUTF8(source.path),
-             source.duration, false, parent, false);
+         data.media = VideoPreview::FindPreparedVideoThumbnails(wxString::FromUTF8(source.path),
+            source.duration, parent);
          }
          catch (const std::exception &) {
             // Offline media or an unavailable cache must not throw from a
@@ -392,6 +391,10 @@ class VideoTrackView final : public CommonChannelView {
 public:
    explicit VideoTrackView(const std::shared_ptr<Channel> &channel) : CommonChannelView(channel) {}
    const wxRect &DataRect() const { return mLastRect; }
+   void ClearMissingThumbnails() {
+      for (auto it = mSources.begin(); it != mSources.end();)
+         if (it->second.frames.empty()) it = mSources.erase(it); else ++it;
+   }
    bool HasThumbnails() const {
       return std::any_of(mSources.begin(),mSources.end(),
          [](const auto &source) { return !source.second.frames.empty(); });
@@ -814,8 +817,12 @@ using GetVideoHeight = GetDefaultTrackHeight::Override<AuTopsyVideoTrack>;
 DEFINE_ATTACHED_VIRTUAL_OVERRIDE(GetVideoHeight) {
    return [](AuTopsyVideoTrack &) { return 125; };
 }
-void VideoTimeline::ShowProjectVideoTrack(AudacityProject &project,std::shared_ptr<const VideoPreview::PreparedMedia>)
+void VideoTimeline::ShowProjectVideoTrack(AudacityProject &project)
 {
+   // Preparation can complete after an earlier paint found no cache entry.
+   // Retire only those misses; completed decoded filmstrips stay reusable.
+   for (auto *track : TrackList::Get(project).Any<AuTopsyVideoTrack>())
+      static_cast<VideoTrackView&>(ChannelView::Get(*track)).ClearMissingThumbnails();
    Viewport::Get(project).HandleResize(); Viewport::Get(project).Redraw();
 }
 VideoTimeline::VideoTrackStatus VideoTimeline::GetProjectVideoTrackStatus(AudacityProject &project)
@@ -835,7 +842,7 @@ VideoTimeline::VideoTrackStatus VideoTimeline::GetProjectVideoTrackStatus(Audaci
          const auto rect = panel.FindTrackRect(video);
          auto &nativeView = static_cast<VideoTrackView&>(ChannelView::Get(*video));
          const auto data = nativeView.DataRect();
-         result.rows.push_back({index,rect.x,rect.y,rect.width,rect.height,data.x,data.width,data.y,video->GetSelected()});
+      result.rows.push_back({index,rect.x,rect.y,rect.width,rect.height,data.x,data.width,data.y,video->GetSelected(),nativeView.HasThumbnails()});
          auto &row = result.rows.back();
          const auto &controls = static_cast<const VideoTrackControls&>(TrackControls::Get(*video));
          const auto mute = controls.ButtonRect(false), solo = controls.ButtonRect(true);

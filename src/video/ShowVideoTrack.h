@@ -1,6 +1,5 @@
 // Native TrackPanel view and diagnostics for video tracks.
 #pragma once
-#include "PrepareVideoPreview.h"
 #include <cstdint>
 #include <vector>
 class AudacityProject;
@@ -12,13 +11,12 @@ struct VideoTrackStatus {
    struct Button { int x{}, y{}, width{}, height{}; bool active{}; };
    struct Row {
       int index{}, x{}, y{}, width{}, height{}, dataLeft{}, dataWidth{}, dataTop{};
-      bool selected{};
+      bool selected{}, thumbnails{};
       Button mute, solo;
    };
    uintptr_t panelHandle{};
    std::vector<Row> rows;
 };
-void ShowProjectVideoTrack(AudacityProject &project,
-   std::shared_ptr<const VideoPreview::PreparedMedia> media = {});
+void ShowProjectVideoTrack(AudacityProject &project);
 VideoTrackStatus GetProjectVideoTrackStatus(AudacityProject &project);
 }

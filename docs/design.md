@@ -676,6 +676,12 @@ after excluding live leases; current project media can exceed that idle bound.
 Open and Undo perform cache lookups without modal preparation. Quality is view
 state, retained across imports in that project session, and adds no project-file
 field, edit-history step or export setting.
+Filmstrips ask the cache owner for completed thumbnails across all quality
+profiles, independently of playback quality. Refresh after preparation retires
+cached misses while retaining completed decoded strips. A seek restarting within
+an active loop supplies its native bounds and carries the destination through
+the native start-time option; a destination beyond the loop continues toward
+project end using the native policy.
 
 Video header and picture single clicks preserve the press-time coordinate across
 native release dispatch; native snapping or stale hover handles cannot replace
