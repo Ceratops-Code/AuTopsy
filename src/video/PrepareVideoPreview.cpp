@@ -2,6 +2,7 @@
 // A completed marker publishes the pair atomically to consumers. Leases protect
 // live entries; interrupted builds are discarded on startup or the next import.
 #include "PrepareVideoPreview.h"
+#include "ChoosePreviewQuality.h"
 #include "ExportVideoMix.h"
 #include "FileNames.h"
 #include <wx/msw/wrapwin.h>
@@ -69,6 +70,15 @@ std::string SourceKey(const std::string &source) {
 }
 }
 
+std::shared_ptr<const PreparedMedia> FindPreparedVideoThumbnails(const wxString &source,
+   double duration, wxWindow *parent)
+{
+   for (const int height : {540, 360, 720, 1080})
+      if (auto media = PrepareVideoMedia(source, duration, true, parent, false, height))
+         return media;
+   return PrepareVideoMedia(source, duration, false, parent, false);
+}
+
 void CleanPreviewCache()
 {
    const auto root = CacheRoot();
@@ -109,10 +119,11 @@ void CleanPreviewCache()
 }
 
 std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
-   double duration, bool lightweight, wxWindow *parent, bool buildIfMissing)
+   double duration, bool lightweight, wxWindow *parent, bool buildIfMissing, int maximumHeight)
 {
    if (!std::isfinite(duration) || duration <= 0)
       throw std::runtime_error("Video preview requires a finite source duration.");
+   const auto scaleFilter = PreviewQualityScaleFilter(maximumHeight);
    const auto sourcePath = fs::absolute(fs::path(source.ToStdWstring()));
    Handle sourceFile{CreateFileW(sourcePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
       nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
@@ -126,6 +137,7 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
       << info.nFileIndexLow << '-' << info.ftLastWriteTime.dwHighDateTime << '-'
       << info.ftLastWriteTime.dwLowDateTime << '-' << info.nFileSizeHigh << '-'
       << info.nFileSizeLow << '-' << int(lightweight);
+   if (lightweight && maximumHeight != 540) revision << "-p" << std::dec << maximumHeight;
    const auto identity = canonical + '\n' + revision.str() + "\nrecipe=1";
    const auto root = CacheRoot();
    const auto path = root / ("_preview-" + SourceKey(canonical) + '-' + revision.str());
@@ -165,10 +177,10 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
          if (lightweight) {
             if (!VideoExport::RunBundledVideoTool({"-v", "error", "-nostdin", "-n", "-hwaccel", "auto",
                  "-i", sourceName, "-map", "0:v:0", "-an", "-sn", "-dn", "-map_metadata", "-1",
-                 "-vf", "scale=960:540:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,fps=30",
+                 "-vf", wxString::FromUTF8(scaleFilter),
                  "-c:v", "mpeg4", "-q:v", "6", "-g", "15", "-bf", "0", "-threads", "2", buildingVideo},
-                 parent, _("Prepare Video Preview"), _("Making a smooth 540p preview. Export uses the original video...")))
-               throw std::runtime_error("Video preview preparation was cancelled.");
+                 parent, _("Prepare Video Preview"), wxString::Format(_("Making a smooth %dp preview. Export uses the original video..."), maximumHeight)))
+               throw PreviewPreparationCancelled{};
             fs::rename(path / "_building.mp4", path / "_preview.mp4");
          }
          std::ostringstream rate; rate.imbue(std::locale::classic()); rate << std::setprecision(17) << 128.0 / duration;
@@ -178,7 +190,7 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
               lightweight ? preview : sourceName, "-an", "-vf", wxString::FromUTF8(filter),
               "-frames:v", "1", "-q:v", "3", "-update", "1", sheet}, parent,
               _("Prepare Video Track"), _("Making timeline thumbnails...")))
-            throw std::runtime_error("Video thumbnail preparation was cancelled.");
+            throw PreviewPreparationCancelled{};
          fs::rename(path / "_building.jpg", path / "_frames.jpg");
          Write(path / "_source", identity);
          Write(path / "_complete", Signature);

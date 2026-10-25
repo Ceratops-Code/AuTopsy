@@ -1,6 +1,7 @@
 // Native TrackPanel adapters. The host owns scrolling, sizing, focus, track
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
+#include "PrepareVideoPreview.h"
 #include "CreateVideoTrack.h"
 #include "EditVideoComposition.h"
 #include "PlanVideoEdits.h"
@@ -206,11 +207,38 @@ public:
 // Header clicks use the same click-versus-drag contract as audio clips.
 class VideoAffordanceHandle final : public AffordanceHandle {
    bool mDoubleClick{};
+   bool mPointClick{}, mDragged{};
+   wxPoint mPress;
+   double mPressTime{};
 public:
    using AffordanceHandle::AffordanceHandle;
    Result Click(const TrackPanelMouseEvent &event, AudacityProject *project) override {
       mDoubleClick = event.event.LeftDClick();
+      mPress = event.event.GetPosition(); mDragged = false;
+      mPointClick = !mDoubleClick && !event.event.ShiftDown() && !event.event.CmdDown();
+      mPressTime = std::max(0.0, ViewInfo::Get(*project).PositionToTime(mPress.x, event.rect.x));
       return AffordanceHandle::Click(event, project);
+   }
+   Result Drag(const TrackPanelMouseEvent &event, AudacityProject *project) override {
+      mDragged = mDragged || std::abs(event.event.GetX() - mPress.x) >= 3 ||
+         std::abs(event.event.GetY() - mPress.y) >= 3;
+      return AffordanceHandle::Drag(event, project);
+   }
+   Result Release(const TrackPanelMouseEvent &event, AudacityProject *project, wxWindow *parent) override {
+      // Native release can refresh/reassign the hovered handle. Retain the
+      // press-time intent across that dispatch, including after a canceled drag.
+      const bool point = mPointClick && !mDragged;
+      const auto at = mPressTime;
+      const auto track = GetTrack();
+      const auto result = AffordanceHandle::Release(event, project, parent);
+      if (point && track && project) {
+         ViewInfo::Get(*project).selectedRegion.setTimes(at, at);
+         TrackFocus::Get(*project).Set(track.get(), true);
+         ProjectHistory::Get(*project).ModifyState(false);
+         Viewport::Get(*project).Redraw();
+         return result | RefreshCode::RefreshAll;
+      }
+      return result;
    }
    Result SelectAt(const TrackPanelMouseEvent &event, AudacityProject *project) override {
       const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(GetTrack());
@@ -236,6 +264,15 @@ class VideoSelectionHandle final : public SelectHandle {
    uint64_t mId{};
    bool mDragged{};
    bool mDoubleClick{};
+   double mPressTime{};
+   Result SelectPoint(AudacityProject *project, double at) {
+      const auto track = mTrack.lock();
+      if (!track || !mId) return RefreshCode::RefreshNone;
+      ViewInfo::Get(*project).selectedRegion.setTimes(at, at);
+      TrackFocus::Get(*project).Set(track.get(), true);
+      ProjectHistory::Get(*project).ModifyState(false);
+      return RefreshCode::RefreshAll;
+   }
    Result SelectClip(AudacityProject *project) {
       const auto track = mTrack.lock();
       if (!track || !mId) return RefreshCode::RefreshNone;
@@ -256,13 +293,14 @@ public:
    Result Click(const TrackPanelMouseEvent &event, AudacityProject *project) override {
       mClick = event.event.GetPosition(); mDragged = false; mId = 0;
       mDoubleClick = event.event.LeftDClick();
+      mPressTime = std::max(0.0, ViewInfo::Get(*project).PositionToTime(mClick.x, event.rect.x));
       if (!event.event.ShiftDown() && !event.event.CmdDown())
          if (const auto track = mTrack.lock())
             if (const auto *clip = ClipAt(track->Timeline(),
                   ViewInfo::Get(*project).PositionToTime(mClick.x, event.rect.x)))
                mId = clip->id;
       const auto result = SelectHandle::Click(event, project);
-      return event.event.LeftDClick() ? result | SelectClip(project) : result;
+      return mDoubleClick ? result | SelectClip(project) : result | SelectPoint(project, mPressTime);
    }
    Result Drag(const TrackPanelMouseEvent &event, AudacityProject *project) override {
       mDragged = mDragged || std::abs(event.event.GetX() - mClick.x) >= 3 ||
@@ -270,8 +308,11 @@ public:
       return mDragged ? SelectHandle::Drag(event, project) : RefreshCode::RefreshNone;
    }
    Result Release(const TrackPanelMouseEvent &event, AudacityProject *project, wxWindow *parent) override {
+      const bool point = !mDragged && !mDoubleClick && mId;
+      const bool whole = !mDragged && mDoubleClick;
+      const auto at = mPressTime;
       const auto result = SelectHandle::Release(event, project, parent);
-      return !mDragged && mDoubleClick ? result | SelectClip(project) : result;
+      return whole ? result | SelectClip(project) : point ? result | SelectPoint(project, at) : result;
    }
 };
 class VideoTrackView;
@@ -321,10 +362,8 @@ class VideoTrackView final : public CommonChannelView {
       if (found == mSources.end()) {
          Thumbnails data;
          try {
-         data.media = VideoPreview::PrepareVideoMedia(wxString::FromUTF8(source.path),
-            source.duration, true, parent, false);
-         if (!data.media) data.media = VideoPreview::PrepareVideoMedia(wxString::FromUTF8(source.path),
-             source.duration, false, parent, false);
+         data.media = VideoPreview::FindPreparedVideoThumbnails(wxString::FromUTF8(source.path),
+            source.duration, parent);
          }
          catch (const std::exception &) {
             // Offline media or an unavailable cache must not throw from a
@@ -352,6 +391,10 @@ class VideoTrackView final : public CommonChannelView {
 public:
    explicit VideoTrackView(const std::shared_ptr<Channel> &channel) : CommonChannelView(channel) {}
    const wxRect &DataRect() const { return mLastRect; }
+   void ClearMissingThumbnails() {
+      for (auto it = mSources.begin(); it != mSources.end();)
+         if (it->second.frames.empty()) it = mSources.erase(it); else ++it;
+   }
    bool HasThumbnails() const {
       return std::any_of(mSources.begin(),mSources.end(),
          [](const auto &source) { return !source.second.frames.empty(); });
@@ -774,8 +817,12 @@ using GetVideoHeight = GetDefaultTrackHeight::Override<AuTopsyVideoTrack>;
 DEFINE_ATTACHED_VIRTUAL_OVERRIDE(GetVideoHeight) {
    return [](AuTopsyVideoTrack &) { return 125; };
 }
-void VideoTimeline::ShowProjectVideoTrack(AudacityProject &project,std::shared_ptr<const VideoPreview::PreparedMedia>)
+void VideoTimeline::ShowProjectVideoTrack(AudacityProject &project)
 {
+   // Preparation can complete after an earlier paint found no cache entry.
+   // Retire only those misses; completed decoded filmstrips stay reusable.
+   for (auto *track : TrackList::Get(project).Any<AuTopsyVideoTrack>())
+      static_cast<VideoTrackView&>(ChannelView::Get(*track)).ClearMissingThumbnails();
    Viewport::Get(project).HandleResize(); Viewport::Get(project).Redraw();
 }
 VideoTimeline::VideoTrackStatus VideoTimeline::GetProjectVideoTrackStatus(AudacityProject &project)
@@ -795,7 +842,7 @@ VideoTimeline::VideoTrackStatus VideoTimeline::GetProjectVideoTrackStatus(Audaci
          const auto rect = panel.FindTrackRect(video);
          auto &nativeView = static_cast<VideoTrackView&>(ChannelView::Get(*video));
          const auto data = nativeView.DataRect();
-         result.rows.push_back({index,rect.x,rect.y,rect.width,rect.height,data.x,data.width,data.y,video->GetSelected()});
+      result.rows.push_back({index,rect.x,rect.y,rect.width,rect.height,data.x,data.width,data.y,video->GetSelected(),nativeView.HasThumbnails()});
          auto &row = result.rows.back();
          const auto &controls = static_cast<const VideoTrackControls&>(TrackControls::Get(*video));
          const auto mute = controls.ButtonRect(false), solo = controls.ButtonRect(true);

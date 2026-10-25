@@ -11,6 +11,7 @@
 
 #include "SyncVideoPlayback.h"
 #include "ChooseVideoExport.h"
+#include "ChoosePreviewQuality.h"
 #include "RelinkVideoMedia.h"
 #include "EditVideoTimeline.h"
 #include "JoinVideoClips.h"
@@ -847,5 +848,85 @@ TEST_CASE("Hidden clip export retains its own source geometry and project audio 
       REQUIRE(plan.picture.sourceHeight == 180);
       REQUIRE(plan.picture.protectedSourcePaths == std::vector<std::string>{"retained-clip.mp4"});
       REQUIRE_NOTHROW(RequireWellFormedTimeline(plan.picture));
+   }
+}
+
+
+TEST_CASE("Preview quality selects bounded playback proxies without changing original media")
+{
+   REQUIRE_FALSE(ChoosePreviewQualityProfile(PreviewQuality::Automatic, 1280, 720, 60).lightweight);
+   REQUIRE(ChoosePreviewQualityProfile(PreviewQuality::Automatic, 1920, 1080, 30).maximumHeight == 540);
+   REQUIRE(ChoosePreviewQualityProfile(PreviewQuality::Automatic, 640, 360, 120).lightweight);
+   for (const auto choice : {PreviewQuality::Automatic, PreviewQuality::Low360, PreviewQuality::Medium720,
+         PreviewQuality::High1080, PreviewQuality::Original}) {
+      for (int repeat = 0; repeat < 3; ++repeat) {
+         const auto profile = ChoosePreviewQualityProfile(choice, 1920, 1080, 60);
+         REQUIRE(profile.lightweight == (choice != PreviewQuality::Original));
+         REQUIRE(profile.maximumHeight == (choice == PreviewQuality::Low360 ? 360 :
+            choice == PreviewQuality::Medium720 ? 720 : choice == PreviewQuality::High1080 ? 1080 : 540));
+      }
+   }
+   REQUIRE_FALSE(ChoosePreviewQualityProfile(PreviewQuality::Original, 7680, 4320, 120).lightweight);
+   REQUIRE_THROWS(ChoosePreviewQualityProfile(static_cast<PreviewQuality>(99), 1, 1, 30));
+   REQUIRE_THROWS(ChoosePreviewQualityProfile(PreviewQuality::Automatic, -1, 720, 30));
+   REQUIRE_THROWS(ChoosePreviewQualityProfile(PreviewQuality::Automatic, 1, 1, 0));
+}
+
+TEST_CASE("Preview one-second navigation and shared volume converge without editing tracks")
+{
+   REQUIRE(PreviewSecondDestination(2.25, 10, 1) == Approx(3.25));
+   REQUIRE(PreviewSecondDestination(2.25, 10, -1) == Approx(1.25));
+   REQUIRE(PreviewSecondDestination(0.25, 10, -1) == 0);
+   REQUIRE(PreviewSecondDestination(9.75, 10, 1) == 10);
+   REQUIRE_THROWS(PreviewSecondDestination(1, 10, 0));
+   REQUIRE_THROWS(PreviewSecondDestination(1, -1, 1));
+   struct Mixer {
+      double gain{0.8}; int effect{}, boundary{}, interruptAt{-1};
+      double ReadPlaybackGain() const { return gain; }
+      void Boundary() { if (boundary++ == interruptAt) throw std::runtime_error("interrupted mixer"); }
+      void SetPlaybackGain(double value) { Boundary(); gain = value; ++effect; Boundary(); }
+   };
+   for (const int interruption : {-1, 0, 1}) {
+      Mixer mixer; mixer.interruptAt = interruption;
+      if (interruption >= 0) REQUIRE_THROWS(ApplyPreviewVolume(mixer, 42));
+      ApplyPreviewVolume(mixer, 42);
+      REQUIRE(mixer.effect == 1);
+      REQUIRE(mixer.gain == Approx(0.42));
+      REQUIRE(PreviewVolumePercent(mixer.gain) == 42);
+      for (int repeat = 0; repeat < 3; ++repeat) REQUIRE_FALSE(ApplyPreviewVolume(mixer, 42));
+      REQUIRE_THROWS(ApplyPreviewVolume(mixer, -1));
+      REQUIRE_THROWS(ApplyPreviewVolume(mixer, 101));
+      REQUIRE(mixer.gain == Approx(0.42));
+   }
+}
+
+TEST_CASE("Preview loop reuses the native region and survives interrupted range or activation effects")
+{
+   struct Transport {
+      PreviewLoopState state{{true, true}, false, 0, 0}; int effects{}, boundary{}, interruptAt{-1};
+      PreviewLoopState ReadLoop() const { return state; }
+      void Boundary() { if (boundary++ == interruptAt) throw std::runtime_error("interrupted loop"); }
+      void SetLoopRange(double from, double to) { Boundary(); state.start = from; state.end = to; ++effects; Boundary(); }
+      void SetLoopEnabled(bool enabled) { Boundary(); state.active = enabled; ++effects; Boundary(); }
+   };
+   for (int interruption = -1; interruption < 4; ++interruption) {
+      Transport transport; transport.interruptAt = interruption;
+      if (interruption >= 0) REQUIRE_THROWS(ApplyPreviewLoop(transport, {true, 1, 3}));
+      ApplyPreviewLoop(transport, {true, 1, 3});
+      REQUIRE(transport.state.active); REQUIRE(transport.state.start == 1); REQUIRE(transport.state.end == 3);
+      REQUIRE(transport.effects == 2);
+      for (int repeat = 0; repeat < 3; ++repeat) REQUIRE_FALSE(ApplyPreviewLoop(transport, {true, 1, 3}));
+      REQUIRE(ApplyPreviewLoop(transport, {false}));
+      REQUIRE_FALSE(transport.state.active);
+      REQUIRE_FALSE(ApplyPreviewLoop(transport, {false}));
+      REQUIRE_THROWS(ApplyPreviewLoop(transport, {true, 2, 2}));
+   }
+   for (const int blocked : {0, 1, 2}) {
+      Transport transport;
+      transport.state.transport.canControl = blocked != 0;
+      transport.state.transport.recording = blocked == 1;
+      transport.state.transport.stopping = blocked == 2;
+      REQUIRE_FALSE(ApplyPreviewLoop(transport, {true, 1, 3}));
+      REQUIRE(transport.effects == 0);
    }
 }

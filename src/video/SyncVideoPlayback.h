@@ -35,7 +35,7 @@ inline PreviewTransportControls GetPreviewTransportControls(const ProjectTranspo
 {
    if (!state.canControl || state.recording || state.stopping) return {};
    return {state.hasVideo && (!state.playing || state.paused),
-      state.playing && !state.paused, state.playing};
+      state.playing, state.playing};
 }
 
 constexpr int PreviewTimelineSteps = 1000000;
@@ -60,6 +60,58 @@ struct PreviewSeekTarget {
    double position{};
    bool playing{}, paused{};
 };
+
+// Buttons and keys share one absolute destination, independent of playback mode.
+inline double PreviewSecondDestination(double position, double duration, int direction)
+{
+   if (!std::isfinite(position) || !std::isfinite(duration) || duration < 0 ||
+       (direction != -1 && direction != 1))
+      throw std::runtime_error("Choose a usable preview position and seek direction.");
+   return std::clamp(position + direction, 0.0, duration);
+}
+inline int PreviewVolumePercent(double gain)
+{
+   if (!std::isfinite(gain)) throw std::runtime_error("Playback volume must be finite.");
+   return int(std::llround(std::clamp(gain, 0.0, 1.0) * 100));
+}
+template<typename Mixer>
+bool ApplyPreviewVolume(Mixer &mixer, int percent)
+{
+   if (percent < 0 || percent > 100) throw std::runtime_error("Choose playback volume from 0 to 100 percent.");
+   const auto current = mixer.ReadPlaybackGain();
+   if (!std::isfinite(current)) throw std::runtime_error("The playback mixer returned an unusable volume.");
+   const auto target = percent / 100.0;
+   if (std::abs(target - current) < 1e-6) return false;
+   mixer.SetPlaybackGain(target);
+   return true;
+}
+struct PreviewLoopState {
+   ProjectTransportState transport;
+   bool active{};
+   double start{}, end{};
+};
+struct PreviewLoopTarget { bool active{}; double start{}, end{}; };
+template<typename Transport>
+bool ApplyPreviewLoop(Transport &transport, const PreviewLoopTarget &target)
+{
+   if (target.active && (!std::isfinite(target.start) || !std::isfinite(target.end) ||
+         target.start < 0 || target.end <= target.start))
+      throw std::runtime_error("Select a nonempty time range before enabling preview loop.");
+   auto state = transport.ReadLoop();
+   const auto allowed = [](const auto &s) { return s.transport.hasVideo && s.transport.canControl &&
+      !s.transport.recording && !s.transport.stopping; };
+   if (!allowed(state)) return false;
+   bool changed{};
+   if (target.active && (state.start != target.start || state.end != target.end)) {
+      transport.SetLoopRange(target.start, target.end); changed = true;
+      state = transport.ReadLoop();
+      if (!allowed(state)) throw std::runtime_error("Project playback changed while setting the loop.");
+   }
+   if (state.active != target.active) {
+      transport.SetLoopEnabled(target.active); changed = true;
+   }
+   return changed;
+}
 
 // A seek has an absolute destination and desired transport mode. Re-reading
 // native state between effects lets the same request converge after interruption
@@ -113,7 +165,7 @@ bool ApplyPreviewTransport(Transport &transport, PreviewTransportAction action)
       else transport.StartPlayback();
       break;
    case PreviewTransportAction::Pause:
-      if (!controls.pause) return false;
+      if (!controls.pause || state.paused) return false;
       transport.SetPaused(true);
       break;
    case PreviewTransportAction::Stop:

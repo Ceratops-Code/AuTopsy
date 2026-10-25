@@ -20,6 +20,23 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_unpainted_track_keeps_original_state_when_optional_capture_fails(self) -> None:
+        harness = sys.modules[native.painted_video_tracks.__module__]
+        info = {"videoTrackThumbnails": False, "videoTrackRows": [{"dataWidth": 0}],
+                "videoTrackPanelHandle": 123}
+        client = SimpleNamespace(data=lambda command: info)
+        for failure in (ModuleNotFoundError("PIL"), OSError("capture interrupted")):
+            with self.subTest(failure=str(failure)), patch.dict(os.environ, {"AUTOPSY_BEHAVIOR_ROOT": "."}), \
+                    patch.object(harness.time, "monotonic", side_effect=[0, 6]), \
+                    patch.object(harness, "capture_owned_project", side_effect=failure) as capture:
+                with self.assertRaises(AssertionError) as observed:
+                    harness.painted_video_tracks(client)
+                details = observed.exception.args[0]
+                self.assertFalse(details["videoTrackThumbnails"])
+                self.assertEqual(details["videoTrackRows"], info["videoTrackRows"])
+                self.assertIn(str(failure), details["screenshot_error"])
+                self.assertEqual(capture.call_count, 1)
+
     def test_renumbered_displays_never_select_the_primary_screen(self) -> None:
         primary = {"device": r"\\.\DISPLAY10", "primary": True, "work": [0, 0, 1280, 672]}
         secondary = {"device": r"\\.\DISPLAY11", "primary": False, "work": [-1280, 113, 0, 785]}
@@ -444,6 +461,27 @@ class NativeReceiptTests(unittest.TestCase):
             self.assertEqual(app.call_count, 1)
         self.assertEqual(Path(first["receipt"]).read_bytes(), original)
         self.assertFalse(list((self.root / "_accepted").glob("_pending-*")))
+
+    def test_preview_case_recipe_changes_run_only_the_requested_case(self):
+        driver = self.root / "_test_driver.py"
+        recipe = self.root / "test_preview_controls.py"
+        executable, module = self.root / "_app.exe", self.root / "_script.dll"
+        for path in (driver, recipe, executable, module, self.root / "test_video_clip_edits.py", self.root / "test_clip_actions.py",
+                     self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+            path.write_bytes(b"original input")
+        for case in ("preview-quality", "preview-controls", "video-cursor"):
+            arguments = SimpleNamespace(case=case, ffmpeg=None, ffprobe=None)
+            with self.subTest(case=case), patch.object(native, "__file__", str(driver)):
+                def read(arguments=arguments):
+                    return native.native_test_inputs(arguments, executable, module, {"device": "screen-two"})
+                first = native.run_native_check(self.root, case, read, self.execute)
+                recipe.write_bytes(case.encode())
+                with patch.object(self, "execute", wraps=self.execute) as app:
+                    changed = native.run_native_check(self.root, case, read, self.execute)
+                    again = native.run_native_check(self.root, case, read, self.execute)
+                self.assertEqual(app.call_count, 1)
+                self.assertNotEqual(first["original_run"], changed["original_run"])
+                self.assertEqual(again["original_run"], changed["original_run"])
 
     def test_native_newer_matching_failure_blocks_pass_until_a_later_matching_success(self):
         inputs = self.inputs()
