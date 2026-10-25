@@ -1209,6 +1209,7 @@ def native_test_inputs(args, executable, module, display):
     if args.case == "preview-soak":
         from test_preview_controls import preview_soak_seconds
         inputs["execution_scope"]["soak_seconds"] = preview_soak_seconds()
+        inputs["execution_scope"]["preview_metric_contract"] = "bounded-sample-window.v1"
     if args.case == "cursor-recording":
         from test_clip_actions import require_recording_device
         inputs["execution_scope"]["recording_device"] = require_recording_device()

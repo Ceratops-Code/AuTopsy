@@ -326,6 +326,51 @@ def read_owned_process_resources(pid):
         kernel.CloseHandle(handle)
 
 
+def measure_preview_sample_window(report):
+    """Measure retained observations, accounting for counters reset by seeks.
+
+    mpv's VO forgets its frame counters on a seek. End-of-run counters therefore
+    cannot describe a complete looped run. Report only observed increases in
+    this bounded native sample window; drops between a sample and a reset can
+    remain unobserved. No application command or filesystem effect occurs here.
+    """
+    import math
+
+    samples = report["samples"]
+    start, end = report["loopStart"], report["loopEnd"]
+    if len(samples) < 2 or not math.isfinite(end - start) or end <= start:
+        raise ValueError("Preview timing requires a valid loop and at least two samples.")
+    seconds, dropped, decoder_dropped = 0.0, 0.0, 0.0
+    drift: list[float] = []
+    previous = None
+    for row in samples:
+        fields = ("audioPosition", "position", "expectedPosition", "droppedFrames", "decoderDroppedFrames")
+        if any(not math.isfinite(row[key]) for key in fields) or min(row["droppedFrames"], row["decoderDroppedFrames"]) < 0:
+            raise ValueError("Preview timing sample contains unusable positions or counters.")
+        if previous:
+            step = row["audioPosition"] - previous["audioPosition"]
+            if step < 0:
+                step += end - start
+            if not 0 <= step <= end - start:
+                raise ValueError("Preview timing samples cross an unexpected clock discontinuity.")
+            seconds += step
+            for key in ("droppedFrames", "decoderDroppedFrames"):
+                delta = row[key] - previous[key] if row[key] >= previous[key] else row[key]
+                if key == "droppedFrames":
+                    dropped += delta
+                else:
+                    decoder_dropped += delta
+        if not row["paused"] and start + 0.5 < row["audioPosition"] < end - 0.5:
+            drift.append(abs(row["expectedPosition"] - row["position"]))
+        previous = row
+    if seconds <= 0 or not drift:
+        raise ValueError("Preview timing window contains no advancing, settled playback.")
+    drift.sort()
+    return {"timing_sample_count": len(samples), "timing_window_seconds": seconds,
+            "drift_p95_seconds": drift[int((len(drift) - 1) * 0.95)],
+            "sampled_window_dropped_frames": dropped, "sampled_window_decoder_dropped_frames": decoder_dropped}
+
+
 def check_preview_soak(client, root):
     """Measure sustained proxy playback, loop sync, response time and resource growth.
 
@@ -389,26 +434,20 @@ def check_preview_soak(client, root):
         if loop["loopActive"]:
             press_preview_button(int(info["previewLoopHandle"]))
     latency = sorted(row["response"] for row in samples)
-    recent = loop["samples"]
-    drift = sorted(abs(row["expectedPosition"] - row["position"]) for row in recent
-                   if not row["paused"] and 1.5 < row["audioPosition"] - origin < 14.5)
-    drops = max(0, loop["droppedFrames"] - info["droppedFrames"])
-    decoder_drops = max(0, loop["decoderDroppedFrames"] - info["decoderDroppedFrames"])
-    assert drift and wraps >= int(seconds / 14) - 1, "Playback did not sustain the selected loop."
+    timing = measure_preview_sample_window(loop)
+    assert wraps >= int(seconds / 14) - 1, "Playback did not sustain the selected loop."
     observed = {
         "seconds": time.monotonic() - started, "samples": len(samples), "wraps": wraps,
         "video_clips": len(clips), "timeline_origin_seconds": origin,
-        "timing_sample_count": len(recent), "timing_scope": "last bounded playback sample window",
+        **timing, "timing_scope": "observed increases in final retained window; counters reset on seeks",
         "response_p95_seconds": latency[int((len(latency) - 1) * 0.95)],
-        "drift_p95_seconds": drift[int((len(drift) - 1) * 0.95)],
-        "dropped_frames": drops, "decoder_dropped_frames": decoder_drops,
         "private_growth_bytes": max(row["private_bytes"] for row in samples) - baseline["private_bytes"],
         "handle_growth": max(row["handles"] for row in samples) - baseline["handles"],
     }
     (root / "_playback.json").write_text(json.dumps(observed, indent=2), encoding="utf-8")
     assert observed["response_p95_seconds"] < 0.5, observed
     assert observed["drift_p95_seconds"] < 0.15, observed
-    assert drops + decoder_drops <= seconds * 30 * 0.02 + 3, observed
+    assert timing["sampled_window_dropped_frames"] + timing["sampled_window_decoder_dropped_frames"] <= timing["timing_window_seconds"] * 30 * 0.02 + 3, observed
     assert observed["private_growth_bytes"] <= 128 * 1024 * 1024, observed
     assert observed["handle_growth"] <= 64, observed
     assert client.data("GetInfo: Type=Clips Format=JSON") == audio

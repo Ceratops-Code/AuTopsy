@@ -23,6 +23,36 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_preview_sample_window_counts_seek_resets_and_preserves_observations(self) -> None:
+        from test_preview_controls import measure_preview_sample_window
+
+        rows = [{"audioPosition": audio, "position": audio - 10 - drift,
+                 "expectedPosition": audio - 10, "paused": False,
+                 "droppedFrames": drops, "decoderDroppedFrames": decoder}
+                for audio, drift, drops, decoder in ((22.8, .1, 2, 0), (23, .05, 5, 2),
+                                                     (10.1, .2, 1, 0), (11, .02, 3, 1))]
+        report = {"loopStart": 10, "loopEnd": 24, "samples": rows}
+        original = json.dumps(report, sort_keys=True)
+        for _ in range(2):
+            result = measure_preview_sample_window(report)
+            self.assertAlmostEqual(result["timing_window_seconds"], 2.2)
+            self.assertAlmostEqual(result["drift_p95_seconds"], .05)
+            self.assertEqual(result["sampled_window_dropped_frames"], 6)
+            self.assertEqual(result["sampled_window_decoder_dropped_frames"], 3)
+            self.assertEqual(json.dumps(report, sort_keys=True), original)
+
+    def test_preview_sample_window_rejects_missing_or_unusable_observations(self) -> None:
+        from test_preview_controls import measure_preview_sample_window
+
+        row = {"audioPosition": 11, "position": 1, "expectedPosition": 1, "paused": False,
+               "droppedFrames": 0, "decoderDroppedFrames": 0}
+        reports = [{"loopStart": 10, "loopEnd": 24, "samples": rows} for rows in ([], [row], [row, row])]
+        for key, value in (("position", float("nan")), ("droppedFrames", -1), ("audioPosition", 50)):
+            reports.append({"loopStart": 10, "loopEnd": 24, "samples": [row, {**row, key: value}]})
+        for report in reports:
+            with self.subTest(report=report), self.assertRaises(ValueError):
+                measure_preview_sample_window(report)
+
     def test_invalid_worker_deadline_blocks_before_any_process_effect(self) -> None:
         import run_fork_test_harness as harness
 

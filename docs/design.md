@@ -1157,9 +1157,13 @@ does not capture; a zero-correction mono MME pass does not cover other devices,
 hosts, stereo or latency compensation. Real NVIDIA encoding remains conditional
 on a successful device probe; advertised encoder names are insufficient evidence.
 All four scoped native cases passed on one Windows host. The 180-second preview
-run completed 13 loop wraps with no reported dropped frames, about 17.5 MiB
-private-memory growth and four extra handles. Drift p95 in the final 256 timing
-samples was 0.0343 seconds. These results do not establish hours-long stability,
+run completed 13 loop wraps with about 17.5 MiB private-memory growth and four
+extra handles. The retained final 256 timing samples span 31.9 seconds, with
+zero observed drop-counter increases and a drift p95 of 0.0343 seconds. Counter
+resets on seeks prevent an end-of-run read from establishing full-run drops;
+the corrected window calculation has separate headless cases and was applied to
+the captured observations, retaining the native pass's original check version.
+Full-duration drop telemetry remains a coverage gap. These results do not establish hours-long stability,
 other hardware, or complete exact-PTS editing support. The NVIDIA probe could
 not load its driver; only the unavailable-encoder rejection path passed here.
 The storage power-cut model now preserves several acknowledged edits while a

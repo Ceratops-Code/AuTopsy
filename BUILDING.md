@@ -785,18 +785,24 @@ retained fixtures. Acceptance records contain capabilities and geometry only.
 `AUTOPSY_PREVIEW_SOAK_SECONDS` selects 60 to 240 seconds (default 180) for
 `fork-preview-soak`. The test observes native window state during playback,
 because configured scripting commands stop audio. After stopping, it reads the
-player's bounded final timing window and cumulative dropped-frame counters.
+player's bounded final timing window. Drop counters can reset on seeks; only
+observed increases inside that window are combined. End-of-run counter values
+cannot establish a complete looped run's dropped-frame total.
 Targets are a response p95 below 0.5 seconds, timing drift p95 below 0.15 seconds,
-at most 2% dropped frames plus three frames, at most 128 MiB private-memory growth
+at most 2% sampled-window counter increases plus three frames, at most 128 MiB private-memory growth
 and at most 64 extra handles. A pass describes that machine and fixture; it does
 not establish hours of uninterrupted playback or behavior on every GPU.
 Its worker budget is 285 seconds and CTest's outer limit is 360 seconds, leaving
 setup, stop and cleanup time around the maximum 240-second measurement. Other
 native cases retain their existing worker budget. Headless lifecycle cases
 repeat deadline expiry and check worker cleanup without terminating the app.
-The scoped Windows run measured 180 seconds, 13 wraps, no reported dropped
-frames, about 17.5 MiB private-memory growth and four extra handles. Drift p95
-in the retained final 256 timing samples was 0.0343 seconds. Physical mono MME
+The scoped Windows run measured 180 seconds, 13 wraps, about 17.5 MiB
+private-memory growth and four extra handles. Its retained final 256 timing
+samples span 31.9 seconds, with zero observed drop-counter increases and a
+drift p95 of 0.0343 seconds. Full-run dropped-frame totals remain unmeasured.
+The corrected window calculation is checked independently, including seek
+resets, against synthetic cases and the captured observations; the original
+native pass retains its original check version. Physical mono MME
 capture also passed full/early-stop repeats, Undo/Redo and normal process exit.
 NVENC could not load `nvcuda.dll`; its rejection/cleanup case passed, while
 successful NVIDIA encoding remains unchecked.
