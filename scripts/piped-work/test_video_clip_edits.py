@@ -607,8 +607,11 @@ def check_transport_toolbar(client, root):
                               "native toolbar playback clock")
         if paused:
             press(buttons["Pause"])
+            # Pause remains available as Resume, matching the main toolbar.
+            # Availability plus a stationary clock establishes the actual
+            # paused state without assuming an obsolete disabled-button style.
             wait_for_native_state(lambda: native.enabled(preview_buttons["play"]) and
-                                  not native.enabled(preview_buttons["pause"]),
+                                  native.enabled(preview_buttons["stop"]),
                                   "native toolbar paused")
             # Control availability can update before the decoder's last clock
             # sample. Establish a stationary clock before testing navigation;
@@ -627,6 +630,9 @@ def check_transport_toolbar(client, root):
         if paused:
             time.sleep(0.15)
             assert abs(preview_project_seconds(status) - position) < 0.05, (position, native.control_text(status))
+            press(buttons["Pause"])
+            wait_for_native_state(lambda position=position: preview_project_seconds(status) > position + 0.08,
+                                  "Pause resumes playback after cursor navigation")
         else:
             wait_for_native_state(lambda position=position: preview_project_seconds(status) > position + 0.08,
                                   "cursor navigation preserves playback")
