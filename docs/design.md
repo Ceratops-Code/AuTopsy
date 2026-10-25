@@ -220,6 +220,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `scripts/run_affected_tests.py` and `test_run_affected_tests.py` | One portable input/check map, named execution and bounded receipts | Local/CI affected selection; separate native-acceptance impact |
 | `scripts/piped-work/test_fork_features.py` | Native feature dispatch, exact-input result reuse and bounded attempt outcomes | Adapter contracts through public commands |
 | `scripts/piped-work/test_video_clip_edits.py` | Dedicated split edges, structural edits and compound rendering cases | Reused public-command/gesture cases with generated media |
+| `scripts/piped-work/test_video_transport.py` | Owned preview-window helpers, transport/navigation journeys and pixel observations | Private-process input and surface reads confined to the required display |
 
 The small native transport facade currently lives in `ShowVideoPreview.cpp`;
 its desired-state policy lives in `SyncVideoPlayback.h`. It uses the existing

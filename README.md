@@ -178,9 +178,10 @@ The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` dispatches the feature scenarios and owns result records.
 `test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate,
-transport-button, video track Mute/Solo, individual clip picture mute and
-multi-source rendering/relinking cases. Native result identities include this
-module when those cases run. `fork-video-speed` covers linked retiming, repeat
+video track Mute/Solo, individual clip picture mute and multi-source
+rendering/relinking cases. `test_video_transport.py` owns preview-window helpers,
+transport and keyboard-navigation cases, and preview pixel observations. Native
+result identities retain the exact modules that earned each pass. `fork-video-speed` covers linked retiming, repeat
 requests, Undo/Redo, canceled edge gestures, source handles, flags, joins, native
 audio pitch and decoded preview/export timing. Project interoperability includes
 a retimed joined clip and its stretched native audio. `fork-video-speed-storage`

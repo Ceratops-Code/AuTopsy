@@ -17,7 +17,7 @@ import time
 from ctypes import wintypes as w
 
 from run_fork_test_harness import assert_owned_test_display, operate_owned_video_track, run_process
-from test_video_clip_edits import PreviewNativeWindows, wait_for_native_state
+from test_video_transport import PreviewNativeWindows, wait_for_native_state
 
 
 class ClipDialogWindows(PreviewNativeWindows):

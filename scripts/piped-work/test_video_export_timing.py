@@ -223,7 +223,7 @@ def check_video_encoder_boundaries(client, root, ffmpeg, ffprobe):
     """
     import subprocess
     import threading
-    from test_video_clip_edits import read_owned_native_windows
+    from test_video_transport import read_owned_native_windows
 
     def export(settings, *, success):
         replies, finished = [], threading.Event()

@@ -76,18 +76,20 @@ from test_preview_controls import (
 )
 from test_track_groups import check_track_groups
 from test_video_clip_edits import (
-    check_preview_navigation,
     check_split_video_edges,
-    check_transport_toolbar,
     check_video_clip_mute,
     check_video_clip_structure,
     check_video_compound_render,
     check_video_crop,
     check_video_speed,
-    check_video_transport,
     check_video_visibility,
 )
 from test_video_export_timing import check_video_export_timing
+from test_video_transport import (
+    check_preview_navigation,
+    check_transport_toolbar,
+    check_video_transport,
+)
 
 
 def check_groups(client, root):
@@ -1215,6 +1217,8 @@ def native_test_inputs(args, executable, module, display):
         inputs["preview_controls_sha256"] = sha(here / "test_preview_controls.py")
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+    if "clip_edits_sha256" in inputs or "export_timing_sha256" in inputs:
+        inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
     if args.case == "preview-soak":
         from test_preview_controls import preview_soak_seconds
         inputs["execution_scope"]["soak_seconds"] = preview_soak_seconds()
@@ -1287,7 +1291,7 @@ def native_work_scope(inputs):
         return None
     check_fields = {"check_sha256", "harness_sha256", "pipe_client_sha256", "shared_process_checks",
         "clip_edits_sha256", "clip_actions_sha256", "track_groups_sha256", "clip_selection_sha256",
-        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256"}
+        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256", "video_transport_sha256"}
     return {name: value for name, value in inputs.items() if name not in check_fields}
 
 

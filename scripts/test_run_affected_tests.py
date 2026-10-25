@@ -900,7 +900,7 @@ class NativeReceiptTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import Mock
 
-        import test_video_clip_edits as edits
+        import test_video_transport as edits
         for kind in ("Button", "wxWindowClassNR"):
             def class_name(_handle, buffer, _size, name=kind):
                 buffer.value = name
@@ -945,7 +945,7 @@ class NativeReceiptTests(unittest.TestCase):
         driver = self.root / "_test_driver.py"
         recipe = self.root / "test_video_clip_edits.py"
         executable, module = self.root / "_app.exe", self.root / "_script.dll"
-        for path in (driver, recipe, executable, module, self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+        for path in (driver, recipe, executable, module, self.root / "run_fork_test_harness.py", self.root / "pipeclient.py", self.root / "test_video_transport.py"):
             path.write_bytes(b"first input")
         arguments = SimpleNamespace(case="video-clip-mute", ffmpeg=None, ffprobe=None)
         with patch.object(native, "__file__", str(driver)):
@@ -979,7 +979,7 @@ class NativeReceiptTests(unittest.TestCase):
         recipe = self.root / "test_preview_controls.py"
         executable, module = self.root / "_app.exe", self.root / "_script.dll"
         for path in (driver, recipe, executable, module, self.root / "test_video_clip_edits.py", self.root / "test_clip_actions.py",
-                     self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+                     self.root / "run_fork_test_harness.py", self.root / "pipeclient.py", self.root / "test_video_transport.py"):
             path.write_bytes(b"original input")
         for case in ("preview-quality", "preview-controls", "video-cursor"):
             arguments = SimpleNamespace(case=case, ffmpeg=None, ffprobe=None)

@@ -78,7 +78,7 @@ GROUPS = (
         "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
         "scripts/piped-work/test_fork_features.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
-        "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_preview_controls.py")),
+        "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py", "scripts/piped-work/test_preview_controls.py")),
     CheckGroup("fork-audacity-consumer-runtime", (
         "scripts/piped-work/run_audacity_consumer.py",
         "scripts/piped-work/test_run_audacity_consumer.py",
@@ -110,7 +110,7 @@ NATIVE_INPUTS = (
     "scripts/piped-work/test_track_groups.py", "src/tracks/ui/ChannelView.cpp", "src/TrackPanel.cpp",
     "src/TrackUtilities.cpp", "src/tracks/ui/CommonTrackControls.h",
     "libraries/lib-wave-track/WaveTrack.cpp",
-    "scripts/piped-work/test_video_clip_edits.py",
+    "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py",
     "scripts/piped-work/test_video_export_timing.py",
     "scripts/piped-work/test_preview_controls.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
@@ -184,7 +184,7 @@ INSTALLER_SHARED_INPUTS = (
     "src/TrackUtilities.cpp", "src/tracks/ui/ChannelView.cpp", "libraries/lib-wave-track/WaveTrack.cpp",
     "libraries/lib-project-file-io/*", "lib-src/sqlite/*", "scripts/uv.lock", "scripts/pyproject.toml",
     "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
-    "scripts/piped-work/pipeclient.py", "scripts/piped-work/test_video_clip_edits.py",
+    "scripts/piped-work/pipeclient.py", "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py",
 )
 
 

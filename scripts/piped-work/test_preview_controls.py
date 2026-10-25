@@ -13,7 +13,7 @@ from run_fork_test_harness import (
     assert_owned_test_display, operate_owned_video_track, painted_video_tracks,
     ready_video_preview, run_process,
 )
-from test_video_clip_edits import (
+from test_video_transport import (
     PreviewNativeWindows, owned_preview_controls, press_preview_button,
     preview_project_seconds, wait_for_native_state,
 )
