@@ -943,6 +943,11 @@ def operate_owned_video_track(
                         if time.monotonic() >= deadline:
                             current = Point()
                             user.GetCursorPos(ctypes.byref(current))
+                            if abs(current.x - point.x) > 2 or abs(current.y - point.y) > 2:
+                                raise RuntimeError(
+                                    f"Shared pointer input moved away from the owned test window; "
+                                    f"expected={(point.x, point.y)}, actual={(current.x, current.y)}."
+                                )
                             raise RuntimeError(
                                 f"The owned pane did not capture held input; GUI={(state.flags, state.active, state.focus, state.capture, state.menu)}; "
                                 f"button={user.GetAsyncKeyState(1) & 0x8000}; cursor={(current.x, current.y)}; "

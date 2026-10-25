@@ -18,6 +18,96 @@ import build_video_installer as builder
 
 
 class InstallerBuildTests(unittest.TestCase):
+    def test_compiled_runtime_inputs_distinguish_product_changes_from_check_edits(self):
+        with tempfile.TemporaryDirectory(prefix="_compile-inputs-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            source, build = root / "source", root / "build"
+            source.mkdir()
+            build.mkdir()
+            tracked = ("main.cpp", "scripts/piped-work/test_video_clip_edits.py", "docs/design.md", "README.md",
+                       "scripts/build/windows/test_build_video_installer.py")
+            for name in tracked:
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("original", encoding="utf-8")
+            tool, cache = root / "cmake.exe", build / "CMakeCache.txt"
+            tool.write_bytes(b"compiler driver")
+            cache.write_text("CMAKE_CXX_FLAGS:STRING=/O2", encoding="utf-8")
+            configure = [str(tool), "-S", str(source), "-B", str(build)]
+            with mock.patch.object(builder, "run_command", return_value="\0".join(tracked) + "\0"):
+                initial = builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json")
+                for name in tracked[1:]:
+                    (source / name).write_text("edited check/document", encoding="utf-8")
+                    self.assertEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
+                for path in (source / "main.cpp", cache, tool):
+                    original = path.read_bytes()
+                    path.write_bytes(b"changed product input")
+                    self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
+                    path.write_bytes(original)
+                with mock.patch.dict(os.environ, {"CL": "/fsanitize=address"}):
+                    self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
+
+    def test_compiled_runtime_repeats_and_interruptions_keep_only_completed_provenance(self):
+        for effect, after in itertools.product(("compile", "record"), (False, True)):
+            with self.subTest(effect=effect, after=after), tempfile.TemporaryDirectory(prefix="_compile-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                build = Path(temporary)
+                runtime = build / "Release"
+                runtime.mkdir()
+                executable = runtime / "AuTopsy.exe"
+                inputs = {"source_files": {"main.cpp": "original"}, "settings": "release"}
+                calls: list[str] = []
+                stopped = False
+                real_write = builder.write_json
+
+                def boundary(label, operation, *args, selected_effect=effect, selected_after=after, **kwargs):
+                    nonlocal stopped
+                    stop = selected_effect == label and not stopped
+                    if stop:
+                        stopped = True
+                    if stop and not selected_after:
+                        raise InterruptedError("before " + label)
+                    value = operation(*args, **kwargs)
+                    if stop and selected_after:
+                        raise InterruptedError("after " + label)
+                    return value
+
+                def compile_effect(*_args, calls=calls, executable=executable):
+                    calls.append("compile")
+                    executable.write_bytes(b"compiled product")
+
+                with mock.patch.object(builder, "compiled_runtime_inputs", side_effect=lambda *a, inputs=inputs: dict(inputs)), \
+                        mock.patch.object(builder, "run_command", side_effect=lambda *a, boundary=boundary, compile_effect=compile_effect: boundary("compile", compile_effect, *a)), \
+                        mock.patch.object(builder, "write_json", side_effect=lambda *a, boundary=boundary, real_write=real_write: boundary("record", real_write, *a)):
+                    with self.assertRaises(InterruptedError):
+                        builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "a" * 40, build / "_failure.json")
+                    completed = builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "a" * 40, build / "_failure.json")
+                    assert completed is not None
+                    record = build / "_compiled-runtime.json"
+                    original, count = record.read_bytes(), len(calls)
+                    self.assertEqual(builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "b" * 40, build / "_failure.json"), completed)
+                    self.assertEqual(len(calls), count)
+                    self.assertEqual(record.read_bytes(), original)
+                    self.assertEqual(completed["source_revision"], "a" * 40)
+                    executable.write_bytes(b"unexpected runtime change")
+                    builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "b" * 40, build / "_failure.json")
+                    self.assertEqual(len(calls), count + 1)
+                    inputs["settings"] = "different requested build"
+                    builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "c" * 40, build / "_failure.json")
+                    self.assertEqual(len(calls), count + 2)
+                self.assertFalse((build / "__compiled-runtime.json.pending").exists())
+
+    def test_changed_product_during_compilation_cannot_publish_provenance(self):
+        with tempfile.TemporaryDirectory(prefix="_compile-change-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            build = Path(temporary)
+            inputs = {"source_files": {"main.cpp": "before"}}
+            def compile_changed_source(*_args):
+                inputs["source_files"] = {"main.cpp": "after"}
+            with mock.patch.object(builder, "compiled_runtime_inputs", side_effect=lambda *a: dict(inputs)), \
+                    mock.patch.object(builder, "run_command", side_effect=compile_changed_source):
+                with self.assertRaisesRegex(RuntimeError, "changed during compilation"):
+                    builder.reuse_or_compile_runtime(build, build, ["cmake"], {}, "a" * 40, build / "_failure.json")
+            self.assertFalse((build / "_compiled-runtime.json").exists())
+
     @staticmethod
     def native_report(build):
         runtime = build / "Release"

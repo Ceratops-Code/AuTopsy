@@ -254,6 +254,84 @@ def checked_runtime_files(build: Path, report: dict) -> dict[str, str]:
             if path.is_file() and path.suffix.lower() in (".exe", ".dll")}
 
 
+def compiled_runtime_inputs(source: Path, build: Path, configure: list[str], dependencies: dict,
+                            diagnostics: Path) -> dict | None:
+    """Read product inputs separately from documentation and native check code.
+
+    Unknown tracked paths remain build inputs. The explicit exclusions cannot
+    affect a compiled application; their current code still runs at its normal
+    check boundary. Cache settings and tool bytes cover manual build changes.
+    """
+    cache = build / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    paths = run_command(["git", "ls-files", "-z"], source, diagnostics).split("\0")
+    excluded_files = {"README.md", "BUILDING.md", "AGENTS.md", "scripts/run_affected_tests.py",
+                      "scripts/test_run_affected_tests.py", "scripts/build/windows/test_build_video_installer.py"}
+    files = {}
+    for name in paths:
+        if not name or name in excluded_files or name.startswith(("docs/", ".github/", "sdlc/", "scripts/piped-work/")):
+            continue
+        path = source / name
+        files[name] = sha256(path) if path.is_file() else "missing"
+    tools = {}
+    for line in cache.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        if key in {"CMAKE_LINKER:FILEPATH", "CMAKE_C_COMPILER:FILEPATH", "CMAKE_CXX_COMPILER:FILEPATH",
+                   "CMAKE_MAKE_PROGRAM:FILEPATH", "CMAKE_VS_MSBUILD_COMMAND:INTERNAL"}:
+            tool = Path(value)
+            tools[value] = sha256(tool) if tool.is_file() else "missing"
+            if tool.name.lower() == "link.exe":
+                for name in ("cl.exe", "c1.dll", "c1xx.dll", "c2.dll", "mspdbcore.dll"):
+                    compiler = tool.with_name(name)
+                    tools[str(compiler)] = sha256(compiler) if compiler.is_file() else "missing"
+    return {"source_files": files, "configure": configure[1:], "cmake_sha256": sha256(Path(configure[0])),
+            "cache_sha256": sha256(cache), "compiler_tools": tools, "dependencies": dependencies,
+            "compiler_environment": {name: os.environ.get(name) for name in (
+                "CL", "_CL_", "CFLAGS", "CXXFLAGS", "LDFLAGS", "INCLUDE", "LIB", "LIBPATH",
+                "VCToolsInstallDir", "WindowsSdkDir", "WindowsSDKVersion")}}
+
+
+def reuse_or_compile_runtime(source: Path, build: Path, configure: list[str], dependencies: dict,
+                             revision: str, diagnostics: Path) -> dict | None:
+    """Keep the current compiled output when product inputs and bytes match.
+
+    The build root owns one current provenance record and its atomic pending
+    sibling. It records a completed artifact, never execution steps or a pass.
+    An absent/incomplete record cannot skip compilation; native acceptance is
+    separately owned by the test runner and still gates every new installer.
+    """
+    record = build / "_compiled-runtime.json"
+    pending = record.with_name("_" + record.name + ".pending")
+    pending.unlink(missing_ok=True)
+    inputs = compiled_runtime_inputs(source, build, configure, dependencies, diagnostics)
+    if inputs is not None and record.is_file():
+        try:
+            previous = json.loads(record.read_text(encoding="utf-8"))
+            if (previous.get("schema") == "autopsy-compiled-runtime.v1" and previous.get("inputs") == inputs
+                    and previous.get("runtime") and previous["runtime"] == checked_runtime_files(build, {"payload_directory": "Release"})):
+                return previous
+        except (ValueError, KeyError, TypeError):
+            pass
+    run_command([configure[0], "--build", str(build), "--config", "Release", "--parallel", "4"], source, diagnostics)
+    if inputs is None:
+        # A partial configure has no reusable product identity. The required
+        # native payload/CTest checks still reject missing or incomplete output.
+        return None
+    if compiled_runtime_inputs(source, build, configure, dependencies, diagnostics) != inputs:
+        raise RuntimeError("Product inputs changed during compilation; no runtime provenance was recorded.")
+    runtime = checked_runtime_files(build, {"payload_directory": "Release"})
+    if "AuTopsy.exe" not in runtime:
+        raise RuntimeError("The native compiler produced no AuTopsy executable.")
+    completed = {"schema": "autopsy-compiled-runtime.v1", "source_revision": revision,
+                 "inputs": inputs, "runtime": runtime}
+    try:
+        write_json(record, completed)
+    finally:
+        pending.unlink(missing_ok=True)
+    return completed
+
+
 def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None) -> dict:
     """A normal rerun derives all remaining work from current source and outputs."""
     source, build, inno = source.resolve(), build.resolve(), inno.resolve()
@@ -309,7 +387,7 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python()),
     ]
     run_command(configure, source, diagnostics)
-    run_command([cmake, "--build", str(build), "--config", "Release", "--parallel", "4"], source, diagnostics)
+    compiled = reuse_or_compile_runtime(source, build, configure, dependency_inputs, revision, diagnostics)
     ctest = shutil.which("ctest")
     if not ctest:
         raise RuntimeError("CTest is missing from the current build environment.")
@@ -350,6 +428,7 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         "schema": "autopsy-windows-installer.v1", "source_revision": revision, "source_dirty": dirty,
         "filename": descriptor["filename"], "sha256": descriptor["sha256"], "signed": False,
         "dependency_inputs": dependency_inputs, "checks": checks, "prepackage": report,
+        "compiled_source_revision": compiled["source_revision"] if compiled else revision,
     }
     write_json(build / "package/_build-manifest.json", result)
     diagnostics.unlink(missing_ok=True)

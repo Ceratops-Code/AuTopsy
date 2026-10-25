@@ -429,6 +429,12 @@ GUI receipts remain under the existing `_fork-tests/_accepted` owner. The comple
 result keeps its original check version when only check code changes; matching
 product bytes, execution scope and no newer applicable failure are still required.
 New coverage can declare an additional input instead of rewriting old acceptance.
+The build root's `_compiled-runtime.json` binds one completed runtime to its
+product source, CMake settings, tools and dependencies. Python-check/document-only commits
+reuse matching bytes with their original compiled revision; current checks still
+run through SDLC. Missing provenance or a changed input/output requires compilation.
+This record and its atomic pending sibling belong to the installer builder; a
+fresh call removes abandoned staging and replaces only its current record.
 The completed
 installer manifest includes the selected checks and runtime hashes; existing
 accepted installers retain their original acceptance without retrospective tests.
