@@ -518,6 +518,10 @@ def check_video(client, root, ffmpeg, ffprobe):
     moved = client.data("GetVideoClips")
     assert len(moved["clips"]) == 1 and moved["clips"][0]["start"] == 1
     capture_owned_project(panel, root / "_main-video-track.png")
+    capture = json.loads(run_process(
+        [ffprobe, "-v", "error", "-show_streams", "-of", "json",
+         str(root / "_main-video-track.png")], text=True, timeout=30))["streams"][0]
+    assert capture["codec_name"] == "png" and capture["width"] > 0 and capture["height"] > 0, capture
     operate_owned_video_track(client, 1.5, 1.5)
     assert client.data("GetVideoClips") == moved
     client.send("MoveVideoClip: Id=2 Start=1")
@@ -1557,6 +1561,7 @@ def main():
             TMP=str(gui),
             PYTHONDONTWRITEBYTECODE="1",
             AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
+            AUTOPSY_TEST_FFMPEG=args.ffmpeg,
             AUTOPSY_TEST_DISPLAY=display["device"]
             if not args.reject_display
             else "missing-test-display",

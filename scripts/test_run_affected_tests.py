@@ -141,6 +141,50 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn(str(failure), details["screenshot_error"])
                 self.assertEqual(capture.call_count, 1)
 
+    def test_project_capture_publishes_complete_png_and_keeps_last_picture_on_failure(self) -> None:
+        harness = sys.modules[native.painted_video_tracks.__module__]
+        encoded = b"\x89PNG\r\n\x1a\nowned picture"
+        real_write, real_replace = Path.write_bytes, Path.replace
+        for effect, after in itertools.product(("encode", "write", "publish"), (False, True)):
+            with self.subTest(effect=effect, after=after), tempfile.TemporaryDirectory(prefix="_capture-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                picture = Path(temporary) / "_project.png"
+                pending = picture.with_name("_" + picture.name + ".pending")
+                picture.write_bytes(b"previous complete picture")
+
+                def interrupt(operation, label, selected_effect=effect, selected_after=after):
+                    def invoke(*args, **kwargs):
+                        if selected_effect == label and not selected_after:
+                            raise InterruptedError("before " + label)
+                        result = operation(*args, **kwargs)
+                        if selected_effect == label and selected_after:
+                            raise InterruptedError("after " + label)
+                        return result
+                    return invoke
+
+                with patch.object(harness, "run_process", side_effect=interrupt(lambda *a, **k: encoded, "encode")), \
+                        patch.object(Path, "write_bytes", interrupt(real_write, "write")), \
+                        patch.object(Path, "replace", interrupt(real_replace, "publish")):
+                    with self.assertRaises(InterruptedError):
+                        harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                self.assertEqual(picture.read_bytes(), encoded if effect == "publish" and after else b"previous complete picture")
+                self.assertFalse(pending.exists())
+                pending.write_bytes(b"orphaned write")
+                with patch.object(harness, "run_process", return_value=encoded) as encoder:
+                    harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                    timestamp = picture.stat().st_mtime_ns
+                    harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                self.assertEqual(picture.read_bytes(), encoded)
+                self.assertEqual(picture.stat().st_mtime_ns, timestamp)
+                self.assertEqual(encoder.call_args.kwargs["input"], bytes(8))
+                self.assertFalse(pending.exists())
+                for width, height, pixels in ((0, 1, b""), (2, 1, b"")):
+                    with self.assertRaises(ValueError):
+                        harness.write_project_capture("ffmpeg", picture, width, height, pixels)
+                with patch.object(harness, "run_process", return_value=b"incomplete PNG"):
+                    with self.assertRaisesRegex(RuntimeError, "no PNG picture"):
+                        harness.write_project_capture("ffmpeg", picture, 2, 1, bytes(8))
+                self.assertEqual(picture.read_bytes(), encoded)
+
     def test_renumbered_displays_never_select_the_primary_screen(self) -> None:
         primary = {"device": r"\\.\DISPLAY10", "primary": True, "work": [0, 0, 1280, 672]}
         secondary = {"device": r"\\.\DISPLAY11", "primary": False, "work": [-1280, 113, 0, 785]}

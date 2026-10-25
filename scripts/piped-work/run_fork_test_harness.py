@@ -1038,11 +1038,38 @@ def operate_owned_video_track(
     return panel
 
 
+def write_project_capture(ffmpeg, path, width, height, pixels):
+    """Encode owned-window pixels with the test suite's existing media runtime.
+
+    The caller's marked case root owns both the picture and its pending sibling.
+    A failed encoder or interrupted write cannot replace the last complete PNG;
+    a fresh call clears abandoned staging before publishing the current picture.
+    """
+    path = Path(path)
+    if not (0 < width < 6000 and 0 < height < 4000) or len(pixels) != width * height * 4:
+        raise ValueError("Unexpected project capture dimensions or pixel count.")
+    pending = path.with_name("_" + path.name + ".pending")
+    pending.unlink(missing_ok=True)
+    encoded = run_process(
+        [ffmpeg, "-v", "error", "-nostdin", "-f", "rawvideo", "-pixel_format", "bgr0",
+         "-video_size", f"{width}x{height}", "-i", "pipe:0", "-frames:v", "1",
+         "-c:v", "png", "-f", "image2pipe", "pipe:1"],
+        input=bytes(pixels), timeout=30,
+    )
+    if not encoded.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError("The project capture encoder returned no PNG picture.")
+    if path.is_file() and path.read_bytes() == encoded:
+        return
+    try:
+        pending.write_bytes(encoded)
+        pending.replace(path)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
 def capture_owned_project(panel, path):
     """Capture this test's project window to an artifact, without reading other windows."""
     from ctypes import wintypes
-
-    from PIL import Image
 
     user, gdi = ctypes.WinDLL("user32"), ctypes.WinDLL("gdi32")
     user.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
@@ -1110,7 +1137,7 @@ def capture_owned_project(panel, path):
             != height
         ):
             raise RuntimeError("The owned project pixels could not be read.")
-        Image.frombuffer("RGB", (width, height), pixels, "raw", "BGRX", 0, 1).save(path)
+        write_project_capture(os.environ["AUTOPSY_TEST_FFMPEG"], path, width, height, pixels.raw)
     finally:
         gdi.SelectObject(memory, previous)
         gdi.DeleteObject(bitmap)
