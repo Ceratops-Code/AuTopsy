@@ -162,6 +162,7 @@ def check_preview_quality(client, root, ffmpeg, ffprobe):
     shutil.copyfile(source, other)
     for _ in range(2):
         client.file("ImportVideo", other)
+        client.send("FitV")
         imported = ready_video_preview(client)
         assert imported["previewQuality"] == 1 and imported["previewQualitySources"] == 2, imported
         clips = client.data("GetVideoClips")["clips"]
