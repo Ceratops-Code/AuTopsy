@@ -1232,10 +1232,10 @@ require the applicable approval before creation.
   publication does not claim they are fixed or that signing sponsorship exists.
 - **Shipping cleanup:** the lifecycle helper removed the active task workspace and
   its temporary drafts after publication. The workspace was recreated from shipped
-  main. A shared-tooling source repair now automatically retains the requesting
-  linked worktree; focused repeated/interrupted shipping cases passed. It remains
-  separate from the installed lifecycle runtime until explicitly promoted and
-  deployed. Do not rely on temporary drafts as the only copy of authoritative docs.
+  main. The deployed lifecycle helper now automatically retains the requesting
+  linked worktree and its task outputs; focused repeated/interrupted shipping
+  cases passed. Authoritative documents still belong in Git rather than only
+  in temporary drafts.
 
 ## 14. Glossary and references
 
