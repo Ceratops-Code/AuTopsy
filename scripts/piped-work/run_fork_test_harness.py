@@ -893,6 +893,7 @@ def operate_owned_video_track(
         if not user.SetWindowPos(root, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x53):
             raise RuntimeError(f"Cannot expose owned project {root}: Windows error {ctypes.get_last_error()}.")
         activated = user.SetForegroundWindow(root)
+        thread = user.GetWindowThreadProcessId(panel, None)
         deadline = time.monotonic() + 3
         while True:
             enabled = True
@@ -903,7 +904,13 @@ def operate_owned_video_track(
                     break
                 ancestor = user.GetParent(ancestor)
             hit = user.WindowFromPoint(point)
-            if enabled and hit == panel:
+            state = Gui()
+            state.size = ctypes.sizeof(state)
+            active = user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.active == root
+            # Script replies can precede their progress window's destruction.
+            # Exposed pixels alone do not make the pane an active input target;
+            # wait for that owned command window to return activation first.
+            if enabled and hit == panel and active:
                 break
             obscurer = user.GetAncestor(hit, 2) if hit else None
             title = ctypes.create_unicode_buffer(256)
@@ -924,7 +931,7 @@ def operate_owned_video_track(
                 user.ClientToScreen(panel, ctypes.byref(pane_origin))
                 raise RuntimeError(
                     f"The owned native pane did not become enabled and exposed: enabled={enabled}; "
-                    f"root={root}; visible={user.IsWindowVisible(root)}; rect={list(root_rect)}; "
+                    f"root={root}; active={state.active}; visible={user.IsWindowVisible(root)}; rect={list(root_rect)}; "
                     f"activated={activated}; topmost={bool(user.GetWindowLongPtrW(root, -20) & 8)}; "
                     f"pane_origin={(pane_origin.x,pane_origin.y)}; client_size={list(rectangle)}; "
                     f"panel={panel}; hit={hit}; obscurer_pid={obscurer_pid.value}; title={title.value!r}; "
@@ -936,7 +943,6 @@ def operate_owned_video_track(
         position_pointer(x0, y0)
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
-        thread = user.GetWindowThreadProcessId(panel, None)
         if prior_click_time is not None:
             position_pointer(*position(prior_click_time, source))
             button(2)
