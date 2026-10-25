@@ -729,6 +729,7 @@ public:
    uintptr_t SeekHandle(bool forward) const { return reinterpret_cast<uintptr_t>((forward ? mForwardButton : mBackButton)->GetHandle()); }
    uintptr_t LoopHandle() const { return reinterpret_cast<uintptr_t>(mLoopButton->GetHandle()); }
    int Quality() const { return int(mQuality); }
+   size_t QualitySourceCount() const { return mQualityMedia.size(); }
    void AdoptQuality(const VideoPreviewFrame &source) {
       mQuality = source.mQuality; mQualityMedia = source.mQualityMedia;
       mQualityChoice->SetSelection(int(mQuality));
@@ -862,6 +863,7 @@ public:
        out.Key("previewVolumeHandle"); out.Uint64(frame ? frame->VolumeHandle() : 0);
        out.Key("previewQualityHandle"); out.Uint64(frame ? frame->QualityHandle() : 0);
        out.Key("previewQuality"); out.Int(frame ? frame->Quality() : 0);
+       out.Key("previewQualitySources"); out.Uint64(frame ? frame->QualitySourceCount() : 0);
        out.Key("previewBackHandle"); out.Uint64(frame ? frame->SeekHandle(false) : 0);
        out.Key("previewForwardHandle"); out.Uint64(frame ? frame->SeekHandle(true) : 0);
        out.Key("previewLoopHandle"); out.Uint64(frame ? frame->LoopHandle() : 0);

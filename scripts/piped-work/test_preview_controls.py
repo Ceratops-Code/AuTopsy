@@ -151,6 +151,18 @@ def check_preview_quality(client, root, ffmpeg, ffprobe):
     assert client.data("GetVideoClips") == original
     assert client.data("GetInfo: Type=Clips Format=JSON") == audio
     client.file("SaveProject2", root / "_preview-quality.aup3")
+    client.send("New")
+    for _ in range(2):
+        client.file("ImportVideo", source)
+        assert ready_video_preview(client)["previewQualitySources"] == 1, "Repeated imports retained duplicate source leases."
+    client.send("SelectAll")
+    client.send("RemoveTracks")
+    deadline = time.monotonic() + 5
+    while client.data("GetVideoPreviewInfo")["previewQualitySources"]:
+        assert time.monotonic() < deadline, "Deleted source clips retained their quality leases."
+        time.sleep(0.12)
+    client.file("Import2", root / "tone-a.wav")
+    client.file("SaveProject2", root / "_preview-quality-cleanup.aup3")
 
 
 def check_preview_controls(client, root):
