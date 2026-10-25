@@ -18,6 +18,7 @@
 #include "EditVideoContent.h"
 #include "PrepareVideoPreview.h"
 #include "PrepareVideoEffects.h"
+#include "TrackPanel.h"
 #include "ShowVideoTrack.h"
 #include "CreateVideoTrack.h"
 #include "RelinkVideoMedia.h"
@@ -217,6 +218,7 @@ class VideoPreviewFrame final : public wxFrame {
    VideoPreview::PreviewQuality mQuality{VideoPreview::PreviewQuality::Automatic};
    bool mChangingQuality{};
    bool mInTimer{};
+   bool mEffectsPreparationDeferred{};
    std::shared_ptr<const VideoEditing::PreparedVideoComposition> mEffects;
    std::vector<std::shared_ptr<const VideoPreview::PreparedMedia>> mQualityMedia;
    bool mDraggingTimeline{};
@@ -369,7 +371,8 @@ class VideoPreviewFrame final : public wxFrame {
          }
          mQuality = quality; mMedia = std::move(current);
          mQualityMedia = std::move(prepared);
-         mEffects = std::move(effects); mPath.clear();
+         mEffects = std::move(effects);
+         mEffectsPreparationDeferred = false;
          mPreciseFrames = false; mUsingOriginalFrames = original && mMedia && mMedia->lightweight;
          mDurationChecked = false; mLoadTime.Start();
          mChangingQuality = false; mTimeline->SetFocus();
@@ -430,6 +433,11 @@ class VideoPreviewFrame final : public wxFrame {
             ownsPlayback, ownsPlayback && audio->IsPaused(),
             ownsPlayback ? audio->GetStreamTime() : 0.0,
             ViewInfo::Get(*project).selectedRegion.t0());
+         // Cancelling automatic preparation is a user choice, not a reason to
+         // reopen the same progress dialog every timer tick. A fresh Play or
+         // quality choice requests preparation again through the normal path.
+         if (mEffectsPreparationDeferred && !transport.playing) return;
+         if (transport.playing) mEffectsPreparationDeferred = false;
          if (transport.playing && !mWasPlaying && !IsShown())
             ShowWithoutActivating();
          if (transport.playing && !mWasPlaying) {
@@ -440,7 +448,11 @@ class VideoPreviewFrame final : public wxFrame {
           auto picturePosition = VideoTimeline::FindProjectPicture(*project, transport.position);
           const auto originalRate = picturePosition.visible ? picturePosition.source.frameRate : mSourceFrameRate;
           if (transport.playing) mPreciseFrames = false;
-          mEffects = VideoEditing::PrepareProjectVideoPreview(*project, mQuality, mPreciseFrames, this);
+          // Temporary drag placements must not start a modal worker and steal
+          // mouse capture. Hidden idle previews also defer derived rendering,
+          // while ordinary source decoding and transport keep their behavior.
+          const bool canPrepare = !TrackPanel::Get(*project).IsMouseCaptured() && (IsShown() || ownsPlayback);
+          mEffects = VideoEditing::PrepareProjectVideoPreview(*project, mQuality, mPreciseFrames, this, canPrepare);
           if (mEffects) {
              picturePosition = {};
              if (const auto *clip = VideoTimeline::ClipAt(mEffects->timeline, transport.position)) {
@@ -504,6 +516,12 @@ class VideoPreviewFrame final : public wxFrame {
                 timecode.c_str(), rate, transport.position,
                 picturePosition.visible ? wxT("") : wxT("  |  no picture"))
              : _("Loading video..."));
+      }
+      catch (const VideoPreview::PreviewPreparationCancelled &) {
+         mEffectsPreparationDeferred = true;
+         mSurface->Hide(); mVideoArea->Layout();
+         if (mPlayer) mPlayer->SetPlaybackPaused(true);
+         mStatus->SetLabel(_("Preview preparation cancelled. Press Play or choose another quality to try again."));
       }
       catch (const std::exception &error) {
          std::fprintf(stderr, "AuTopsy preview timer: %s\n", error.what());
@@ -674,7 +692,8 @@ public:
          if (mPreviousMedia.size() > 3) mPreviousMedia.pop_front();
       }
        mDurationChecked = false; mPath = path; mUsingOriginalFrames = false;
-      SetTitle(_("Video Preview") + " - " + wxFileName{ path }.GetFullName());
+       mEffectsPreparationDeferred = false;
+      SetTitle(_("Video Preview") + " - " + (rendered ? _("Composed Picture") : wxFileName{ path }.GetFullName()));
       Layout();
       if (saved) {
          // Reopening/undo must not enter a nested modal event loop: queued

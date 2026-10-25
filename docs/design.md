@@ -273,6 +273,11 @@ Original-quality export uses lossless transition intermediates; preview follows
 the user's quality choice. Cache preparation completes before the fade edit is
 published. Cancellation leaves project/history untouched. The preview timer
 does not re-enter preparation while a progress dialog yields events.
+It also defers preparation while the track pane owns mouse capture and while
+the preview is hidden and playback is stopped. A drag therefore cannot open a
+modal worker dialog for an intermediate placement. Cancelling automatic
+preparation leaves a clear paused/hidden-picture state until Play or a new
+quality choice explicitly requests another attempt.
 
 Collect Project Media writes a new portable folder containing Project.aup3,
 Media content-addressed video files and a flat ownership/integrity manifest.

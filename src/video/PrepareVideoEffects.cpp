@@ -80,11 +80,15 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    const bool automaticCanvas = !settings.width;
    if (automaticCanvas) {
       // Older projects may have no saved geometry. Read original display
-      // dimensions through the same maintained probe used by ordinary export;
-      // a proxy or a stale saved value must not choose the picture canvas.
-      const auto size = VideoExport::ReadVideoSourcePictureSize(wxString::FromUTF8(reference->source.path), parent);
-      if (!size) throw VideoPreview::PreviewPreparationCancelled{};
-      const auto canvas = VideoExport::CalculateVideoExportCanvas(size->first, size->second, reference->crop);
+      // dimensions through the same maintained probe used by ordinary export.
+      // Import/relink metadata describes originals, never proxy dimensions.
+      auto sourceWidth = reference->source.width, sourceHeight = reference->source.height;
+      if (!sourceWidth || !sourceHeight) {
+         const auto size = VideoExport::ReadVideoSourcePictureSize(wxString::FromUTF8(reference->source.path), parent);
+         if (!size) throw VideoPreview::PreviewPreparationCancelled{};
+         sourceWidth = size->first; sourceHeight = size->second;
+      }
+      const auto canvas = VideoExport::CalculateVideoExportCanvas(sourceWidth, sourceHeight, reference->crop);
       width = canvas.first; height = canvas.second;
    }
    if (settings.maximumHeight > 0 && height > settings.maximumHeight) {
@@ -149,13 +153,16 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
 }
 
 std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoPreview(AudacityProject &project,
-   VideoPreview::PreviewQuality quality, bool precise, wxWindow *parent)
+   VideoPreview::PreviewQuality quality, bool precise, wxWindow *parent, bool allowPreparation)
 {
    auto &state = Effects(project);
    const auto layers = VideoTimeline::GetProjectVisibleVideoLayers(project);
    const auto settings = PreviewSettings(layers, quality, precise);
    const auto key = ProjectKey(project, settings);
    if (state.key == key) { state.quality = quality; return state.current; }
+   // Keep the last completed picture during a gesture or while hidden. This
+   // policy gates expensive work only; ordinary decoder seeking stays live.
+   if (!allowPreparation && HasVideoOpacity(layers)) return state.current;
    PreparingGuard preparing(state.preparing);
    ClipActions::MediaDialogCommandGuard commands;
    // Snapshot owned values before any progress dialog yields native events.

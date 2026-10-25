@@ -20,7 +20,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    const std::vector<const VideoTimeline::Timeline*> &layers, double duration,
    const VideoEffectRenderSettings &settings, wxWindow *parent);
 std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoPreview(AudacityProject &project,
-   VideoPreview::PreviewQuality quality, bool precise, wxWindow *parent);
+   VideoPreview::PreviewQuality quality, bool precise, wxWindow *parent, bool allowPreparation = true);
 std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoExport(AudacityProject &project,
    const std::vector<const VideoTimeline::Timeline*> &layers, double duration,
    const VideoEffectRenderSettings &settings, wxWindow *parent);

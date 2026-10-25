@@ -62,6 +62,15 @@ def check_video_fades(client, root, ffmpeg, ffprobe):
     assert model(client) == faded
     client.send("FitV")
     client.send("FitInWindow")
+    for cancelled in (True, False):
+        operate_owned_video_track(client, .25, 1.25, track=track, cancel=cancelled)
+        if cancelled:
+            assert model(client) == faded
+        else:
+            moved = next(row for row in video_rows(client) if row["track"] == track)
+            assert abs(moved["start"] - 1) < .04, moved
+            client.send("Undo")
+            assert model(client) == faded
     for title, item in (("Fade Picture", "Fade Picture..."),
                         ("Crossfade from Video Below", "Crossfade from Video Below...")):
         for _ in range(2):
