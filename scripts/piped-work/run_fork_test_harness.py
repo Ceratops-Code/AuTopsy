@@ -678,6 +678,7 @@ def operate_owned_video_track(
         round(y0 * rectangle[3] / info["videoTrackPanelHeight"]),
     )
     user.ClientToScreen(panel, ctypes.byref(point))
+    initial_screen_point = (point.x, point.y)
     hidden = []
     pressed = False
     control_pressed = False
@@ -713,9 +714,20 @@ def operate_owned_video_track(
             user.SetCursorPos(point.x, point.y)
         raise RuntimeError(f"Cannot reach owned native point {(x,y)}; actual={(native.x,native.y)}.")
 
-    def button(flags):
+    def button(flags, expected_window=panel):
         # Position and button transition share one OS event, so another mouse
         # movement cannot turn a narrow edge press into a clip-header press.
+        if flags & (2 | 8) and user.WindowFromPoint(point) != expected_window:
+            bounds = (ctypes.c_long * 4)()
+            user.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
+            user.GetWindowRect(expected_window, ctypes.byref(bounds))
+            raise RuntimeError(
+                f"Owned mouse press target changed before input; expected_window={expected_window}; "
+                f"hit={user.WindowFromPoint(point)}; initial_screen={initial_screen_point}; "
+                f"screen={(point.x, point.y)}; bounds={list(bounds)}; native_point={(x0, y0)}; "
+                f"physical_client={list(rectangle)}; reported_client="
+                f"{(info['videoTrackPanelWidth'], info['videoTrackPanelHeight'])}."
+            )
         left, top, width, height = (user.GetSystemMetrics(index) for index in (76, 77, 78, 79))
         x = round((point.x - left) * 65535 / max(1, width - 1))
         y = round((point.y - top) * 65535 / max(1, height - 1))
@@ -815,7 +827,7 @@ def operate_owned_video_track(
                 raise RuntimeError("The owned popup item is obstructed or lost foreground: " + label)
             user.SetCursorPos(point.x, point.y)
             try:
-                button(2)
+                button(2, popup)
             finally:
                 button(4)
             submenu = bool(user.GetSubMenu(menu, index))
