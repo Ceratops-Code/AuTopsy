@@ -117,7 +117,10 @@ public:
    double QuantizeOffset(double offset) override {
       if (mMoving.empty()) return offset;
       const auto &clip = Data(mMoving.front()).clip;
-      const auto rate = VideoContentFrameRate(clip, clip.media);
+      // A source frame occupies less project time after speeding up the clip.
+      // Keep free drags on that project-frame grid; source-rate rounding can
+      // otherwise land on a nearby magnetic target even while Alt bypasses it.
+      const auto rate = VideoContentFrameRate(clip, clip.media) * clip.playbackRate;
       return std::round(offset * rate) / rate;
    }
    double AdjustOffsetSmaller(double offset) override {
