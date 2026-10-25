@@ -193,6 +193,19 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             native.select_test_display([primary, dict(secondary, primary=True)])
 
+    def test_pane_pointer_scaling_uses_physical_pixels_without_cursor_feedback(self) -> None:
+        harness = sys.modules[native.painted_video_tracks.__module__]
+        cases = (((475, 17), (1067, 382), (1067, 382), (475, 17)),
+                 ((475, 17), (1600, 573), (1067, 382), (712, 26)),
+                 ((100, 80), (1250, 750), (1000, 600), (125, 100)),
+                 ((-4, 700), (2000, 1200), (1000, 600), (-8, 1400)))
+        for _ in range(2):
+            for point, physical, reported, expected in cases:
+                self.assertEqual(harness.scale_pane_pointer_position(point, physical, reported), expected)
+        for physical, reported in (((0, 600), (1000, 600)), ((1000, 600), (1000, 0))):
+            with self.assertRaises(ValueError):
+                harness.scale_pane_pointer_position((10, 10), physical, reported)
+
     def names(self, paths: list[str], all_checks: bool = False) -> set[str]:
         return {group.name for group in runner.select_groups(paths, all_checks)[0]}
 

@@ -507,6 +507,19 @@ def ready_video_preview(client):
         time.sleep(0.1)
 
 
+def scale_pane_pointer_position(native_point, physical_size, reported_size):
+    """Map the app's pane units to physical client pixels exactly once.
+
+    Captured drags may extend beyond a pane for scrolling or track migration;
+    only unusable geometry is rejected here. The press owner checks the actual
+    screen target before sending a button transition.
+    """
+    if any(size <= 0 for size in (*physical_size, *reported_size)):
+        raise ValueError("The owned pane has no usable physical/reported dimensions.")
+    return tuple(round(position * physical / reported)
+                 for position, physical, reported in zip(native_point, physical_size, reported_size, strict=True))
+
+
 def operate_owned_video_track(
     client, start_time, end_time=None, track=None, to_track=None, cancel=False,
     gesture="drag", area="header", menu_path=(), key=None, painted=None, control=False,
@@ -640,7 +653,10 @@ def operate_owned_video_track(
         ctypes.c_uint,
     ]
     user.GetClientRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
-    user.GetCursorPos.argtypes = [ctypes.POINTER(Point)]
+    user.GetPhysicalCursorPos.argtypes = [ctypes.POINTER(Point)]
+    user.GetPhysicalCursorPos.restype = ctypes.c_int
+    user.SetPhysicalCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user.SetPhysicalCursorPos.restype = ctypes.c_int
     user.ClientToScreen.argtypes = [ctypes.c_void_p, ctypes.POINTER(Point)]
     user.ScreenToClient.argtypes = [ctypes.c_void_p, ctypes.POINTER(Point)]
     user.WindowFromPoint.argtypes = [Point]
@@ -670,13 +686,12 @@ def operate_owned_video_track(
     foreground = user.GetForegroundWindow()
     pinned = bool(user.GetWindowLongPtrW(root, -20) & 8)
     original = Point()
-    user.GetCursorPos(ctypes.byref(original))
+    if not user.GetPhysicalCursorPos(ctypes.byref(original)):
+        raise RuntimeError("The owned input worker cannot read the physical cursor.")
     rectangle = (ctypes.c_long * 4)()
     user.GetClientRect(panel, ctypes.byref(rectangle))
-    point = Point(
-        round(x0 * rectangle[2] / info["videoTrackPanelWidth"]),
-        round(y0 * rectangle[3] / info["videoTrackPanelHeight"]),
-    )
+    point = Point(*scale_pane_pointer_position((x0, y0), (rectangle[2], rectangle[3]),
+        (info["videoTrackPanelWidth"], info["videoTrackPanelHeight"])))
     user.ClientToScreen(panel, ctypes.byref(point))
     initial_screen_point = (point.x, point.y)
     hidden = []
@@ -698,21 +713,15 @@ def operate_owned_video_track(
         return 1
 
     def position_pointer(x, y):
-        """Reach the native client point before sending input across DPI contexts."""
-        for _ in range(3):
-            prior = user.SetThreadDpiAwarenessContext(user.GetWindowDpiAwarenessContext(panel))
-            native = Point()
-            user.GetCursorPos(ctypes.byref(native))
-            user.ScreenToClient(panel, ctypes.byref(native))
-            user.SetThreadDpiAwarenessContext(prior)
-            dx, dy = x-native.x, y-native.y
-            user.GetCursorPos(ctypes.byref(point))
-            if abs(dx) <= 1 and abs(dy) <= 1:
-                return
-            point.x += round(dx * rectangle[2] / info["videoTrackPanelWidth"])
-            point.y += round(dy * rectangle[3] / info["videoTrackPanelHeight"])
-            user.SetCursorPos(point.x, point.y)
-        raise RuntimeError(f"Cannot reach owned native point {(x,y)}; actual={(native.x,native.y)}.")
+        """Use physical pixels throughout, without virtualizing cursor reads."""
+        destination = Point(*scale_pane_pointer_position((x, y), (rectangle[2], rectangle[3]),
+            (info["videoTrackPanelWidth"], info["videoTrackPanelHeight"])))
+        if not user.ClientToScreen(panel, ctypes.byref(destination)) or not user.SetPhysicalCursorPos(destination.x, destination.y):
+            raise RuntimeError(f"Cannot place the owned physical pointer: {ctypes.WinError(ctypes.get_last_error())}")
+        current = Point()
+        if not user.GetPhysicalCursorPos(ctypes.byref(current)) or abs(current.x - destination.x) > 1 or abs(current.y - destination.y) > 1:
+            raise RuntimeError(f"The physical pointer did not reach the owned pane; expected={(destination.x,destination.y)}, actual={(current.x,current.y)}.")
+        point.x, point.y = destination.x, destination.y
 
     def button(flags, expected_window=panel):
         # Position and button transition share one OS event, so another mouse
@@ -825,7 +834,7 @@ def operate_owned_video_track(
             point.y = round(physical[1] + ((bounds[1] + bounds[3]) / 2 - logical[1]) * (physical[3] - physical[1]) / (logical[3] - logical[1]))
             if user.WindowFromPoint(point) != popup or user.GetForegroundWindow() != root:
                 raise RuntimeError("The owned popup item is obstructed or lost foreground: " + label)
-            user.SetCursorPos(point.x, point.y)
+            user.SetPhysicalCursorPos(point.x, point.y)
             try:
                 button(2, popup)
             finally:
@@ -904,7 +913,7 @@ def operate_owned_video_track(
                     f"point={(point.x, point.y)}; view={(info['viewStart'], info['viewEnd'])}; row={source}."
                 )
             time.sleep(0.01)
-        user.SetCursorPos(point.x, point.y)
+        user.SetPhysicalCursorPos(point.x, point.y)
         positioned = True
         position_pointer(x0, y0)
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
@@ -954,7 +963,7 @@ def operate_owned_video_track(
                             break
                         if time.monotonic() >= deadline:
                             current = Point()
-                            user.GetCursorPos(ctypes.byref(current))
+                            user.GetPhysicalCursorPos(ctypes.byref(current))
                             if abs(current.x - point.x) > 2 or abs(current.y - point.y) > 2:
                                 raise RuntimeError(
                                     f"Shared pointer input moved away from the owned test window; "
@@ -1036,9 +1045,9 @@ def operate_owned_video_track(
                 button(16 if gesture == "context" else 4)
         user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
         current = Point()
-        user.GetCursorPos(ctypes.byref(current))
+        user.GetPhysicalCursorPos(ctypes.byref(current))
         if positioned and (current.x, current.y) == (point.x, point.y):
-            user.SetCursorPos(original.x, original.y)
+            user.SetPhysicalCursorPos(original.x, original.y)
         if not pinned:
             user.SetWindowPos(root, ctypes.c_void_p(-2), 0, 0, 0, 0, 0x13)
         for window in hidden:
