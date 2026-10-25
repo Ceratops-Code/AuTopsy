@@ -112,7 +112,7 @@ class ClipDialogWindows(PreviewNativeWindows):
                               f"{self.api.GetForegroundWindow()} ({self.caption(self.api.GetForegroundWindow())!r})")
 
 
-def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False):
+def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False, needs_focus=True):
     """Run a normal menu/command while handling its modal window on this worker."""
     windows = ClipDialogWindows()
     errors = []
@@ -140,7 +140,13 @@ def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False):
             assert not worker.is_alive(), "The owned context-menu gesture did not finish."
             if errors:
                 raise errors[0]
-        windows.activate(dialog)
+        if needs_focus:
+            windows.activate(dialog)
+        else:
+            # Direct messages to owned buttons need no shared desktop focus.
+            # Still require the same PID/display and a ready native dialog.
+            assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]), dialog)
+            wait_for_native_state(lambda: windows.visible(dialog) and windows.enabled(dialog), "owned dialog ready")
         handle_dialog(windows, dialog)
         wait_for_native_state(lambda: not windows.visible(dialog), f"owned {title} closed")
     finally:

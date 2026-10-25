@@ -112,7 +112,7 @@ def check_preview_quality(client, root, ffmpeg, ffprobe):
     native = PreviewInput(info)
     choice = int(info["previewQualityHandle"])
     with_native_dialog(lambda: native.quality(choice, 3), "Prepare Video Preview",
-                       lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")))
+                       lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")), needs_focus=False)
     canceled = ready_video_preview(client)
     assert canceled["previewQuality"] == 0 and canceled["playbackPath"] == info["playbackPath"], canceled
     assert abs(canceled["audioPosition"] - 1.25) < 0.002
@@ -167,11 +167,12 @@ def check_preview_quality(client, root, ffmpeg, ffprobe):
         assert imported["previewQuality"] == 1 and imported["previewQualitySources"] == 2, imported
         clips = client.data("GetVideoClips")["clips"]
         index = max(row["track"] for row in clips if row["source"] == other.as_posix())
+        client.send("LastTrack")
         deadline = time.monotonic() + 5
         while True:
-            painted = painted_video_tracks(client)
+            painted = client.data("GetVideoPreviewInfo")
             row = next(row for row in painted["videoTrackRows"] if row["index"] == index)
-            if row["thumbnails"]:
+            if row["dataWidth"] > 0 and row["thumbnails"]:
                 break
             assert time.monotonic() < deadline, ("Custom-quality import has no filmstrip", row)
             time.sleep(0.1)
