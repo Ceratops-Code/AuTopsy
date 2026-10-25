@@ -240,12 +240,18 @@ def check_preview_controls(client, root):
     client.send("SelectTime: Start=0.4 End=2.8")
     time.sleep(0.08)
     press_preview_button(int(info["previewLoopHandle"]))
+    loop = client.data("GetVideoPreviewInfo")
+    assert loop["loopActive"] and abs(loop["loopStart"] - 0.4) < 0.001 and abs(loop["loopEnd"] - 2.8) < 0.001, loop
     press_preview_button(buttons["play"])
     wait_for_native_state(lambda: preview_project_seconds(status) > 0.55, "loop before a seek")
     press_preview_button(int(info["previewForwardHandle"]))
     wait_for_native_state(lambda: preview_project_seconds(status) > 1.4, "one-second seek within a loop")
     time.sleep(2)
-    assert native.windows.enabled(buttons["stop"]) and 0.38 <= preview_project_seconds(status) < 2.85
+    loop_observation = {"playing": native.windows.enabled(buttons["stop"]),
+                        "position": preview_project_seconds(status)}
+    if not (loop_observation["playing"] and 0.38 <= loop_observation["position"] < 2.85):
+        loop_observation["project"] = client.data("GetVideoPreviewInfo")
+        raise AssertionError(loop_observation)
     press_preview_button(buttons["stop"])
     press_preview_button(int(info["previewLoopHandle"]))
     assert client.data("GetInfo: Type=Clips Format=JSON") == original_audio

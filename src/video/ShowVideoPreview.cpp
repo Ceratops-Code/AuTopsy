@@ -168,7 +168,14 @@ public:
       ViewInfo::Get(mProject).playRegion.SetAllTimes(start, end);
    }
    void SetLoopEnabled(bool active) {
-      if (active) SelectUtilities::ActivatePlayRegion(mProject);
+      if (active) {
+         auto &region = ViewInfo::Get(mProject).playRegion;
+         // Inactive current times follow selection, while activation restores
+         // a separately remembered range. Commit this request to both before
+         // activation, even when its current endpoints already match.
+         region.SetAllTimes(region.GetStart(), region.GetEnd());
+         SelectUtilities::ActivatePlayRegion(mProject);
+      }
       else SelectUtilities::InactivatePlayRegion(mProject);
    }
 };
