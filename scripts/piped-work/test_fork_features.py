@@ -1423,6 +1423,9 @@ def remove_private_capture_audio(root, *, process_stopped):
 
 
 RECORDING_CASES = ("cursor-recording", "cursor-recording-save-before", "cursor-recording-save-after")
+# Feature modules register these cases in their own CMake directory. They remain
+# normal CLI operations but must not also enter video's generated CTest list.
+MODULE_REGISTERED_NATIVE_CASES = ("track-groups",)
 NATIVE_CASES = (
     *BEGINNER_VIDEO_CASES,
     "groups",
@@ -1431,7 +1434,6 @@ NATIVE_CASES = (
     "transport-toolbar",
     "preview-navigation",
     "preview-controls", "preview-quality", "video-cursor", "preview-soak",
-    "track-groups",
     "clip-actions", "clip-selection", "video-clip-export", "video-clip-mute", "edit-cursor-line",
     "project-compatibility",
     "video",
@@ -1450,9 +1452,10 @@ def main():
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--work-root", type=Path)
     selection = parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument("--case", choices=(*NATIVE_CASES, *RECORDING_CASES, "display-policy", "worker-lifecycle"))
+    selection.add_argument("--case", choices=(*NATIVE_CASES, *MODULE_REGISTERED_NATIVE_CASES,
+                                             *RECORDING_CASES, "display-policy", "worker-lifecycle"))
     selection.add_argument("--list-native-cases", action="store_true",
-                           help="Print the CTest case catalogue without opening an application.")
+                           help="Print video's centrally registered CTest cases without opening an application.")
     selection.add_argument("--list-recording-devices", action="store_true",
                            help="Read available MME input names without capturing audio.")
     parser.add_argument(
@@ -1473,6 +1476,8 @@ def main():
         print(json.dumps(read_recording_devices()))
         return
     if args.list_native_cases:
+        if set(NATIVE_CASES) & set(MODULE_REGISTERED_NATIVE_CASES) or len(NATIVE_CASES) != len(set(NATIVE_CASES)):
+            parser.error("Native cases need different registration owners and unique central names.")
         cases = (*NATIVE_CASES, *(RECORDING_CASES if os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE") else ()))
         print(";".join(cases))
         return

@@ -262,6 +262,28 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue({"preview-soak", "video-vfr-export", "video-encoder-boundaries"} <= set(names))
                 self.assertEqual("cursor-recording" in names, device is not None)
                 self.assertNotIn("display-policy", names)
+                self.assertNotIn("track-groups", names)
+        # The feature-owned registration still calls the same public operation;
+        # absence of its required GUI inputs fails before any desktop effect.
+        with patch.object(sys, "argv", ["test_fork_features.py", "--case", "track-groups"]), \
+             redirect_stdout(io.StringIO()), patch.object(sys, "stderr", io.StringIO()) as error:
+            with self.assertRaises(SystemExit):
+                native.main()
+            self.assertIn("GUI cases require --executable and --work-root", error.getvalue())
+
+    def test_duplicate_ctest_registrations_block_before_any_desktop_case(self) -> None:
+        catalogue = [{"name": name} for name in runner.INSTALLER_BASELINE_TESTS]
+        catalogue.extend([{"name": "fork-track-groups"}, {"name": "fork-track-groups"}])
+        for _ in range(2):
+            with self.assertRaisesRegex(RuntimeError, "one registration owner.*fork-track-groups"):
+                runner.select_installer_tests([], catalogue)
+        with patch.object(native, "NATIVE_CASES", (*native.NATIVE_CASES, "track-groups")), \
+             patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
+             redirect_stdout(io.StringIO()) as output, patch.object(sys, "stderr", io.StringIO()) as error:
+            with self.assertRaises(SystemExit):
+                native.main()
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn("different registration owners", error.getvalue())
 
     def test_capture_audio_cleanup_repeats_after_interruption_and_preserves_other_outputs(self) -> None:
         for boundary in ("before", "after"):

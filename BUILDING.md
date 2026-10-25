@@ -423,6 +423,11 @@ is chosen. With no eligible release, every declared native case is selected.
 The builder's `--test-name` option adds checks and never removes the baseline or
 known affected cases. An unmapped native input or missing named test stops the build.
 The native harness reuses its own matching passes without opening another editor.
+Video's generated CTest list excludes module-owned registrations; track-group
+testing belongs to its feature CMake directory and keeps the same public CLI
+operation. The catalogue producer rejects overlapping ownership, and the package
+selector rejects duplicate CTest names before starting any desktop case. Repeated
+delivery of different completed results is still ambiguous and blocks packaging.
 Only after the checks pass does Inno Setup stage the same compiled runtime. A
 failed desktop check, unavailable desktop, changed source or changed runtime
 blocks packaging. No installed application is stopped, updated or used as a host.

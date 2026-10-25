@@ -617,6 +617,10 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
 def select_installer_tests(changed: list[str], catalogue: list[dict[str, Any]],
                            extra: str | None = None, unknown_base: bool = False) -> list[str]:
     """Select desktop impact by declared inputs; absent contracts stop packaging."""
+    names = [test["name"] for test in catalogue]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise RuntimeError(f"CTest names need one registration owner before desktop checks: {duplicates}")
     available = {test["name"] for test in catalogue}
     selected = set(INSTALLER_BASELINE_TESTS)
     if unknown_base and not extra:
