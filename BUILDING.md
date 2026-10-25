@@ -426,6 +426,10 @@ blocks packaging. No installed application is stopped, updated or used as a host
 the headless fixture's bounded immutable receipts; its ordinary startup/completion
 cleanup keeps three outcomes per check and removes abandoned pending writes.
 GUI receipts remain under the existing `_fork-tests/_accepted` owner. The completed
+result keeps its original check version when only check code changes; matching
+product bytes, execution scope and no newer applicable failure are still required.
+New coverage can declare an additional input instead of rewriting old acceptance.
+The completed
 installer manifest includes the selected checks and runtime hashes; existing
 accepted installers retain their original acceptance without retrospective tests.
 The gesture case waits for the native pane to be enabled, then supplies held

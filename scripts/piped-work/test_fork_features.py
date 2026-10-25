@@ -1126,7 +1126,10 @@ def retain_behavior_result(work_root, record=None, metrics=None):
         keep = {row[1] for row in passes + other}
         for _, _, passed in passes:
             identity = passed.get("input_identity")
-            matching = [row for row in scoped if identity and row[2].get("input_identity") == identity]
+            work = native_work_scope(passed.get("check_inputs"))
+            matching = [row for row in scoped if identity and (
+                row[2].get("input_identity") == identity or
+                (work is not None and native_work_scope(row[2].get("check_inputs")) == work))]
             if matching:
                 keep.add(matching[0][1])
         for _, path, _ in scoped:
@@ -1226,15 +1229,35 @@ def read_behavior_results(work_root):
 def plan_native_check(work_root, case, inputs):
     """Return original evidence, never a newly invented pass or execution."""
     identity = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+    work = native_work_scope(inputs)
     rows = [row for row in read_behavior_results(work_root) if row[2]["case"] == case]
-    matching = [row for row in rows if row[2].get("input_identity") == identity]
+    matching = [row for row in rows if row[2].get("input_identity") == identity or (
+        work is not None and native_work_scope(row[2].get("check_inputs")) == work)]
     latest = matching[0] if matching else None
     if latest and latest[2]["result"] == "passed":
-        return {"case": case, "decision": "reused", "input_identity": identity,
+        return {"case": case, "decision": "reused", "input_identity": latest[2]["input_identity"],
                 "receipt": str(latest[1]), "original_run": latest[2]["run"]}
     reason = ("previous failure or incomplete attempt" if latest else
               "changed artifact, check or execution scope" if rows else "missing receipt")
     return {"case": case, "decision": "execute", "input_identity": identity, "reason": reason}
+
+
+def native_work_scope(inputs):
+    """Separate accepted product/scope bytes from the checks that earned a pass.
+
+    A check-only edit does not revoke an unchanged product's acceptance. Keep
+    that result's original check version instead of manufacturing a new pass.
+    Unknown inputs remain requirements: adding a coverage/scope input demands
+    its own result. Partial historical records never acquire missing evidence.
+    A newer failure still blocks older passes across check versions.
+    """
+    required = {"executable_sha256", "script_module_sha256", "payload_dependencies", "execution_scope"}
+    if not isinstance(inputs, dict) or not required.issubset(inputs):
+        return None
+    check_fields = {"check_sha256", "harness_sha256", "pipe_client_sha256", "shared_process_checks",
+        "clip_edits_sha256", "clip_actions_sha256", "track_groups_sha256", "clip_selection_sha256",
+        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256"}
+    return {name: value for name, value in inputs.items() if name not in check_fields}
 
 
 def finish_interrupted_native_checks(work_root):

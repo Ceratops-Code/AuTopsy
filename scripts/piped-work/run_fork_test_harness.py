@@ -1180,7 +1180,7 @@ def check_video_interactions(client, root, case):
         # The same single click must make Delete work through the keyboard command,
         # not a script that bypasses its selection preconditions.
         operate_owned_video_track(client, 0.8, track=0, gesture="click", area="picture", key=0x2E)
-        bounds([(1, 3)])
+        bounds([(3, 5)])
         client.send("Undo")
         assert clips() == original
         operate_owned_video_track(client, 3.8, track=0, gesture="double-click", area="picture", key=0x08)

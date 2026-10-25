@@ -570,6 +570,7 @@ class NativeReceiptTests(unittest.TestCase):
 
     def inputs(self) -> dict[str, Any]:
         return {"executable_sha256": "app", "check_sha256": "check",
+                "script_module_sha256": "module", "payload_dependencies": {"media.dll": "dependency"},
                 "execution_scope": {"platform": "one", "test_display": "screen-two"}}
 
     def execute(self, run_id, inputs):
@@ -620,7 +621,7 @@ class NativeReceiptTests(unittest.TestCase):
                         window.click(9)
                 api.SendMessageTimeoutW.assert_not_called()
 
-    def test_clip_mute_recipe_changes_prevent_reuse_of_old_fixture_results(self):
+    def test_clip_mute_check_edits_keep_the_unchanged_products_original_acceptance(self):
         # Exact basenames are the native runner contract, not executable fixtures.
         driver = self.root / "_test_driver.py"
         recipe = self.root / "test_video_clip_edits.py"
@@ -636,8 +637,8 @@ class NativeReceiptTests(unittest.TestCase):
                 recipe.write_bytes(b"new complete-audio fixture recipe")
                 changed = native.run_native_check(self.root, arguments.case, read, self.execute)
                 again = native.run_native_check(self.root, arguments.case, read, self.execute)
-            self.assertEqual(app.call_count, 2)
-            self.assertNotEqual(first["original_run"], changed["original_run"])
+            self.assertEqual(app.call_count, 1)
+            self.assertEqual(first["original_run"], changed["original_run"])
             self.assertEqual(again["result"], "reused")
             self.assertEqual(again["original_run"], changed["original_run"])
 
@@ -654,7 +655,7 @@ class NativeReceiptTests(unittest.TestCase):
         self.assertEqual(Path(first["receipt"]).read_bytes(), original)
         self.assertFalse(list((self.root / "_accepted").glob("_pending-*")))
 
-    def test_preview_case_recipe_changes_run_only_the_requested_case(self):
+    def test_preview_check_edits_preserve_the_original_check_version(self):
         driver = self.root / "_test_driver.py"
         recipe = self.root / "test_preview_controls.py"
         executable, module = self.root / "_app.exe", self.root / "_script.dll"
@@ -667,13 +668,15 @@ class NativeReceiptTests(unittest.TestCase):
                 def read(arguments=arguments):
                     return native.native_test_inputs(arguments, executable, module, {"device": "screen-two"})
                 first = native.run_native_check(self.root, case, read, self.execute)
+                original = Path(first["receipt"]).read_bytes()
                 recipe.write_bytes(case.encode())
                 with patch.object(self, "execute", wraps=self.execute) as app:
                     changed = native.run_native_check(self.root, case, read, self.execute)
                     again = native.run_native_check(self.root, case, read, self.execute)
-                self.assertEqual(app.call_count, 1)
-                self.assertNotEqual(first["original_run"], changed["original_run"])
+                self.assertEqual(app.call_count, 0)
+                self.assertEqual(first["original_run"], changed["original_run"])
                 self.assertEqual(again["original_run"], changed["original_run"])
+                self.assertEqual(Path(first["receipt"]).read_bytes(), original)
 
     def test_native_newer_matching_failure_blocks_pass_until_a_later_matching_success(self):
         inputs = self.inputs()
@@ -689,8 +692,8 @@ class NativeReceiptTests(unittest.TestCase):
         self.assertEqual(app.call_count, 1)
         self.assertEqual(reused["original_run"], repaired["original_run"])
 
-    def test_native_changed_artifact_check_or_environment_runs_only_its_affected_case(self):
-        for field in ("executable_sha256", "check_sha256", "execution_scope"):
+    def test_native_changed_artifact_or_environment_runs_only_its_affected_case(self):
+        for field in ("executable_sha256", "script_module_sha256", "payload_dependencies", "execution_scope", "required_coverage"):
             with self.subTest(field=field):
                 root = self.root / field
                 root.mkdir()
@@ -703,6 +706,28 @@ class NativeReceiptTests(unittest.TestCase):
                 self.assertEqual(app.call_count, 1)
                 self.assertNotEqual(first["original_run"], changed["original_run"])
                 self.assertEqual(changed["original_run"], again["original_run"])
+
+    def test_native_check_edit_does_not_hide_a_newer_failure_or_rewrite_a_pass(self):
+        inputs = self.inputs()
+        first = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+        original = Path(first["receipt"]).read_bytes()
+        inputs["check_sha256"] = "edited check"
+        with patch.object(self, "execute", wraps=self.execute) as app:
+            reused = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+        self.assertEqual(app.call_count, 0)
+        self.assertEqual(reused["original_run"], first["original_run"])
+        self.assertEqual(Path(first["receipt"]).read_bytes(), original)
+        failed = json.loads(original)
+        failed.update(run=native.uuid.uuid4().hex, result="failed", check_inputs=inputs,
+                      finished_ns=failed["finished_ns"] + 1)
+        native.retain_behavior_result(self.root, failed)
+        inputs["check_sha256"] = "another edited check"
+        self.assertEqual(native.plan_native_check(self.root, "video", inputs)["decision"], "execute")
+        with patch.object(self, "execute", wraps=self.execute) as app:
+            repaired = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+            again = native.run_native_check(self.root, "video", lambda: inputs, self.execute)
+        self.assertEqual(app.call_count, 1)
+        self.assertEqual(again["original_run"], repaired["original_run"])
 
     def test_native_legacy_acceptance_keeps_original_bytes_without_inventing_scope(self):
         record: dict[str, Any] = {"run": native.uuid.uuid4().hex, "case": "video", "result": "passed",
