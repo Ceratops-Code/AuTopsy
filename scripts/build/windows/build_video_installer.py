@@ -245,7 +245,16 @@ def get_native_test_python() -> Path:
     return executable.resolve()
 
 
-def _build_installer(source: Path, build: Path, inno: Path) -> dict:
+def checked_runtime_files(build: Path, report: dict) -> dict[str, str]:
+    """Read only the tested build's runtime; packaging must consume these bytes."""
+    runtime = (build / report["payload_directory"]).resolve()
+    if not runtime.is_relative_to(build) or runtime == build:
+        raise RuntimeError("The tested runtime directory must stay inside its build.")
+    return {path.relative_to(runtime).as_posix(): sha256(path) for path in sorted(runtime.rglob("*"))
+            if path.is_file() and path.suffix.lower() in (".exe", ".dll")}
+
+
+def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None) -> dict:
     """A normal rerun derives all remaining work from current source and outputs."""
     source, build, inno = source.resolve(), build.resolve(), inno.resolve()
     if source == build or source.is_relative_to(build) or not (source / "CMakeLists.txt").is_file():
@@ -261,6 +270,7 @@ def _build_installer(source: Path, build: Path, inno: Path) -> dict:
         pending.unlink(missing_ok=True)
     revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
     dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
+    source_changes = run_command(["git", "diff", "--binary", "HEAD", "--"], source, diagnostics)
     if os.environ.get("GITHUB_ACTIONS") == "true" and (dirty or revision != os.environ.get("GITHUB_SHA")):
         raise RuntimeError("Hosted installer source differs from the workflow's checked-out revision.")
     dependency_inputs = {name: {"url": value["url"], "sha256": value["sha256"]}
@@ -303,11 +313,28 @@ def _build_installer(source: Path, build: Path, inno: Path) -> dict:
     ctest = shutil.which("ctest")
     if not ctest:
         raise RuntimeError("CTest is missing from the current build environment.")
-    # Source-only CI has no native installer yet. Its portable model and builder
-    # tests run separately; this real encoded-media check gates every new package.
-    run_command([ctest, "--test-dir", str(build), "-C", "Release", "--output-on-failure",
-                 "-R", "^fork-fixtures$", "--no-tests=error"], source, diagnostics)
+    # The selector and native harness already own check impact and acceptance.
+    # Run them on the compiled host, before producing any installer. Inno's
+    # target stages prebuilt files; it has no dependency on the application target.
+    command = [sys.executable, str(source / "scripts/run_affected_tests.py"), "--before-package", str(build)]
+    if native_tests:
+        command.extend(["--native-tests", native_tests])
+    output = run_command(command, source, diagnostics)
+    report = json.loads(output.strip().splitlines()[-1])
+    if (report.get("result") != "passed" or report.get("scope") != "prepackage"
+            or not {"fork-fixtures", "fork-preview", "fork-project-compatibility"}.issubset(
+                row["name"] for row in report.get("checks", []))
+            or any(row.get("result") not in ("passed", "reused") for row in report.get("checks", []))):
+        raise RuntimeError("Packaging requires completed native and media-check acceptance.")
+    if checked_runtime_files(build, report) != report.get("payload"):
+        raise RuntimeError("The runtime differs from the checked payload; packaging is blocked.")
+    current_revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
+    current_changes = run_command(["git", "diff", "--binary", "HEAD", "--"], source, diagnostics)
+    if current_revision != revision or current_changes != source_changes:
+        raise RuntimeError("Installer source changed during checks; packaging is blocked.")
     run_command([cmake, "--build", str(build), "--config", "Release", "--target", "innosetup"], source, diagnostics)
+    if checked_runtime_files(build, report) != report["payload"]:
+        raise RuntimeError("Packaging changed the checked runtime; no accepted manifest was written.")
     descriptor = json.loads((build / "package/_installer-x64.json").read_text(encoding="utf-8"))
     installer = build / "package" / descriptor["filename"]
     if installer.parent.resolve() != (build / "package").resolve() or not installer.is_file():
@@ -316,12 +343,13 @@ def _build_installer(source: Path, build: Path, inno: Path) -> dict:
         raise RuntimeError("The packaged installer differs from its declared identity.")
     final_revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
     final_dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
-    if final_revision != revision or final_dirty != dirty:
+    final_changes = run_command(["git", "diff", "--binary", "HEAD", "--"], source, diagnostics)
+    if final_revision != revision or final_dirty != dirty or final_changes != source_changes:
         raise RuntimeError("Installer source changed during the build; no accepted manifest was written.")
     result = {
         "schema": "autopsy-windows-installer.v1", "source_revision": revision, "source_dirty": dirty,
         "filename": descriptor["filename"], "sha256": descriptor["sha256"], "signed": False,
-        "dependency_inputs": dependency_inputs, "checks": checks,
+        "dependency_inputs": dependency_inputs, "checks": checks, "prepackage": report,
     }
     write_json(build / "package/_build-manifest.json", result)
     diagnostics.unlink(missing_ok=True)
@@ -359,12 +387,12 @@ def build_lock(build: Path):
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def build_installer(source: Path, build: Path, inno: Path) -> dict:
+def build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None) -> dict:
     source, build = source.resolve(), build.resolve()
     if source == build or source.is_relative_to(build):
         raise RuntimeError("Choose a separate build directory.")
     with build_lock(build):
-        return _build_installer(source, build, inno)
+        return _build_installer(source, build, inno, native_tests)
 
 
 def test_existing_installer_build(source: Path, build: Path, test_name: str) -> dict:
@@ -523,7 +551,8 @@ def main() -> None:
     parser.add_argument("--repository", default="Ceratops-Code/AuTopsy")
     parser.add_argument("--release-tag", default=os.environ.get("AUTOPSY_RELEASE_TAG"))
     parser.add_argument("--release-notes", type=Path, default=os.environ.get("AUTOPSY_RELEASE_NOTES"))
-    parser.add_argument("--test-name", default=os.environ.get("AUTOPSY_VIDEO_TEST_NAME", "^fork-fixtures$"))
+    parser.add_argument("--test-name", default=os.environ.get("AUTOPSY_VIDEO_TEST_NAME"),
+                        help="Extra prepackage native scope; in test-only mode, defaults to fork-fixtures.")
     parser.add_argument("--inno-compiler", type=Path, default=Path(
         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     ) / "Inno Setup 6/ISCC.exe")
@@ -541,9 +570,9 @@ def main() -> None:
         print(json.dumps(result))
         return
     if args.test_existing_build:
-        print(json.dumps(test_existing_installer_build(args.source_dir, args.build_dir, args.test_name)))
+        print(json.dumps(test_existing_installer_build(args.source_dir, args.build_dir, args.test_name or "^fork-fixtures$")))
         return
-    result = build_installer(args.source_dir, args.build_dir, args.inno_compiler)
+    result = build_installer(args.source_dir, args.build_dir, args.inno_compiler, args.test_name)
     print(json.dumps(result, separators=(",", ":")))
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a", encoding="utf-8") as stream:

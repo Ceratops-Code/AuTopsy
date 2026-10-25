@@ -77,6 +77,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Prepare Inno Setup
@@ -88,12 +90,9 @@ jobs:
           }
       - name: Build installer from this revision
         id: installer
-        run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
-      - name: Check project interoperability with portable Audacity
         env:
-          AUTOPSY_VIDEO_BUILD_DIR: ${{ github.workspace }}/.build/_windows-installer
-          AUTOPSY_VIDEO_TEST_NAME: ^fork-project-compatibility$
-        run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/run_affected_tests.py
+          AUTOPSY_TEST_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: uv run --project scripts --locked --python 3.12 --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
       - name: Upload unsigned installer and source manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

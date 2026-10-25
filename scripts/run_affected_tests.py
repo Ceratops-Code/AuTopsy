@@ -1,4 +1,4 @@
-"""Select named portable checks from one input map, through the SDLC test action.
+"""Select named source/native checks from one input map through SDLC.
 
 The native desktop harness owns its own executable acceptance. This runner reports
 native impact separately and never substitutes portable passes for desktop tests.
@@ -7,6 +7,9 @@ reads current source/build inputs and chooses only missing acceptance. The owner
 keeps three receipts per named check at startup and after publication. Pending
 files are removed under an exclusive, live-process lock; unrelated files are left
 alone. Local and CI callers use this same repository-owned entry point.
+The --before-package scope checks an already compiled host before Inno Setup;
+native receipts remain with the desktop harness and fixture receipts belong to
+the build's bounded _prepackage-results directory.
 """
 from __future__ import annotations
 
@@ -119,6 +122,47 @@ NATIVE_INPUTS = (
 )
 OWNED_INPUTS = ("src/video/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
 DOCUMENT_SUFFIXES = {".md", ".rst"}
+
+# Native names are adapter contracts checked against CTest's structured catalogue.
+# Keep desktop impact beside the portable input map, never in the installer or CI.
+INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
+INSTALLER_NATIVE_GROUPS = (
+    (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport"), (
+        "src/video/ShowVideoPreview.cpp", "src/video/PlayVideoMedia.*", "src/video/PrepareVideoPreview.*",
+        "src/video/ChoosePreviewQuality.*", "src/video/SyncVideoPlayback.*",
+        "scripts/piped-work/test_preview_controls.py")),
+    (("video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges",
+      "video-clip-edits", "video-linked-clip-edits", "video-clipboard", "clip-selection"), (
+        "src/video/EditVideoTimeline.*", "src/video/CreateVideoTrack.*", "src/video/ShowVideoTrack.*",
+        "src/video/PlanVideoEdits.*", "src/video/EditVideoContent.*", "src/video/JoinVideoClips.*",
+        "src/clip-groups/SelectMediaClips.*", "src/clip-groups/LinkMediaClips.*",
+        "src/tracks/ui/TimeShiftHandle.*", "src/tracks/ui/SelectHandle.cpp", "src/tracks/ui/AffordanceHandle.*",
+        "src/tracks/playabletrack/wavetrack/ui/WaveTrackShifter.cpp", "scripts/piped-work/test_clip_selection.py")),
+    (("video-crop", "video-crop-controls", "video-compound-render", "video-parent-links",
+      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage", "video-clip-storage"), (
+        "src/video/EditVideoComposition.*", "src/video/EvaluateVideoTimeline.*",
+        "src/video/RenderVideoComposition.*", "src/video/PlanVideoExport.*")),
+    (("clip-actions", "video-clip-export", "edit-cursor-line", "video-export-timing"), (
+        "src/clip-groups/OpenClipActions.*", "src/video/ExportVideoMix.*", "src/video/ChooseVideoExport.*",
+        "src/export/ExportAudioDialog.*", "src/tracks/ui/EditCursorOverlay.cpp",
+        "src/tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp",
+        "src/tracks/playabletrack/wavetrack/ui/WaveClipUIUtilities.cpp",
+        "scripts/piped-work/test_clip_actions.py", "scripts/piped-work/test_video_export_timing.py")),
+    (("tracks", "groups", "video-track-menu", "media"), (
+        "src/track-groups/*", "src/clip-groups/GroupAudioClips.*", "src/clip-groups/EditClipMarkers.*",
+        "src/video/RelinkVideoMedia.*", "src/tracks/ui/CommonTrackControls.*",
+        "scripts/piped-work/test_track_groups.py")),
+    (("history-view", "transport-toolbar", "preview-navigation"), (
+        "libraries/lib-project-history/*", "libraries/lib-viewport/*", "src/toolbars/ControlToolBar.*")),
+)
+INSTALLER_SHARED_INPUTS = (
+    "CMakeLists.txt", "CMakePresets.json", "src/video/CMakeLists.txt", "src/menus/*.cpp",
+    "src/commands/GetInfoCommand.cpp", "src/ProjectAudioManager.*", "src/TrackPanel.cpp",
+    "src/TrackUtilities.cpp", "src/tracks/ui/ChannelView.cpp", "libraries/lib-wave-track/WaveTrack.cpp",
+    "libraries/lib-project-file-io/*", "lib-src/sqlite/*", "scripts/uv.lock", "scripts/pyproject.toml",
+    "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
+    "scripts/piped-work/pipeclient.py", "scripts/piped-work/test_video_clip_edits.py",
+)
 
 
 class CommandFailure(RuntimeError):
@@ -392,8 +436,13 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
     parser.add_argument("--build-dir", type=Path, default=Path(".build/_core"))
     parser.add_argument("--base", default=os.environ.get("AUTOPSY_TEST_BASE"))
     parser.add_argument("--all", action="store_true", help="Explicitly select every portable check.")
+    parser.add_argument("--before-package", type=Path, help="Check an already compiled native payload before Inno Setup.")
+    parser.add_argument("--native-tests", help="Additional native CTest expression, or an explicit scope when no base exists.")
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[1]
+    if args.before_package:
+        print(json.dumps(run_prepackage_checks(root, args.before_package.resolve(), args.base, args.native_tests)))
+        return 0
     build = args.build_dir.resolve()
     if not build.is_relative_to(root / ".build"):
         raise RuntimeError("Portable build/results must stay inside this worktree's .build directory.")
@@ -455,6 +504,146 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
                           "reused_checks": sum(item["result"] == "reused" for item in results),
                           "native_inputs_requiring_separate_acceptance": native}))
         return 1 if failed else 0
+
+
+def select_installer_tests(changed: list[str], catalogue: list[dict[str, Any]],
+                           extra: str | None = None, unknown_base: bool = False) -> list[str]:
+    """Select desktop impact by declared inputs; absent contracts stop packaging."""
+    available = {test["name"] for test in catalogue}
+    selected = set(INSTALLER_BASELINE_TESTS)
+    if unknown_base and not extra:
+        raise RuntimeError("Installer desktop scope needs an available comparison base or explicit --native-tests.")
+    for path in changed:
+        if Path(path).suffix in DOCUMENT_SUFFIXES:
+            continue
+        owners = [cases for cases, patterns in INSTALLER_NATIVE_GROUPS if matches(path, patterns)]
+        if matches(path, INSTALLER_SHARED_INPUTS):
+            selected.update(test["name"] for test in catalogue
+                            if "--case" in test.get("command", []) and "--executable" in test.get("command", [])
+                            and test["name"] != "fork-display-rejection")
+        elif owners:
+            selected.update("fork-" + case for cases in owners for case in cases)
+        elif matches(path, NATIVE_INPUTS) or (matches(path, OWNED_INPUTS)
+                and not any(matches(path, group.inputs) for group in GROUPS)):
+            raise RuntimeError(f"No installer desktop check owns {path!r}; declare its affected named tests.")
+    if extra:
+        expression = re.compile(extra)
+        additional = {test["name"] for test in catalogue if expression.search(test["name"])
+                      and "--case" in test.get("command", []) and "--executable" in test.get("command", [])}
+        if not additional:
+            raise RuntimeError(f"Installer native selection matches no tests: {extra}")
+        selected.update(additional)
+    missing = sorted(selected - available)
+    if missing:
+        raise RuntimeError(f"Required prepackage tests are absent from this build: {missing}")
+    return sorted(selected)
+
+
+def native_payload_identity(catalogue: list[dict[str, Any]]) -> dict[str, str]:
+    """Identify the compiled app and bundled tools/modules without launching them."""
+    executables = {Path(command[index + 1]).resolve()
+                   for test in catalogue if "--executable" in (command := test.get("command", []))
+                   for index in [command.index("--executable")]}
+    if len(executables) != 1:
+        raise RuntimeError("Native CTest catalogue must identify exactly one compiled AuTopsy executable.")
+    executable = executables.pop()
+    if not executable.is_file():
+        raise RuntimeError(f"The compiled AuTopsy executable is missing: {executable}")
+    paths = {executable, *(path for path in executable.parent.rglob("*")
+                           if path.is_file() and path.suffix.lower() in (".exe", ".dll"))}
+    return {path.relative_to(executable.parent).as_posix(): file_digest(path) for path in sorted(paths)}
+
+
+def read_native_acceptance(output: str, test: dict[str, Any], build: Path) -> dict[str, Any]:
+    """Consume the harness's public JSON result and retain original receipt IDs.
+
+    CTest prefixes verbose child lines with a test number. Missing or ambiguous
+    JSON blocks packaging; compatibility's application/consumer results remain
+    distinct. Only completed immutable records inside this build are consumed.
+    """
+    command = test["command"]
+    case = command[command.index("--case") + 1]
+    results = []
+    for line in output.splitlines():
+        match = re.match(r"^\s*\d+:\s*(\{.*\})\s*$", line)
+        if match:
+            try:
+                value = json.loads(match[1])
+            except ValueError:
+                continue
+            if value.get("case") == case and value.get("result") in ("passed", "reused"):
+                results.append(value)
+    if len(results) != 1:
+        raise RuntimeError(f"Native check {test['name']} did not return one completed harness result.")
+    receipts = []
+
+    def collect(value: dict[str, Any]) -> None:
+        if "receipt" in value and "original_run" in value:
+            path = Path(value["receipt"]).resolve()
+            if not path.is_relative_to(build):
+                raise RuntimeError("Native acceptance must belong to the selected build.")
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("result") != "passed" or record.get("run") != value["original_run"]:
+                raise RuntimeError("Native result and its completed acceptance record disagree.")
+            receipts.append({"id": record["run"], "input_identity": record["input_identity"],
+                "check_version": record.get("check_sha256") or digest(record["check_inputs"]),
+                "receipt": path.relative_to(build).as_posix(), "receipt_sha256": file_digest(path)})
+        else:
+            for child in value.values():
+                if isinstance(child, dict):
+                    collect(child)
+
+    collect(results[0])
+    if not receipts:
+        raise RuntimeError(f"Native check {test['name']} returned no acceptance identity.")
+    return {"name": test["name"], "result": results[0]["result"], "acceptance": receipts}
+
+
+def run_prepackage_checks(root: Path, build: Path, base: str | None, extra: str | None) -> dict[str, Any]:
+    """Gate packaging on current checks of the same compiled payload.
+
+    Native cases retain their own original acceptance records. Only the headless
+    fixture check uses this runner's existing bounded receipt store. These are
+    check outcomes, not workflow checkpoints; every call reads current inputs.
+    No installer is needed or created, and no installed editor is accessed.
+    """
+    catalogue = json.loads(run_command(["ctest", "--test-dir", str(build), "-C", "Release",
+                                       "--show-only=json-v1"], root))["tests"]
+    changed, comparison = changed_paths(root, base)
+    selected = select_installer_tests(changed, catalogue, extra, comparison.startswith("all:"))
+    executable = next(Path(test["command"][test["command"].index("--executable") + 1]).resolve()
+                      for test in catalogue if test["name"] == "fork-preview" and "--executable" in test.get("command", []))
+    if not executable.is_relative_to(build):
+        raise RuntimeError("Prepackage checks must use the compiled payload inside the selected build.")
+    payload = native_payload_identity(catalogue)
+    group = CheckGroup("installer-media-fixture", (
+        "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
+        "scripts/piped-work/pipeclient.py"))
+    runtime = {"payload": payload, "python": sys.version, "platform": platform.platform()}
+    results = []
+    with ReceiptStore(build / "_prepackage-results") as store:
+        for name in selected:
+            test = next(test for test in catalogue if test["name"] == name)
+            if native_payload_identity(catalogue) != payload:
+                raise RuntimeError("Compiled payload changed before a prepackage check; packaging is blocked.")
+            if name == "fork-fixtures":
+                identity = check_input_identity(root, group, test, runtime)
+                def fixture_inputs_current(test: dict[str, Any] = test, identity: str = identity) -> bool:
+                    return (check_input_identity(root, group, test, runtime) == identity
+                            and native_payload_identity(catalogue) == payload)
+                result = run_named_check(root, build, test, identity, store, fixture_inputs_current)
+                if result["result"] == "failed":
+                    raise RuntimeError(f"Required prepackage check failed: {result}")
+            else:
+                output = run_command(["ctest", "--test-dir", str(build), "-C", "Release", "--verbose",
+                                      "--no-tests=error", "-R", "^" + re.escape(name) + "$"], root)
+                result = read_native_acceptance(output, test, build)
+            results.append(result)
+    if native_payload_identity(catalogue) != payload:
+        raise RuntimeError("Compiled payload changed during prepackage checks; packaging is blocked.")
+    return {"result": "passed", "scope": "prepackage", "comparison": comparison,
+            "checks": results, "payload": payload,
+            "payload_directory": executable.parent.relative_to(build).as_posix()}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -932,8 +932,22 @@ would duplicate evolving source without explaining another important boundary.
 [sdlc/sdlc.yml](../sdlc/sdlc.yml) owns local/CI checks and declared installer
 build/publication. [The workflow](../.github/workflows/validate.yml) runs source
 checks on Linux/Windows and the requested unsigned installer on hosted Windows.
-The builder uses pinned mpv/FFmpeg inputs and runs its generated media check before
-packaging; no personal input is accepted. The public v2 installer is built from
+The builder uses pinned mpv/FFmpeg inputs. It compiles the native host, asks the
+existing affected-test runner for baseline and affected native checks, then
+packages the unchanged checked runtime. Baseline checks cover generated media,
+preview and stock-Audacity project interoperability. The native input map lives
+beside the portable map in `scripts/run_affected_tests.py`; an unknown affected
+input, absent check or unavailable desktop stops the build before Inno Setup.
+An explicit comparison base or additional native selection defines scope when
+checkout history is insufficient. The builder adds selected check outcomes and
+runtime hashes to its installer manifest. Native results keep their original
+identities under their existing owner; only the headless fixture uses the
+runner's bounded `BUILD_DIR/_prepackage-results` receipts. Repeating after a failed
+check or packaging interruption reuses applicable acceptance without a workflow
+checkpoint. Changed source/runtime blocks publication of accepted output;
+successful cleanup removes obsolete command-failure reports and pending writes.
+Existing accepted installers retain their original acceptance. No personal input
+is accepted. The public v2 installer is built from
 source `449c06e34f424ca18f876752b1e5bb05c06f10c6`; product main includes that history.
 
 Installation is an explicit selected operation consuming an installer. No new

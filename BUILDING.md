@@ -394,6 +394,23 @@ when that case starts afresh. The fixture producer atomically publishes only
 completed footage and discards its private pending file after interruption.
 `fork-fixtures` checks the encoded picture/audio and repeated/interrupted calls
 without opening AuTopsy; its temporary media is removed after the check.
+The SDLC Windows installer build compiles first, then calls the same affected-test
+runner with `--before-package BUILD_DIR`. Its baseline is `fork-fixtures`,
+`fork-preview` and `fork-project-compatibility`; the native input map adds named
+cases for changed features. `AUTOPSY_TEST_BASE` chooses the comparison revision.
+An unavailable base requires an explicit native scope through the builder's
+`--test-name` option; an unmapped native input or missing named test stops the build.
+That option adds checks and never removes the baseline or known affected cases.
+The native harness reuses its own matching passes without opening another editor.
+Only after the checks pass does Inno Setup stage the same compiled runtime. A
+failed desktop check, unavailable desktop, changed source or changed runtime
+blocks packaging. No installed application is stopped, updated or used as a host.
+`BUILD_DIR/_prepackage-results` belongs to the affected-test runner and stores only
+the headless fixture's bounded immutable receipts; its ordinary startup/completion
+cleanup keeps three outcomes per check and removes abandoned pending writes.
+GUI receipts remain under the existing `_fork-tests/_accepted` owner. The completed
+installer manifest includes the selected checks and runtime hashes; existing
+accepted installers retain their original acceptance without retrospective tests.
 The gesture case waits for the native pane to be enabled, then supplies held
 mouse input only to the owned test window through its normal window procedure.
 The GUI runner selects Windows DISPLAY2 when connected. With several displays

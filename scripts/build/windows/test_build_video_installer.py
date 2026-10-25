@@ -18,6 +18,18 @@ import build_video_installer as builder
 
 
 class InstallerBuildTests(unittest.TestCase):
+    @staticmethod
+    def native_report(build):
+        runtime = build / "Release"
+        runtime.mkdir(exist_ok=True)
+        executable = runtime / "AuTopsy.exe"
+        if not executable.exists():
+            executable.write_bytes(b"checked native host")
+        return {"result": "passed", "scope": "prepackage", "payload_directory": "Release",
+                "payload": {executable.name: builder.sha256(executable)},
+                "checks": [{"name": name, "result": "passed"} for name in (
+                    "fork-fixtures", "fork-preview", "fork-project-compatibility")]}
+
     def test_package_location_does_not_activate_or_follow_native_test_selection(self):
         for _ in range(2):
             with mock.patch.dict(os.environ, {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
@@ -199,7 +211,7 @@ class InstallerBuildTests(unittest.TestCase):
                     process.Close()
 
     def test_repeat_and_interrupt_each_build_command(self):
-        for boundary in range(1, 9):
+        for boundary in range(1, 13):
             for after in (False, True):
                 with self.subTest(boundary=boundary, after=after), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
                     root = Path(temporary)
@@ -228,6 +240,8 @@ class InstallerBuildTests(unittest.TestCase):
                             builder.write_json(package / "_installer-x64.json",
                                                {"filename": name, "sha256": builder.sha256(target)})
                         result = "a" * 40 + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
+                        if "--before-package" in arguments:
+                            result = json.dumps(self.native_report(build))
                         if stop and after:
                             interrupted = True
                             raise InterruptedError("after command")
@@ -261,7 +275,7 @@ class InstallerBuildTests(unittest.TestCase):
 
             def run(arguments, _source, _diagnostics):
                 commands.append(arguments)
-                if "^fork-fixtures$" in arguments:
+                if "--before-package" in arguments:
                     raise RuntimeError("encoded-media check failed")
                 return "a" * 40 + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
 
@@ -273,6 +287,46 @@ class InstallerBuildTests(unittest.TestCase):
                     builder.build_installer(source, build, inno)
             self.assertFalse(any("innosetup" in arguments for arguments in commands))
             self.assertFalse((build / "package/_build-manifest.json").exists())
+
+    def test_desktop_gate_blocks_packaging_on_failure_missing_acceptance_and_changed_payload(self):
+        for fault in ("desktop failure", "missing check", "changed payload", "changed source"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="_gate-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                root = Path(temporary)
+                source, build = root / "source", root / "build"
+                source.mkdir()
+                (source / "CMakeLists.txt").write_text("project(test)")
+                inno = root / "ISCC.exe"
+                inno.write_bytes(b"compiler")
+                commands: list[list[str]] = []
+                checked = False
+
+                def run(arguments, _source, _diagnostics, commands=commands, fault=fault, build=build):
+                    nonlocal checked
+                    commands.append(arguments)
+                    if arguments[1:3] == ["rev-parse", "HEAD"]:
+                        return "a" * 40
+                    if arguments[1:3] == ["diff", "--binary"]:
+                        return "source changed" if checked and fault == "changed source" else ""
+                    if "--before-package" in arguments:
+                        checked = True
+                        if fault == "desktop failure":
+                            raise RuntimeError("GUI input unavailable")
+                        report = self.native_report(build)
+                        if fault == "missing check":
+                            report["checks"].pop()
+                        if fault == "changed payload":
+                            (build / "Release/AuTopsy.exe").write_bytes(b"untested host")
+                        return json.dumps(report)
+                    return ""
+
+                with mock.patch.object(builder, "prepare_sdk", return_value=root), \
+                        mock.patch.object(builder.shutil, "which", return_value="cmake"), \
+                        mock.patch.object(builder, "run_command", side_effect=run), \
+                        mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                    with self.assertRaises(RuntimeError):
+                        builder.build_installer(source, build, inno)
+                self.assertFalse(any("innosetup" in arguments for arguments in commands))
+                self.assertFalse((build / "package/_build-manifest.json").exists())
 
     def test_sdk_publication_survives_process_exit_at_each_file_effect(self):
         with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:

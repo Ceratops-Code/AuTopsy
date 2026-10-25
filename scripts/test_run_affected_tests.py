@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import io
+import itertools
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +23,106 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    @staticmethod
+    def native_catalogue(executable: Path) -> list[dict[str, Any]]:
+        names = set(runner.INSTALLER_BASELINE_TESTS)
+        names.update("fork-" + case for cases, _ in runner.INSTALLER_NATIVE_GROUPS for case in cases)
+        return [{"name": name, "command": [sys.executable, "native.py", "--executable", str(executable),
+                    "--case", name.removeprefix("fork-")]} for name in sorted(names)]
+
+    def test_installer_selection_uses_native_impact_and_rejects_missing_scope(self) -> None:
+        catalogue = self.native_catalogue(Path("AuTopsy.exe"))
+        baseline = set(runner.INSTALLER_BASELINE_TESTS)
+        self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
+        expected = baseline | {"fork-" + name for name in runner.INSTALLER_NATIVE_GROUPS[0][0]}
+        self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
+        self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
+        for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
+                                      ([], "does-not-exist", False), ([], None, True)):
+            with self.subTest(paths=paths, extra=extra, unknown=unknown), self.assertRaises(RuntimeError):
+                runner.select_installer_tests(paths, catalogue, extra, unknown)
+        with self.assertRaisesRegex(RuntimeError, "absent"):
+            runner.select_installer_tests([], [test for test in catalogue if test["name"] != "fork-preview"])
+        self.assertIn("fork-video-crop", runner.select_installer_tests([], catalogue, "^fork-video-crop$", True))
+
+    def test_prepackage_checks_keep_acceptance_across_interruption_and_block_changed_runtime(self) -> None:
+        for target, boundary in itertools.product(("fork-preview", "fork-project-compatibility"),
+                                                  ("before", "after", "changed payload")):
+            with self.subTest(target=target, boundary=boundary), tempfile.TemporaryDirectory(prefix="_prepackage-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                root = Path(temporary)
+                build = root / "build"
+                runtime = build / "Release"
+                runtime.mkdir(parents=True)
+                (build / "_fork-tests").mkdir()
+                executable = runtime / "AuTopsy.exe"
+                executable.write_bytes(b"compiled host")
+                catalogue = [test for test in self.native_catalogue(executable)
+                             if test["name"] in runner.INSTALLER_BASELINE_TESTS]
+                interrupted, fixture_calls = False, 0
+                effects: list[str] = []
+
+                def command(arguments, _root, catalogue=catalogue, target=target, boundary=boundary,
+                            build=build, executable=executable, effects=effects):
+                    nonlocal interrupted, fixture_calls
+                    if "--show-only=json-v1" in arguments:
+                        return json.dumps({"tests": catalogue})
+                    name = next(test["name"] for test in catalogue if re.search(arguments[-1], test["name"]))
+                    if name == "fork-fixtures":
+                        fixture_calls += 1
+                        return ""
+                    if name == target and not interrupted and boundary == "before":
+                        interrupted = True
+                        raise InterruptedError("before native effect")
+                    with redirect_stdout(io.StringIO()):
+                        result = native.run_native_check(build / "_fork-tests", name.removeprefix("fork-"),
+                            lambda: {"executable": runner.file_digest(executable)},
+                            lambda _run, _inputs: effects.append(name) or {"result": "passed"})
+                    if name == target and not interrupted:
+                        interrupted = True
+                        if boundary == "changed payload":
+                            executable.write_bytes(b"different host")
+                            return ""
+                        raise InterruptedError("after native effect")
+                    return "1: " + json.dumps(result) + "\n"
+
+                with patch.object(runner, "run_command", side_effect=command), \
+                        patch.object(runner, "changed_paths", return_value=([], "a" * 40)):
+                    with self.assertRaises((InterruptedError, RuntimeError)):
+                        runner.run_prepackage_checks(root, build, None, None)
+                    executable.write_bytes(b"compiled host")
+                    first = runner.run_prepackage_checks(root, build, None, None)
+                    second = runner.run_prepackage_checks(root, build, None, None)
+                self.assertEqual(first["payload"], second["payload"])
+                self.assertEqual([item.get("acceptance") for item in first["checks"]],
+                                 [item.get("acceptance") for item in second["checks"]])
+                self.assertEqual(fixture_calls, 1)
+                self.assertEqual(sorted(effects), ["fork-preview", "fork-project-compatibility"])
+                self.assertFalse((build / "package").exists())
+
+    def test_prepackage_consumes_nested_native_results_and_rejects_missing_or_conflicting_receipts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="_native-results-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            build = Path(temporary)
+            work = build / "_fork-tests"
+            work.mkdir()
+            children = {}
+            with redirect_stdout(io.StringIO()):
+                for phase in ("application", "stock-audacity"):
+                    children[phase] = native.run_native_check(work, "project-compatibility-" + phase,
+                        lambda: {"work": "same host", "check": "same recipe"},
+                        lambda _run, _inputs: {"result": "passed"})
+            value = {"case": "project-compatibility", "result": "passed", **children}
+            output = "1: " + json.dumps(value) + "\n"
+            test = {"name": "fork-project-compatibility", "command": ["client", "--case", "project-compatibility"]}
+            first = runner.read_native_acceptance(output, test, build)
+            self.assertEqual(len(first["acceptance"]), 2)
+            self.assertEqual(first, runner.read_native_acceptance(output, test, build))
+            for failed_output in ("", "1: {malformed}\n", output + output):
+                with self.subTest(output=failed_output), self.assertRaises(RuntimeError):
+                    runner.read_native_acceptance(failed_output, test, build)
+            children["application"]["original_run"] = "f" * 32
+            with self.assertRaisesRegex(RuntimeError, "disagree"):
+                runner.read_native_acceptance("1: " + json.dumps(value), test, build)
+
     def test_unpainted_track_keeps_original_state_when_optional_capture_fails(self) -> None:
         harness = sys.modules[native.painted_video_tracks.__module__]
         info = {"videoTrackThumbnails": False, "videoTrackRows": [{"dataWidth": 0}],
