@@ -482,10 +482,15 @@ def painted_video_tracks(client):
         ):
             return info
         if time.monotonic() >= deadline:
-            capture_owned_project(
-                int(info["videoTrackPanelHandle"]),
-                Path(os.environ["AUTOPSY_BEHAVIOR_ROOT"]) / "_unpainted-video.png",
-            )
+            try:
+                capture_owned_project(
+                    int(info["videoTrackPanelHandle"]),
+                    Path(os.environ["AUTOPSY_BEHAVIOR_ROOT"]) / "_unpainted-video.png",
+                )
+            except Exception as error:
+                # Optional image capture must not replace the observed pane
+                # failure with a missing-package or screenshot-process error.
+                raise AssertionError({**info, "screenshot_error": f"{type(error).__name__}: {error}"}) from error
             raise AssertionError(info)
         time.sleep(0.1)
 

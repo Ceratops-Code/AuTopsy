@@ -419,6 +419,8 @@ Unreadable display information stops the test before placement; the app log
 keeps the monitor query's failure details. `fork-worker-lifecycle` checks that
 app failure stops its worker promptly, preserves both streams, and releases
 the owned child. Its temporary fixtures are removed after each check.
+Unpainted-track failures retain their original pane state even when optional
+screenshot capture fails; the capture error accompanies that state.
 The runner owns its marked case directories and shared preview cache under
 the selected test work root. Fresh runs replace case scratch data. Completed
 result records retain their original run, executable and check identities in

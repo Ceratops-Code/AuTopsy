@@ -20,6 +20,23 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_unpainted_track_keeps_original_state_when_optional_capture_fails(self) -> None:
+        harness = sys.modules[native.painted_video_tracks.__module__]
+        info = {"videoTrackThumbnails": False, "videoTrackRows": [{"dataWidth": 0}],
+                "videoTrackPanelHandle": 123}
+        client = SimpleNamespace(data=lambda command: info)
+        for failure in (ModuleNotFoundError("PIL"), OSError("capture interrupted")):
+            with self.subTest(failure=str(failure)), patch.dict(os.environ, {"AUTOPSY_BEHAVIOR_ROOT": "."}), \
+                    patch.object(harness.time, "monotonic", side_effect=[0, 6]), \
+                    patch.object(harness, "capture_owned_project", side_effect=failure) as capture:
+                with self.assertRaises(AssertionError) as observed:
+                    harness.painted_video_tracks(client)
+                details = observed.exception.args[0]
+                self.assertFalse(details["videoTrackThumbnails"])
+                self.assertEqual(details["videoTrackRows"], info["videoTrackRows"])
+                self.assertIn(str(failure), details["screenshot_error"])
+                self.assertEqual(capture.call_count, 1)
+
     def test_renumbered_displays_never_select_the_primary_screen(self) -> None:
         primary = {"device": r"\\.\DISPLAY10", "primary": True, "work": [0, 0, 1280, 672]}
         secondary = {"device": r"\\.\DISPLAY11", "primary": False, "work": [-1280, 113, 0, 785]}
