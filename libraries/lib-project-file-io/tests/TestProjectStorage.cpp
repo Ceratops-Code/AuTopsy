@@ -555,9 +555,22 @@ TEST_CASE("Private save barriers repeat both boundaries and remove completed sig
       const bool observed = std::filesystem::exists(test.audio / "_save_boundary_ready");
       // Always release before assertions, so a failed observation cannot strand
       // its worker or the SQLite handle that the fixture must close.
-      std::ofstream(test.audio / "_save_boundary_release") << "continue";
+      // Publish only a closed file: Windows refuses the worker's removal while
+      // the writer still owns its handle. A pending file is never a signal.
+      const auto pending = test.audio / "_save_boundary_release.pending";
+      std::ofstream signal(pending, std::ios::binary);
+      signal << "continue";
+      signal.flush();
+      const bool waitingForPublication =
+         worker.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout;
+      signal.close();
+      if (!signal)
+         throw std::runtime_error("Cannot write the private save release signal.");
+      std::filesystem::rename(pending, test.audio / "_save_boundary_release");
       worker.get();
       REQUIRE(observed);
+      REQUIRE(waitingForPublication);
+      REQUIRE_FALSE(std::filesystem::exists(pending));
       REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_ready"));
       REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_arm"));
       REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_release"));
