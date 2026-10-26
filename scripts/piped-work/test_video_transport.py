@@ -18,6 +18,21 @@ from run_fork_test_harness import (
 )
 
 
+def check_preview_close(client, root):
+    """Close projects before/during/after queued preview creation, then exit."""
+    client.send("New")
+    client.file("ImportVideo", root / "source.mp4")
+    project = root / "_preview-close.aup3"
+    client.file("SaveProject2", project)
+    client.send("Close")
+    for pause in (0, 0.025, 0.12)*6:
+        client.file("OpenProject2", project)
+        if pause:
+            time.sleep(pause)
+        # No readiness query may serialize away the queued load/close boundary.
+        client.send("Close")
+
+
 def crop_pixel_counts(rgb):
     """Classify decoded/captured fixture pixels; no source-text assumptions."""
     counts = {"red": 0, "green": 0, "blue": 0, "white": 0, "purple": 0}

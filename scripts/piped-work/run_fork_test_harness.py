@@ -21,6 +21,61 @@ from run_audacity_consumer import (
 )
 
 
+class NativeCrashDebugger:
+    """Optional CDB attachment to the caller's private app PID, with one log.
+
+    The caller must stop its app before close. A failed app keeps at most 256 KiB
+    of this case's current trace; normal exit removes it. No system debugger or
+    registry setting is changed, and no other process name is used for selection.
+    """
+
+    def __init__(self, app, root):
+        self.app, self.process, self.stream = app, None, None
+        self.path = root / "_native-debugger.log"
+        selected = os.environ.get("AUTOPSY_TEST_NATIVE_DEBUGGER")
+        if not selected:
+            return
+        executable = Path(selected).resolve(strict=True)
+        if executable.name.casefold() != "cdb.exe" or app.poll() is not None:
+            raise RuntimeError("Native crash tracing requires CDB and a live private test app.")
+        action = ".ecxr; kv 40; .detach; q"
+        commands = "; ".join(f'sxe -c "{action}" {kind}' for kind in ("av", "sov", "ii", "dz")) + "; g"
+        command = [str(executable), "-p", str(app.pid), "-g", "-G", "-lines", "-c", commands]
+        self.stream = self.path.open("wb")
+        try:
+            self.process = subprocess.Popen(command, stdout=self.stream, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except BaseException as error:
+            self.stream.close()
+            self.stream = None
+            self.path.unlink(missing_ok=True)
+            raise RuntimeError(f"Starting native crash trace: {subprocess.list2cmdline(command)}\n"
+                f"Exit: <not started>\nstdout: <absent>\nstderr: {error}") from error
+
+    def close(self):
+        if self.stream is None:
+            return
+        if self.app.poll() is None:
+            raise RuntimeError("Stop the private app before closing its debugger.")
+        assert self.process is not None
+        try:
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+        finally:
+            self.stream.close()
+            self.stream = None
+        if self.app.returncode == 0:
+            self.path.unlink(missing_ok=True)
+        elif self.path.stat().st_size > 262144:
+            with self.path.open("rb") as source:
+                source.seek(-262144, 2)
+                tail = source.read()
+            self.path.write_bytes(tail)
+
+
 def write_neutral_preview_video(ffmpeg, output):
     """Create a 16-second synthetic picture/tone in a caller-owned test directory.
 

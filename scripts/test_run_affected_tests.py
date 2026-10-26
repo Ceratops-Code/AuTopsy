@@ -14,7 +14,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import run_affected_tests as runner
 
@@ -23,6 +23,63 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_native_crash_trace_owns_only_its_app_and_bounded_log(self) -> None:
+        import run_fork_test_harness as harness
+
+        for status in (0, 9):
+            with self.subTest(status=status), tempfile.TemporaryDirectory(prefix="_crash-trace-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                root = Path(temporary)
+                cdb = root / "cdb.exe"
+                cdb.write_bytes(b"fake debugger, never executed")
+                state = {"running": True}
+                app = SimpleNamespace(pid=719, returncode=status,
+                    poll=lambda state=state, status=status: None if state["running"] else status)
+                child = Mock()
+                child.wait.side_effect = [subprocess.TimeoutExpired([str(cdb)], 5), 0]
+
+                def launch(command: list[str], child: Any = child, **kwargs: Any) -> Any:
+                    self.assertEqual(command[command.index("-p")+1], "719")
+                    kwargs["stdout"].write(b"x"*300000)
+                    return child
+
+                with patch.dict(os.environ, {"AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
+                        patch.object(harness.subprocess, "Popen", side_effect=launch):
+                    trace = harness.NativeCrashDebugger(app, root)
+                    with self.assertRaisesRegex(RuntimeError, "Stop the private app"):
+                        trace.close()
+                    state["running"] = False
+                    trace.close()
+                    trace.close()
+                child.terminate.assert_called_once()
+                log = root / "_native-debugger.log"
+                if status:
+                    self.assertEqual(log.stat().st_size, 262144)
+                else:
+                    self.assertFalse(log.exists())
+
+    def test_native_crash_trace_failure_before_launch_removes_empty_output(self) -> None:
+        import run_fork_test_harness as harness
+
+        with tempfile.TemporaryDirectory(prefix="_crash-trace-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            cdb = root / "cdb.exe"
+            cdb.write_bytes(b"not an executable")
+            app = SimpleNamespace(pid=719, poll=lambda: None)
+            for _ in range(2):
+                with patch.dict(os.environ, {"AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
+                        patch.object(harness.subprocess, "Popen", side_effect=OSError("test startup failure")), \
+                        self.assertRaisesRegex(RuntimeError, "Exit: <not started>"):
+                    harness.NativeCrashDebugger(app, root)
+                self.assertFalse((root / "_native-debugger.log").exists())
+
+    def test_debugger_scope_and_new_capture_check_versions_keep_distinct_acceptance(self) -> None:
+        original = {"executable_sha256": "app", "script_module_sha256": "pipe", "payload_dependencies": {},
+                    "execution_scope": {"platform": "test"}, "video_recording_sha256": "old check"}
+        changed_check = dict(original, video_recording_sha256="new check")
+        self.assertEqual(native.native_work_scope(original), native.native_work_scope(changed_check))
+        debugged = dict(original, execution_scope={"platform": "test", "native_debugger_sha256": "debugger"})
+        self.assertNotEqual(native.native_work_scope(original), native.native_work_scope(debugged))
+
     def test_display_probe_repeats_and_stops_at_each_window_effect_boundary(self) -> None:
         import ctypes
         from ctypes import wintypes as w
@@ -408,7 +465,7 @@ class SelectionTests(unittest.TestCase):
         baseline = set(runner.INSTALLER_BASELINE_TESTS)
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
-                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak",
+                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
                                "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
                                "fork-video-recording-controls"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)

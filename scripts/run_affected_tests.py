@@ -155,7 +155,7 @@ INSTALLER_NATIVE_GROUPS = (
         "src/clip-groups/GroupAudioClips.*", "src/clip-groups/LinkMediaClips.*",
         "src/tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp",
         "scripts/piped-work/test_beginner_edits.py")),
-    (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport", "preview-soak"), (
+    (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport", "preview-soak", "video-preview-close"), (
         "src/video/ShowVideoPreview.cpp", "src/video/PlayVideoMedia.*", "src/video/PrepareVideoPreview.*",
         "src/video/ChoosePreviewQuality.*", "src/video/SyncVideoPlayback.*",
         "scripts/piped-work/test_preview_controls.py")),

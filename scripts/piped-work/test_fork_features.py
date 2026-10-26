@@ -36,6 +36,7 @@ from run_audacity_consumer import (
     startup_window_messages,
 )
 from run_fork_test_harness import (
+    NativeCrashDebugger,
     ScriptClient,
     assert_owned_test_display,
     capture_owned_project,
@@ -95,6 +96,7 @@ from test_video_recording import (
     check_video_recording_stop,
 )
 from test_video_transport import (
+    check_preview_close,
     check_preview_navigation,
     check_transport_toolbar,
     check_video_transport,
@@ -1017,6 +1019,8 @@ def worker(args, root):
         check_audio_clip_actions(client, root, args.ffmpeg)
     elif args.case == "clip-selection":
         check_clip_selection(client, root)
+    elif args.case == "video-preview-close":
+        check_preview_close(client, root)
     elif args.case == "video-audio-parity":
         check_video_audio_edit_parity(client, root)
     elif args.case == "video-recording":
@@ -1216,7 +1220,7 @@ def native_test_inputs(args, executable, module, display):
                       for name in ("ffmpeg", "ffprobe") if (value := getattr(args, name))},
         },
     }
-    if args.case in ("video-audio-parity", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
+    if args.case in ("video-preview-close", "video-audio-parity", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
@@ -1255,6 +1259,8 @@ def native_test_inputs(args, executable, module, display):
     if args.case == "video-encoder-boundaries":
         from test_video_export_timing import video_hardware_scope
         inputs["execution_scope"]["video_hardware"] = video_hardware_scope()
+    if debugger := os.environ.get("AUTOPSY_TEST_NATIVE_DEBUGGER"):
+        inputs["execution_scope"]["native_debugger_sha256"] = sha(Path(debugger).resolve(strict=True))
     return inputs
 
 
@@ -1317,7 +1323,8 @@ def native_work_scope(inputs):
         return None
     check_fields = {"check_sha256", "harness_sha256", "pipe_client_sha256", "shared_process_checks",
         "clip_edits_sha256", "clip_actions_sha256", "track_groups_sha256", "clip_selection_sha256",
-        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256", "video_transport_sha256"}
+        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256", "video_transport_sha256",
+        "video_recording_sha256"}
     return {name: value for name, value in inputs.items() if name not in check_fields}
 
 
@@ -1459,6 +1466,7 @@ MODULE_REGISTERED_NATIVE_CASES = ("track-groups",)
 NATIVE_CASES = (
     *VIDEO_RECORDING_CASES,
     "video-audio-parity",
+    "video-preview-close",
     *BEGINNER_VIDEO_CASES,
     "display-guard",
     "groups",
@@ -1595,7 +1603,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-audio-parity", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-preview-close", "video-audio-parity", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,
@@ -1719,6 +1727,7 @@ def main():
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
+            debugger = None
             try:
                 if args.reject_display:
                     status = app.wait(timeout=30)
@@ -1850,6 +1859,7 @@ def main():
                         restart_recording_app, lambda: remove_private_capture_audio(root, process_stopped=True))
                     result = None  # Fault journeys checked each real child result.
                 else:
+                    debugger = NativeCrashDebugger(app, root)
                     result = run_behavior_worker(worker_command, environment, app, root,
                         timeout_seconds=285 if args.case == "preview-soak" else 240)
                 if result is not None and result.returncode:
@@ -1866,7 +1876,16 @@ def main():
                         "Owned app did not exit; " + startup_window_messages(app.pid)
                     ) from error
                 if status:
-                    raise RuntimeError(f"The owned app exited with status {status}.")
+                    if debugger:
+                        debugger.close()
+                    log.flush()
+                    trace = root / "_native-debugger.log"
+                    raise RuntimeError(f"The owned app exited with status {status}.\n"
+                        f"Command: {subprocess.list2cmdline(worker_command)}\n"
+                        f"Worker stdout:\n{result.stdout[-8000:] if result and result.stdout else '<absent>'}\n"
+                        f"Worker stderr:\n{result.stderr if result and result.stderr else '<absent>'}\n"
+                        f"App output:\n{(root / '_app.log').read_text(encoding='utf-8', errors='replace')[-8000:]}\n"
+                        f"Native crash trace: {trace if trace.is_file() else '<absent>'}")
                 log.flush()
                 shows = re.findall(
                     r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
@@ -1908,6 +1927,8 @@ def main():
                 if app.poll() is None:
                     app.terminate()
                     app.wait(timeout=20)
+                if debugger:
+                    debugger.close()
                 if args.case in RECORDING_CASES:
                     remove_private_capture_audio(root, process_stopped=app.poll() is not None)
                 if profile_owner.is_file() and profile_owner.read_text() == str(

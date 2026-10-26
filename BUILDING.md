@@ -750,6 +750,11 @@ Split Cut, Trim and Duplicate, with linked and unlinked media, repeated edits,
 Undo/Redo and save/reopen. Its mixed-media Join case checks both track types and
 movement of the resulting linked soundtrack.
 Native adapter inputs are reported separately, without implying desktop acceptance.
+For a failed private-process case, `AUTOPSY_TEST_NATIVE_DEBUGGER` can name an
+existing Microsoft `cdb.exe`. The harness attaches only to that case's exact PID,
+records crash stacks in its bounded `_native-debugger.log`, and removes the log
+after normal app exit. Debugger-assisted checks have a separate execution scope;
+they cannot supply an ordinary candidate's desktop acceptance.
 An explicitly scoped native session runs only its selected compiled host cases;
 it never records portable passes against core binaries that session did not build.
 
