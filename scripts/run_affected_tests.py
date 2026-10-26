@@ -160,7 +160,7 @@ INSTALLER_NATIVE_GROUPS = (
         "src/video/ChoosePreviewQuality.*", "src/video/SyncVideoPlayback.*",
         "scripts/piped-work/test_preview_controls.py")),
     (("video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges",
-      "video-clip-edits", "video-linked-clip-edits", "video-clipboard", "clip-selection", "video-audio-parity"), (
+      "video-clip-edits", "video-linked-clip-edits", "video-clipboard", "clip-selection", "video-audio-parity", "video-audio-join-links"), (
         "src/video/EditVideoTimeline.*", "src/video/CreateVideoTrack.*", "src/video/ShowVideoTrack.*",
         "src/video/PlanVideoEdits.*", "src/video/EditVideoContent.*", "src/video/JoinVideoClips.*",
         "src/clip-groups/SelectMediaClips.*", "src/clip-groups/LinkMediaClips.*",

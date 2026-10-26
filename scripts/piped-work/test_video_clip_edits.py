@@ -25,35 +25,38 @@ from test_video_transport import (
 )
 
 
+def assert_matching_occupied_media_ranges(picture, audio):
+
+    def occupied(rows):
+        tracks: dict[int, list[tuple[float, float]]] = {}
+        for row in rows:
+            tracks.setdefault(row["track"], []).append((row["start"], row["end"]))
+        result = []
+        for intervals in tracks.values():
+            merged: list[tuple[float, float]] = []
+            for start, end in sorted(intervals):
+                if merged and start <= merged[-1][1] + 0.0001:
+                    merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                else:
+                    merged.append((start, end))
+            result.append(merged)
+        return sorted(result)
+
+    video_ranges, audio_ranges = occupied(picture), occupied(audio)
+    assert len(video_ranges) == len(audio_ranges), (picture, audio)
+    for video, sound in zip(video_ranges, audio_ranges, strict=True):
+        assert len(video) == len(sound), (picture, audio)
+        assert all(abs(v-s) < 0.05 for a, b in zip(video, sound, strict=True)
+                   for v, s in zip(a, b, strict=True)), (picture, audio)
+
+
 def check_video_audio_edit_parity(client, root):
     """Compare native range edits on linked and unlinked picture/sound tracks."""
     def model():
         return clip_rows(client), client.data("GetInfo: Type=Clips Format=JSON")
 
     def matching_occupied_ranges():
-        picture, audio = model()
-
-        def occupied(rows):
-            tracks: dict[int, list[tuple[float, float]]] = {}
-            for row in rows:
-                tracks.setdefault(row["track"], []).append((row["start"], row["end"]))
-            result = []
-            for intervals in tracks.values():
-                merged: list[tuple[float, float]] = []
-                for start, end in sorted(intervals):
-                    if merged and start <= merged[-1][1] + 0.0001:
-                        merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
-                    else:
-                        merged.append((start, end))
-                result.append(merged)
-            return sorted(result)
-
-        video_ranges, audio_ranges = occupied(picture), occupied(audio)
-        assert len(video_ranges) == len(audio_ranges), (picture, audio)
-        for video, sound in zip(video_ranges, audio_ranges, strict=True):
-            assert len(video) == len(sound), (picture, audio)
-            assert all(abs(v-s) < 0.05 for a, b in zip(video, sound, strict=True)
-                       for v, s in zip(a, b, strict=True)), (picture, audio)
+        assert_matching_occupied_media_ranges(*model())
 
     for linked in (False, True):
         client.send("New")
@@ -110,6 +113,15 @@ def check_video_audio_edit_parity(client, root):
         assert model() == joined
         client.send("Close")
 
+
+def check_audio_join_links(client, root):
+    """Join audio while keeping every existing picture/sound partner attached."""
+    def model():
+        return clip_rows(client), client.data("GetInfo: Type=Clips Format=JSON")
+
+    def matching_occupied_ranges():
+        assert_matching_occupied_media_ranges(*model())
+
     # An audio-only join must keep unchanged picture and all original partners,
     # including an audio tail outside the range and unselected linked tracks.
     for compound, extra_partner, only_audio in ((False, False, False), (True, False, False),
@@ -158,6 +170,8 @@ def check_video_audio_edit_parity(client, root):
         assert model() == joined
         client.send("Redo")
         assert model() == moved
+        client.send("Undo")
+        assert model() == joined
         client.send("Close")
 
     # Two different soundtrack tracks can be linked to different pieces of one

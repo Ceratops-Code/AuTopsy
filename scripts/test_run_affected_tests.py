@@ -509,6 +509,8 @@ class SelectionTests(unittest.TestCase):
         catalogue = self.native_catalogue(Path("AuTopsy.exe"))
         baseline = set(runner.INSTALLER_BASELINE_TESTS)
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
+        self.assertIn("fork-video-audio-join-links", runner.select_installer_tests(
+            ["src/clip-groups/LinkMediaClips.cpp"], catalogue))
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
                                "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
                                "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",

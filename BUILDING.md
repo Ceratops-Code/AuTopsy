@@ -749,7 +749,7 @@ choices and cancels twice without recording or changing the project.
 Split Cut, Trim and Duplicate, with linked and unlinked media, repeated edits,
 Undo/Redo and save/reopen. Its mixed-media Join case checks both track types and
 movement of the resulting linked soundtrack.
-The same case joins audio beneath unchanged plain/compound picture, preserves
+`fork-video-audio-join-links` joins audio beneath unchanged plain/compound picture, preserves
 linked partners outside the range and on unselected tracks, and repeats those
 edits through Undo/Redo and save/reopen. Capture-model cases keep inactive
 virtual cameras in the camera choices while excluding known audio inputs.

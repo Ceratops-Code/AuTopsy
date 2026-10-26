@@ -78,6 +78,7 @@ from test_preview_controls import (
 )
 from test_track_groups import check_track_groups
 from test_video_clip_edits import (
+    check_audio_join_links,
     check_split_video_edges,
     check_video_audio_edit_parity,
     check_video_clip_mute,
@@ -1023,6 +1024,8 @@ def worker(args, root):
         check_preview_close(client, root)
     elif args.case == "video-audio-parity":
         check_video_audio_edit_parity(client, root)
+    elif args.case == "video-audio-join-links":
+        check_audio_join_links(client, root)
     elif args.case == "video-recording":
         check_video_recording(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-recording-stop":
@@ -1220,7 +1223,7 @@ def native_test_inputs(args, executable, module, display):
                       for name in ("ffmpeg", "ffprobe") if (value := getattr(args, name))},
         },
     }
-    if args.case in ("video-preview-close", "video-audio-parity", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
+    if args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
@@ -1504,6 +1507,7 @@ MODULE_REGISTERED_NATIVE_CASES = ("track-groups",)
 NATIVE_CASES = (
     *VIDEO_RECORDING_CASES,
     "video-audio-parity",
+    "video-audio-join-links",
     "video-preview-close",
     *BEGINNER_VIDEO_CASES,
     "display-guard",
@@ -1642,7 +1646,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-preview-close", "video-audio-parity", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,
