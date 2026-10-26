@@ -326,11 +326,14 @@ def assert_owned_test_display(pid, include_window=None):
     """Check the child's windows before input/capture; never move another process."""
     from ctypes import wintypes as w
 
-    target = select_test_display(connected_test_displays())
-    if target["device"] != os.environ["AUTOPSY_TEST_DISPLAY"]:
-        raise RuntimeError(
-            "The selected test display disconnected or its identity changed."
-        )
+    deadline = time.monotonic() + 2
+    while True:
+        target = select_test_display(connected_test_displays())
+        if target["device"] == os.environ["AUTOPSY_TEST_DISPLAY"]:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError("The selected test display disconnected or its identity changed.")
+        time.sleep(0.02)  # No input/capture occurs until the same device returns.
     user = ctypes.WinDLL("user32", use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
     user.EnumWindows.argtypes = [callback_type, w.LPARAM]

@@ -23,6 +23,31 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_owned_display_waits_for_same_device_and_stops_before_effects(self) -> None:
+        import ctypes
+
+        import run_fork_test_harness as harness
+
+        first = {"device": "first", "primary": True, "work": [0, 0, 1920, 1040]}
+        second = {"device": r"\\.\DISPLAY2", "primary": False, "work": [-1920, 0, 0, 1040]}
+        api = Mock()
+        for _ in range(2):
+            with patch.dict(os.environ, {"AUTOPSY_TEST_DISPLAY": second["device"]}), \
+                    patch.object(harness, "connected_test_displays", side_effect=[[first], [first, second]]), \
+                    patch.object(harness.time, "monotonic", side_effect=[0, 0.5]), \
+                    patch.object(harness.time, "sleep") as sleep, \
+                    patch.object(ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE, create=True):
+                self.assertEqual(harness.assert_owned_test_display(721), [])
+                sleep.assert_called_once_with(0.02)
+            with patch.dict(os.environ, {"AUTOPSY_TEST_DISPLAY": second["device"]}), \
+                    patch.object(harness, "connected_test_displays", return_value=[first]), \
+                    patch.object(harness.time, "monotonic", side_effect=[0, 3]), \
+                    patch.object(ctypes, "WinDLL", create=True) as windows, \
+                    self.assertRaisesRegex(RuntimeError, "disconnected"):
+                harness.assert_owned_test_display(721)
+            windows.assert_not_called()
+
     def test_gui_session_preflight_repeats_and_releases_its_query_buffer(self) -> None:
         import ctypes
         import struct

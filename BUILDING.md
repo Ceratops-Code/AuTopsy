@@ -468,6 +468,8 @@ as identity. Ordinary placements reuse the live handle. The guard never
 falls back to screen 1. Private test windows use wx's
 stay-on-top style so the host retains their exposure during activation; the
 runner also checks the window under the target point before sending input.
+That controller check also waits at most two seconds for the selected device to
+return, before querying owned windows or sending input/capturing pixels.
 Its held mouse button is released even when the owned window disappears.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
