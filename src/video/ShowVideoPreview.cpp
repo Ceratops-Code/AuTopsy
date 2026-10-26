@@ -1027,7 +1027,7 @@ MenuRegistry::AttachedItem sVideoPreviewInfo{
    wxT("Optional/Extra/Part2/Scriptables2")
 };
 
-bool ImportVideo(const CommandContext &context, const wxString &path)
+bool ImportVideo(const CommandContext &context, const wxString &path, double projectStart = 0)
 {
    auto &project = context.project;
    if (!wxFileExists(path)) {
@@ -1045,11 +1045,15 @@ bool ImportVideo(const CommandContext &context, const wxString &path)
        auto timeline = VideoTimeline::CreateVideoTimeline(Utf8(path),
           candidate->GetVideoDuration(), candidate->GetVideoFrameRate(),
           candidate->GetVideoSourceWidth(), candidate->GetVideoSourceHeight());
+       if (!std::isfinite(projectStart) || projectStart < 0 ||
+           projectStart + candidate->GetVideoDuration() > 100000000)
+          throw std::runtime_error("The recording has no usable project position.");
+       for (auto &clip : timeline.clips) clip.start += projectStart;
        const auto hasAudio = candidate->HasAudio();
        auto pictureTrack = VideoTimeline::CreateProjectVideoTrack(project, nullptr, false, false,
           std::move(timeline),wxFileName(path).GetName() + _(" Video"));
        try {
-          ClipGroups::ScopedVideoAudioImportLinks links{project, *pictureTrack};
+           ClipGroups::ScopedVideoAudioImportLinks links{project, *pictureTrack, projectStart};
           // Attach picture before the native audio importer records its Undo
           // state, so a successful import is one complete audio/video action.
           if (hasAudio && !ProjectFileManager::Get(project).ImportVideoAudio(path)) {
@@ -1240,6 +1244,9 @@ AttachedItem sStepVideoFrameScripting{
 };
 
 } // namespace
+
+bool VideoTimeline::ImportRecordedVideoAtCursor(AudacityProject &project, const wxString &path, double projectStart)
+{ return ImportVideo(CommandContext{project}, path, projectStart); }
 
 void VideoTimeline::ShowProjectVideoPreview(AudacityProject &project, bool raise)
 {

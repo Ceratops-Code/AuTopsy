@@ -53,6 +53,8 @@ GROUPS = (
         "project-storage-test"),
     CheckGroup("cursor-recording", ("src/recording/PlanCursorRecording.*",
         "src/recording/TestCursorRecording.cpp", "src/recording/CMakeLists.txt"), "cursor-recording-test"),
+    CheckGroup("video-recording", ("src/recording/PlanVideoRecording.*",
+        "src/recording/TestVideoRecording.cpp", "src/recording/CMakeLists.txt"), "video-recording-test"),
     CheckGroup("track-groups", ("src/track-groups/EditTrackGroups.*", "src/track-groups/RenderGroupWaveform.*",
         "src/track-groups/TestTrackGroups.cpp", "src/track-groups/CMakeLists.txt"), "track-groups-test"),
     CheckGroup("video-playback", TIMELINE_INPUTS + (
@@ -90,6 +92,7 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/recording/RecordVideoInput.*", "scripts/piped-work/test_video_recording.py",
     "libraries/lib-project-file-io/ProjectFileIO.cpp",
     "src/recording/CreateCursorCapture.*",
     "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*",
@@ -138,6 +141,9 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("video-recording", "video-recording-stop", "video-recording-failures", "video-recording-controls"), ("src/recording/*VideoRecording*", "src/recording/RecordVideoInput.*",
+        "src/video/ExportVideoMix.*", "src/video/ShowVideoPreview.cpp", "src/clip-groups/LinkMediaClips.*",
+        "scripts/piped-work/test_video_recording.py")),
     (("display-guard",), ("modules/scripting/mod-script-pipe/ScripterCallback.cpp",)),
     (("clip-snapping",), ("src/tracks/ui/TimeShiftHandle.*", "src/clip-groups/EditClipPlacement.*")),
     (("video-fades", "preview-quality", "video-export-timing"), (
@@ -154,7 +160,7 @@ INSTALLER_NATIVE_GROUPS = (
         "src/video/ChoosePreviewQuality.*", "src/video/SyncVideoPlayback.*",
         "scripts/piped-work/test_preview_controls.py")),
     (("video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges",
-      "video-clip-edits", "video-linked-clip-edits", "video-clipboard", "clip-selection"), (
+      "video-clip-edits", "video-linked-clip-edits", "video-clipboard", "clip-selection", "video-audio-parity"), (
         "src/video/EditVideoTimeline.*", "src/video/CreateVideoTrack.*", "src/video/ShowVideoTrack.*",
         "src/video/PlanVideoEdits.*", "src/video/EditVideoContent.*", "src/video/JoinVideoClips.*",
         "src/clip-groups/SelectMediaClips.*", "src/clip-groups/LinkMediaClips.*",
@@ -169,6 +175,7 @@ INSTALLER_NATIVE_GROUPS = (
         "src/export/ExportAudioDialog.*", "src/tracks/ui/EditCursorOverlay.cpp",
         "src/tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp",
         "src/tracks/playabletrack/wavetrack/ui/WaveClipUIUtilities.cpp",
+        "src/tracks/ui/BackgroundCell.cpp",
         "scripts/piped-work/test_clip_actions.py", "scripts/piped-work/test_video_export_timing.py")),
     (("tracks", "groups", "video-track-menu", "media"), (
         "src/track-groups/*", "src/clip-groups/GroupAudioClips.*", "src/clip-groups/EditClipMarkers.*",

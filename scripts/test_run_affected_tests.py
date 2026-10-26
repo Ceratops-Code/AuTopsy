@@ -408,7 +408,9 @@ class SelectionTests(unittest.TestCase):
         baseline = set(runner.INSTALLER_BASELINE_TESTS)
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
-                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak"}
+                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak",
+                               "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
+                               "fork-video-recording-controls"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
@@ -627,6 +629,14 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(self.names([path]), {"cursor-recording"})
         for path in ("src/clip-groups/OpenClipActions.cpp", "src/ProjectAudioManager.cpp",
                      "src/tracks/ui/EditCursorOverlay.cpp", "scripts/piped-work/test_clip_actions.py"):
+            groups, native = runner.select_groups([path])
+            self.assertEqual(groups, [])
+            self.assertEqual(native, [path])
+
+    def test_video_recording_policy_and_capture_adapters_have_separate_scopes(self) -> None:
+        for path in ("src/recording/PlanVideoRecording.cpp", "src/recording/TestVideoRecording.cpp"):
+            self.assertEqual(self.names([path]), {"video-recording"})
+        for path in ("src/recording/RecordVideoInput.cpp", "scripts/piped-work/test_video_recording.py"):
             groups, native = runner.select_groups([path])
             self.assertEqual(groups, [])
             self.assertEqual(native, [path])

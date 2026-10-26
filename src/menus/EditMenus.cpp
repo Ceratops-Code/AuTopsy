@@ -1079,8 +1079,7 @@ void OnJoin(const CommandContext &context)
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
    for (auto *track : VideoTimeline::ProjectVideoTracks(project)) if (track->GetSelected()) {
       try {
-         VideoTimeline::EditSelectedVideoStructure(project, VideoEditing::VideoEditKind::JoinClips,
-            selectedRegion.t0(), selectedRegion.t1());
+         ClipGroups::JoinSelectedMediaClips(project, selectedRegion.t0(), selectedRegion.t1());
       }
       catch (const std::exception &error) {
          AudacityMessageBox(Verbatim(wxString::FromUTF8(error.what())), XO("Video Clips"));
@@ -1306,7 +1305,7 @@ auto EditMenu()
                      Options{ wxT("Ctrl+Alt+X") } ),
                   /* i18n-hint: (verb) Do a special kind of DELETE*/
                   Command( wxT("RippleDelete"), XXO("Ripple Delete (Close Gap)"), OnRippleDelete,
-                     NotBusyTimeAndTracksFlags ),
+                      NotBusyTimeAndTracksFlags, Options{ wxT("Ctrl+Delete") } ),
                   Command( wxT("SplitDelete"), XXO("&Delete and leave gap"), OnSplitDelete,
                      NotBusyTimeAndTracksFlags,
                      Options{ wxT("Ctrl+Alt+K") } )

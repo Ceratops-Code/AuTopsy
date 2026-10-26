@@ -641,10 +641,12 @@ def operate_owned_video_track(
     """
     if end_time is None:
         end_time = start_time
-    if gesture not in ("drag", "click", "double-click", "context"):
+    if gesture not in ("drag", "click", "double-click", "context", "key"):
         raise ValueError("Unknown native video gesture: " + gesture)
-    if control and gesture not in ("click", "drag"):
-        raise ValueError("Ctrl is supported for clip clicks and time-locked drags.")
+    if control and gesture not in ("click", "drag", "key"):
+        raise ValueError("Ctrl is supported for clip clicks, time-locked drags and pane keys.")
+    if gesture == "key" and key is None:
+        raise ValueError("A pane-key gesture requires its virtual key.")
     if alt and gesture != "drag":
         raise ValueError("Alt is supported only for unsnapped clip drags.")
     user = ctypes.WinDLL("user32", use_last_error=True)
@@ -1061,7 +1063,7 @@ def operate_owned_video_track(
                     raise RuntimeError(f"Right-click did not open an owned native popup menu: flags={state.flags}; root={root}; foreground={user.GetForegroundWindow()}; point={(point.x, point.y)}; hit={user.WindowFromPoint(point)}; panel={panel}.")
                 time.sleep(0.01)
             choose_popup_path()
-        else:
+        elif gesture != "key":
             for _ in range(2 if gesture == "double-click" else 1):
                 button(2)
                 pressed = True
@@ -1131,6 +1133,11 @@ def operate_owned_video_track(
                     time.sleep(0.01)
                 time.sleep(0.06)
         if key is not None:
+            if gesture == "key":
+                state = Gui()
+                state.size = ctypes.sizeof(state)
+                if not user.GetGUIThreadInfo(thread, ctypes.byref(state)) or state.focus != panel:
+                    raise RuntimeError("The owned pane must have keyboard focus before sending a selection key.")
             keyboard(key)
 
     finally:

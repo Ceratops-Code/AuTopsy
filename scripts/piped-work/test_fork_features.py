@@ -78,6 +78,7 @@ from test_preview_controls import (
 from test_track_groups import check_track_groups
 from test_video_clip_edits import (
     check_split_video_edges,
+    check_video_audio_edit_parity,
     check_video_clip_mute,
     check_video_clip_structure,
     check_video_compound_render,
@@ -86,6 +87,13 @@ from test_video_clip_edits import (
     check_video_visibility,
 )
 from test_video_export_timing import check_video_export_timing
+from test_video_recording import (
+    VIDEO_RECORDING_CASES,
+    check_video_recording,
+    check_video_recording_controls,
+    check_video_recording_failures,
+    check_video_recording_stop,
+)
 from test_video_transport import (
     check_preview_navigation,
     check_transport_toolbar,
@@ -1009,6 +1017,16 @@ def worker(args, root):
         check_audio_clip_actions(client, root, args.ffmpeg)
     elif args.case == "clip-selection":
         check_clip_selection(client, root)
+    elif args.case == "video-audio-parity":
+        check_video_audio_edit_parity(client, root)
+    elif args.case == "video-recording":
+        check_video_recording(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "video-recording-stop":
+        check_video_recording_stop(client, root, args.ffprobe)
+    elif args.case == "video-recording-failures":
+        check_video_recording_failures(client, root, args.ffprobe)
+    elif args.case == "video-recording-controls":
+        check_video_recording_controls(client)
     elif args.case == "delete-gap":
         check_delete_gap(client, root, args.ffmpeg)
     elif args.case == "clip-properties":
@@ -1198,7 +1216,7 @@ def native_test_inputs(args, executable, module, display):
                       for name in ("ffmpeg", "ffprobe") if (value := getattr(args, name))},
         },
     }
-    if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
+    if args.case in ("video-audio-parity", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
@@ -1208,6 +1226,11 @@ def native_test_inputs(args, executable, module, display):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "track-groups":
         inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
+    if args.case in VIDEO_RECORDING_CASES:
+        inputs["video_recording_sha256"] = sha(here / "test_video_recording.py")
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+        inputs["beginner_edits_sha256"] = sha(here / "test_beginner_edits.py")
+        inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
     if args.case == "clip-selection":
         inputs["clip_selection_sha256"] = sha(here / "test_clip_selection.py")
     if args.case in BEGINNER_VIDEO_CASES:
@@ -1434,6 +1457,8 @@ RECORDING_CASES = ("cursor-recording", "cursor-recording-save-before", "cursor-r
 # normal CLI operations but must not also enter video's generated CTest list.
 MODULE_REGISTERED_NATIVE_CASES = ("track-groups",)
 NATIVE_CASES = (
+    *VIDEO_RECORDING_CASES,
+    "video-audio-parity",
     *BEGINNER_VIDEO_CASES,
     "display-guard",
     "groups",
@@ -1570,7 +1595,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in BEGINNER_VIDEO_CASES or args.case in ("clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-audio-parity", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,
@@ -1682,6 +1707,8 @@ def main():
         initial_preferences = (profile / "autopsy.cfg").read_text(encoding="utf-8")
         if args.case in RECORDING_CASES[1:]:
             environment["AUTOPSY_TEST_SAVE_ROOT"] = str(audio.resolve())
+        if args.case in VIDEO_RECORDING_CASES:
+            environment["AUTOPSY_TEST_VIDEO_RECORDING_INPUT"] = "generated"
         user = ctypes.WinDLL("user32", use_last_error=True)
         user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
         with (root / "_app.log").open("w") as log:

@@ -172,6 +172,7 @@ set_property(SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/CommonTrackControls.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/BackgroundCell.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../ProjectFileManager.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../ProjectAudioManager.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../TransportUtilities.cpp"

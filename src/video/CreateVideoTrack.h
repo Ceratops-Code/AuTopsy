@@ -69,6 +69,9 @@ bool EditSelectedVideoStructure(AudacityProject &project, VideoEditing::VideoEdi
 bool MoveProjectVideoClip(AudacityProject &project, uint64_t id, double start);
 bool RemoveProjectVideoClip(AudacityProject &project, uint64_t id);
 void ShowProjectVideoPreview(AudacityProject &project, bool raise = false);
+// A completed recording uses the same importer and one linked audio/video Undo
+// transaction as File > Import; the capture command freezes the cursor position.
+bool ImportRecordedVideoAtCursor(AudacityProject &project, const wxString &path, double projectStart);
 
 // Inserts into the real TrackList, optionally relative to any audio/video track.
 // An import attaches its prepared track before native audio import commits Undo.

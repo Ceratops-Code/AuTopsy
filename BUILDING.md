@@ -732,6 +732,23 @@ executable inputs require a map entry or an explicit scope decision. CMake build
 only their targets, and Catch2/CTest discovers individual compiled case names.
 Separate suites cover edit plans, composition geometry, existing playback,
 branding, installer production, harness policy/lifecycle and affected selection.
+`video-recording::` covers device identifiers, bounded capture options and media
+arguments without devices or native project objects. Native `fork-video-recording`,
+`fork-video-recording-stop` and `fork-video-recording-failures` use fixed generated
+picture/tone input in a marked private profile. They exercise MKV/fragmented MP4,
+cursor placement, linked moves, one-step Undo/Redo, save/reopen, existing-file
+protection, graceful Stop and interrupted encoders. A real GDI case records only
+the owned AuTopsy window on the test display; hardware camera/microphone coverage
+requires a separate opt-in run. Generated capture cannot be selected in an
+ordinary user profile. `fork-delete-gap` also exercises physical Delete/Ctrl+Delete
+and both audio/video context-menu routes; `fork-clip-actions` includes the empty
+pane's Add Video Track menu and cancellation.
+`fork-video-recording-controls` opens the real Transport menu, changes source
+choices and cancels twice without recording or changing the project.
+`fork-video-audio-parity` compares the occupied ranges after Copy/Paste, Cut,
+Split Cut, Trim and Duplicate, with linked and unlinked media, repeated edits,
+Undo/Redo and save/reopen. Its mixed-media Join case checks both track types and
+movement of the resulting linked soundtrack.
 Native adapter inputs are reported separately, without implying desktop acceptance.
 An explicitly scoped native session runs only its selected compiled host cases;
 it never records portable passes against core binaries that session did not build.

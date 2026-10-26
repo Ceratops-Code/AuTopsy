@@ -25,11 +25,12 @@ std::shared_ptr<const TrackList> CopyMediaForPaste(const TrackList &source);
 class ScopedVideoAudioImportLinks {
    AudacityProject &mProject;
    AuTopsyVideoTrack &mPicture;
+   double mProjectStart{};
    std::vector<WaveTrack*> mExistingAudio;
    ScopedVideoAudioImportLinks *mPrevious{};
    friend void LinkNewlyImportedVideoAudio(AudacityProject &project);
 public:
-   ScopedVideoAudioImportLinks(AudacityProject &project, AuTopsyVideoTrack &picture);
+   ScopedVideoAudioImportLinks(AudacityProject &project, AuTopsyVideoTrack &picture, double projectStart = 0);
    ~ScopedVideoAudioImportLinks();
    ScopedVideoAudioImportLinks(const ScopedVideoAudioImportLinks &) = delete;
    ScopedVideoAudioImportLinks &operator=(const ScopedVideoAudioImportLinks &) = delete;
@@ -37,6 +38,9 @@ public:
 void LinkNewlyImportedVideoAudio(AudacityProject &project);
 void LinkImportedMedia(AudacityProject &project, AuTopsyVideoTrack &picture,
    const std::vector<WaveTrack*> &audio);
+// Native Join applies to all selected media as one transaction, retaining links
+// when several old soundtrack pieces become one new native audio interval.
+bool JoinSelectedMediaClips(AudacityProject &project, double from, double to);
 bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    unsigned long long id, double start, bool recordHistory);
 bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &track,
