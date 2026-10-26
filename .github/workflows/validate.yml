@@ -63,11 +63,13 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           if-no-files-found: ignore
+          include-hidden-files: true
           name: repository-validation-evidence-${{ matrix.os }}
           retention-days: 7
           path: |
             ${{ runner.temp }}/repository-validation.log
             .build/deploy-validation/repository-validation.log
+            .build/_test-results/**/_result-*.json
 
   build-windows-installer:
     name: Windows x64 installer (unsigned)
