@@ -888,13 +888,18 @@ def operate_owned_video_track(
     def button(flags, expected_window=panel):
         # Position and button transition share one OS event, so another mouse
         # movement cannot turn a narrow edge press into a clip-header press.
-        if flags & (2 | 8) and user.WindowFromPoint(point) != expected_window:
+        hit = user.WindowFromPoint(point)
+        if flags & (2 | 8) and hit != expected_window:
             bounds = (ctypes.c_long * 4)()
             user.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
             user.GetWindowRect(expected_window, ctypes.byref(bounds))
+            hit_owner, hit_title = ctypes.c_uint32(), ctypes.create_unicode_buffer(256)
+            user.GetWindowThreadProcessId(hit, ctypes.byref(hit_owner))
+            user.GetWindowTextW(user.GetAncestor(hit, 2), hit_title, len(hit_title))
             raise RuntimeError(
                 f"Owned mouse press target changed before input; expected_window={expected_window}; "
-                f"hit={user.WindowFromPoint(point)}; initial_screen={initial_screen_point}; "
+                f"hit={hit}; hit_owner={hit_owner.value}; hit_title={hit_title.value!r}; "
+                f"foreground={user.GetForegroundWindow()}; initial_screen={initial_screen_point}; "
                 f"screen={(point.x, point.y)}; bounds={list(bounds)}; native_point={(x0, y0)}; "
                 f"physical_client={list(rectangle)}; reported_client="
                 f"{(info['videoTrackPanelWidth'], info['videoTrackPanelHeight'])}."
