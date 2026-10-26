@@ -9,7 +9,10 @@ import shutil
 from pathlib import Path
 
 from run_audacity_consumer import read_audio_project_state, select_audio_project_tracks
-from run_fork_test_harness import operate_owned_video_track, ready_video_preview, run_process, save_reopen
+from run_fork_test_harness import (
+    capture_owned_project, operate_owned_video_track, painted_video_tracks,
+    ready_video_preview, run_process, save_reopen,
+)
 from test_clip_actions import with_native_dialog
 from test_video_transport import expect_preview_crop_pixels
 
@@ -42,6 +45,32 @@ def colour_at(ffmpeg, path, at):
     return "red" if red > 180 and green < 60 and blue < 60 else (
         "green" if green > 180 and red < 60 and blue < 60 else (
         "blue" if blue > 180 and red < 60 and green < 60 else (red, green, blue)))
+
+
+def expect_timeline_colours(client, root, ffmpeg, expected):
+    """Read the owned pane's filmstrip pixels, independent of preview/export."""
+    client.send("FitInWindow")
+    info = painted_video_tracks(client)
+    path = root / "_filmstrip.png"
+    capture_owned_project(int(info["videoTrackPanelHandle"]), path)
+    rgb = run_process([ffmpeg, "-v", "error", "-i", str(path), "-vf", "scale=800:600",
+        "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"], text=False, timeout=30)
+    assert len(rgb) == 800 * 600 * 3
+    best = []
+    for y in range(600):
+        row = []
+        for x in range(800):
+            r, g, b = rgb[(y * 800 + x) * 3:(y * 800 + x) * 3 + 3]
+            colour = "red" if r > 180 and g < 60 and b < 60 else (
+                "green" if g > 180 and r < 60 and b < 60 else (
+                "blue" if b > 180 and r < 60 and g < 60 else None))
+            if colour:
+                row.append(colour)
+        if len(row) > len(best):
+            best = row
+    observed = [colour for i, colour in enumerate(best) if i == 0 or colour != best[i-1]]
+    assert len(best) > 100 and observed == expected, (observed, expected, path)
+    path.unlink()
 
 
 def export_picture(client, root, ffmpeg, ffprobe, name, seconds):
@@ -85,6 +114,9 @@ def check_video_generator(client, root, ffmpeg, ffprobe, case):
                         f"RepeatVideoPicture: Track={track} Id={clip} Copies=101"):
             client.send(invalid, success=False)
             assert client.data("GetVideoClips")["clips"] == after
+    if case != "video-repeat":
+        expect_timeline_colours(client, root, ffmpeg,
+            ["green", "blue", "red"] if case == "video-reverse" else ["blue"])
     outputs = []
     for repeat in range(2):
         path = export_picture(client, root, ffmpeg, ffprobe, f"{case}-{repeat}", seconds)
@@ -119,6 +151,9 @@ def check_video_generator(client, root, ffmpeg, ffprobe, case):
     save_reopen(client, root / f"_{case}.aup3")
     assert client.data("GetVideoClips")["clips"] == after
     assert read_audio_project_state(client.data) == audio
+    if case != "video-repeat":
+        expect_timeline_colours(client, root, ffmpeg,
+            ["green", "blue", "red"] if case == "video-reverse" else ["blue"])
     reopened = export_picture(client, root, ffmpeg, ffprobe, f"{case}-reopened", seconds)
     assert decoded_picture(ffmpeg, reopened, .25) == outputs[0]
 
@@ -128,6 +163,7 @@ def check_video_pictures(client, root, ffmpeg, ffprobe, original, audio):
     run_process([ffmpeg, "-v", "error", "-nostdin", "-n", "-f", "lavfi", "-i",
         "color=blue:s=320x180", "-frames:v", "1", "-threads", "1", str(image)], timeout=30)
     client.file("ImportStillImage", image, "At=0 Seconds=5")
+    expect_timeline_colours(client, root, ffmpeg, ["blue"])
     image_export = export_picture(client, root, ffmpeg, ffprobe, "still", 5)
     assert colour_at(ffmpeg, image_export, .25) == colour_at(ffmpeg, image_export, 4.75) == "blue"
     moved = root / "_moved.png"; image.rename(moved)

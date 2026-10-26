@@ -121,6 +121,9 @@ double VideoContentDuration(const Clip &clip, const MediaSource &fallback);
 double VideoContentFrameRate(const Clip &clip, const MediaSource &fallback);
 void RequireUsableVideoContent(const Clip &clip, const MediaSource &fallback);
 VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallback, double contentTime);
+// Resolve a thumbnail's picture clock to original media without rendering.
+// Image/title results stay opaque for the native bitmap/text adapter.
+VideoContentSample SampleVideoThumbnail(const Clip &clip, const MediaSource &fallback, double contentTime);
 // Sorted picture boundaries in the parent's project coordinates, including
 // nested source cuts. Used once per export plan, never rebuilt per video frame.
 std::vector<double> VideoContentEdges(const Clip &clip);

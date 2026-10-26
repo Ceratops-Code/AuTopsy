@@ -345,7 +345,8 @@ before the current picture changes.
 
 The clip menu also offers **Reverse Picture**, **Freeze Frame...** and
 **Repeat Picture...**. Reverse changes picture order and preserves the forward
-soundtrack. Freeze holds the right-clicked frame for a chosen length. Repeat adds
+soundtrack. Timeline thumbnails follow the reversed order and held frame.
+Freeze holds the right-clicked frame for a chosen length. Repeat adds
 picture-only copies in free space; it does not repeat audio. All retain original
 media, support Undo/Redo and save/reopen, and remain editable by trim, crop and
 ordinary placement tools. Separate Joined Clip applies to joined sequences,

@@ -673,6 +673,12 @@ picture-only and creates unlinked copies only after checking the whole requested
 placement; occupied space rejects all copies. Repeating an identical operation
 adds no duplicate history or content.
 
+The pane's thumbnail adapter resolves a single picture time through reverse and
+freeze nodes to the original source frame. Image/title nodes use bounded native
+bitmap/text drawing. Painting never invokes a media worker; the original movie
+thumbnail cache retains its actual source duration instead of a virtual generator
+clock. Pixel-based native checks distinguish the pane from preview/export.
+
 The media worker prepares only the requested frame window. Reverse snaps that
 window to the saved picture grid, composes/scales before reversing, and bounds
 each decoded buffer to about 64 MiB and two seconds. Freeze/images/titles need

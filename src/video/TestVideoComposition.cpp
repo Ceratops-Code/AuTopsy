@@ -714,3 +714,28 @@ TEST_CASE("AuTopsy update selection excludes drafts foreign installers and older
       REQUIRE(ShouldCheckProductUpdates(true, 90, 100, 86400, false));
    }
 }
+
+TEST_CASE("Timeline thumbnails resolve reverse freeze and nested picture clocks without rendering", "[video-composition][video-generators]")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("movie.mp4", 5, 30, 320, 180);
+   REQUIRE(VideoTimeline::ReverseVideoClip(timeline, 1));
+   const auto &clip = timeline.clips.front();
+   for (const double at : {0.0, .25, 2.75, 4.99}) {
+      const auto sample = VideoTimeline::SampleVideoThumbnail(clip, {}, at);
+      REQUIRE(sample);
+      REQUIRE_FALSE(sample.generated);
+      REQUIRE(sample.source.path == "movie.mp4");
+      REQUIRE(sample.source.duration == 5);
+      REQUIRE(sample.sourceTime == Approx((149 - std::floor(at * 30 + 1e-8)) / 30));
+   }
+   auto frozen = VideoTimeline::CreateVideoTimeline("movie.mp4", 5, 30, 320, 180);
+   REQUIRE(VideoTimeline::FreezeVideoClip(frozen, 1, 1.25, 2));
+   for (const double at : {0.0, .25, 1.99}) {
+      const auto sample = VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, at);
+      REQUIRE(sample);
+      REQUIRE(sample.source.duration == 5);
+      REQUIRE(sample.sourceTime == Approx(37.0 / 30));
+   }
+   REQUIRE(VideoTimeline::ReverseVideoClip(frozen, 1));
+   REQUIRE(VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, .25).sourceTime == Approx(37.0 / 30));
+}

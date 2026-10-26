@@ -243,6 +243,30 @@ VideoContentSample SampleVideoContent(const Clip &clip, const MediaSource &fallb
    }
    throw std::runtime_error("Joined video exceeds the supported nesting limit.");
 }
+VideoContentSample SampleVideoThumbnail(const Clip &clip, const MediaSource &fallback, double time)
+{
+   auto sample = SampleVideoContent(clip, fallback, time);
+   for (size_t depth{}; sample && sample.generated && depth <= MaximumVideoContentDepth; ++depth) {
+      const auto &content = *sample.generated;
+      using Operation = VideoClipContent::Operation;
+      if (content.operation == Operation::Image || content.operation == Operation::Title) return sample;
+      if (content.parts.size() != 1) throw std::runtime_error("A picture thumbnail needs one retained input.");
+      auto inputTime = std::floor(content.heldTime * content.frameRate + 1e-8) / content.frameRate;
+      if (content.operation == Operation::Reverse) {
+         const auto last = std::max(0.0, std::ceil(content.duration * content.frameRate - 1e-8) - 1);
+         const auto frame = std::clamp(std::floor(sample.sourceTime * content.frameRate + 1e-8), 0.0, last);
+         inputTime = (last - frame) / content.frameRate;
+      }
+      else if (content.operation != Operation::Freeze)
+         throw std::runtime_error("The picture thumbnail operation is unsupported.");
+      const auto &part = content.parts.front();
+      auto input = SampleVideoContent(part, {}, part.ContentTimeAtProjectTime(inputTime));
+      input.crop = VideoEditing::ComposeVideoFrameCrops(input.crop, sample.crop);
+      sample = std::move(input);
+   }
+   if (sample.generated) throw std::runtime_error("The picture thumbnail exceeds the nesting limit.");
+   return sample;
+}
 std::vector<double> VideoContentEdges(const Clip &clip)
 { std::vector<double> out; Edges(clip, 0, 1, clip.start, clip.End(), out); return out; }
 std::vector<MediaSource> VideoContentSources(const Clip &clip, const MediaSource &fallback)
