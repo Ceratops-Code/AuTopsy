@@ -117,7 +117,10 @@ public:
    double QuantizeOffset(double offset) override {
       if (mMoving.empty()) return offset;
       const auto &clip = Data(mMoving.front()).clip;
-      const auto rate = VideoContentFrameRate(clip, clip.media);
+      // A source frame occupies less project time after speeding up the clip.
+      // Keep free drags on that project-frame grid; source-rate rounding can
+      // otherwise land on a nearby magnetic target even while Alt bypasses it.
+      const auto rate = VideoContentFrameRate(clip, clip.media) * clip.playbackRate;
       return std::round(offset * rate) / rate;
    }
    double AdjustOffsetSmaller(double offset) override {
@@ -324,6 +327,7 @@ class VideoClipHandle final : public UIHandle {
    uint64_t mId, mEditedId{};
    int mEdge;
    bool mContext{};
+   bool mGestureActive{};
    int mOrigin{};
    double mClickTime{};
    std::optional<Timeline> mCandidate;
@@ -533,6 +537,7 @@ public:
 
 UIHandle::Result VideoClipHandle::Click(const TrackPanelMouseEvent &event,AudacityProject *project)
 {
+   mGestureActive = false;
    const auto track = mTrack.lock();
    if (!track || !project || ProjectAudioIO::Get(*project).IsAudioActive()) return RefreshCode::Cancelled;
    mContext = event.event.RightDown(); mOriginal = track->Timeline();
@@ -562,11 +567,12 @@ UIHandle::Result VideoClipHandle::Click(const TrackPanelMouseEvent &event,Audaci
    }
    if (!mContext && found == mOriginal.clips.end()) return RefreshCode::Cancelled;
    TrackFocus::Get(*project).Set(track.get(),true);
+   mGestureActive = true;
    return RefreshCode::RefreshAll;
 }
 UIHandle::Result VideoClipHandle::Drag(const TrackPanelMouseEvent &event,AudacityProject *project)
 {
-   if (mContext || !mEdge || !project) return RefreshCode::RefreshNone;
+   if (!mGestureActive || mContext || !mEdge || !project) return RefreshCode::RefreshNone;
    const auto track = mTrack.lock(); const auto view = mView.lock();
    if (!track || !view) return RefreshCode::Cancelled;
    // Keep the initial origin and pointer offset. A shared seam chooses the
@@ -587,14 +593,22 @@ UIHandle::Result VideoClipHandle::Drag(const TrackPanelMouseEvent &event,Audacit
 }
 UIHandle::Result VideoClipHandle::Cancel(AudacityProject *)
 {
+   // Mouse-up and coalesced motion can still arrive after Escape. They belong
+   // to the closed gesture and must never rebuild its discarded candidate.
+   mGestureActive = false;
    if (const auto view = mView.lock()) view->SetGhost({});
    mCandidate.reset(); return RefreshCode::RefreshAll;
 }
 UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,AudacityProject *project,wxWindow *parent)
 {
+   if (!mGestureActive) return RefreshCode::RefreshNone;
    const auto track = mTrack.lock();
    if (const auto view = mView.lock()) view->SetGhost({});
-   if (!project || !track || track->GetOwner().get() != &TrackList::Get(*project)) return RefreshCode::RefreshAll;
+   if (!project || !track || track->GetOwner().get() != &TrackList::Get(*project)) {
+      mGestureActive = false;
+      mCandidate.reset();
+      return RefreshCode::RefreshAll;
+   }
    try {
       if (!mContext && mEdge) {
          // Windows can coalesce the last motion before mouse-up. Commit the
@@ -602,6 +616,9 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          Drag(event, project);
          if (const auto view = mView.lock()) view->SetGhost({});
       }
+       // Close before committing or opening a nested popup event loop. Only
+       // this release owns the final candidate; later events cannot commit it.
+       mGestureActive = false;
       if (mContext) {
          // Native popup dispatch runs a nested event loop. Hover refresh may
          // overwrite this shared handle; the menu keeps its original identity.

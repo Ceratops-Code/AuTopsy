@@ -28,7 +28,7 @@ def audio_rows(client):
 def check_video_fades(client, root, ffmpeg, ffprobe):
     """Decode actual blends, preview pixels and stationary sound; retain edits."""
     from run_fork_test_harness import run_process, ready_video_preview
-    from test_video_clip_edits import expect_preview_crop_pixels, wait_for_native_state
+    from test_video_transport import expect_preview_crop_pixels, wait_for_native_state
 
     for colour, frequency in (("red", 440), ("blue", 660)):
         run_process([ffmpeg, "-v", "error", "-nostdin", "-n", "-f", "lavfi", "-i",

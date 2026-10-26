@@ -78,7 +78,7 @@ GROUPS = (
         "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
         "scripts/piped-work/test_fork_features.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
-        "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_preview_controls.py")),
+        "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py", "scripts/piped-work/test_preview_controls.py")),
     CheckGroup("fork-audacity-consumer-runtime", (
         "scripts/piped-work/run_audacity_consumer.py",
         "scripts/piped-work/test_run_audacity_consumer.py",
@@ -90,6 +90,8 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "libraries/lib-project-file-io/ProjectFileIO.cpp",
+    "src/recording/CreateCursorCapture.*",
     "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*",
     "src/media/CollectProjectMedia.*",
     "scripts/piped-work/test_beginner_edits.py",
@@ -108,7 +110,7 @@ NATIVE_INPUTS = (
     "scripts/piped-work/test_track_groups.py", "src/tracks/ui/ChannelView.cpp", "src/TrackPanel.cpp",
     "src/TrackUtilities.cpp", "src/tracks/ui/CommonTrackControls.h",
     "libraries/lib-wave-track/WaveTrack.cpp",
-    "scripts/piped-work/test_video_clip_edits.py",
+    "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py",
     "scripts/piped-work/test_video_export_timing.py",
     "scripts/piped-work/test_preview_controls.py",
     "src/video/EditVideoTimeline.cpp", "src/video/ShowVideoPreview.cpp",
@@ -136,6 +138,7 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("display-guard",), ("modules/scripting/mod-script-pipe/ScripterCallback.cpp",)),
     (("clip-snapping",), ("src/tracks/ui/TimeShiftHandle.*", "src/clip-groups/EditClipPlacement.*")),
     (("video-fades", "preview-quality", "video-export-timing"), (
         "src/video/PlanVideoTransitions.*", "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*")),
@@ -146,7 +149,7 @@ INSTALLER_NATIVE_GROUPS = (
         "src/clip-groups/GroupAudioClips.*", "src/clip-groups/LinkMediaClips.*",
         "src/tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp",
         "scripts/piped-work/test_beginner_edits.py")),
-    (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport"), (
+    (("preview-controls", "preview-quality", "preview-navigation", "video-cursor", "video-transport", "preview-soak"), (
         "src/video/ShowVideoPreview.cpp", "src/video/PlayVideoMedia.*", "src/video/PrepareVideoPreview.*",
         "src/video/ChoosePreviewQuality.*", "src/video/SyncVideoPlayback.*",
         "scripts/piped-work/test_preview_controls.py")),
@@ -161,7 +164,7 @@ INSTALLER_NATIVE_GROUPS = (
       "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage", "video-clip-storage"), (
         "src/video/EditVideoComposition.*", "src/video/ShowVideoCrop.*", "src/video/EvaluateVideoTimeline.*",
         "src/video/RenderVideoComposition.*", "src/video/PlanVideoExport.*")),
-    (("clip-actions", "video-clip-export", "edit-cursor-line", "video-export-timing"), (
+    (("clip-actions", "video-clip-export", "edit-cursor-line", "video-export-timing", "video-vfr-export", "video-encoder-boundaries"), (
         "src/clip-groups/OpenClipActions.*", "src/video/ExportVideoMix.*", "src/video/ChooseVideoExport.*",
         "src/export/ExportAudioDialog.*", "src/tracks/ui/EditCursorOverlay.cpp",
         "src/tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp",
@@ -175,13 +178,14 @@ INSTALLER_NATIVE_GROUPS = (
         "libraries/lib-project-history/*", "libraries/lib-viewport/*", "src/toolbars/ControlToolBar.*")),
 )
 INSTALLER_SHARED_INPUTS = (
+    "src/recording/CreateCursorCapture.*",
     "src/commands/ScriptCommandRelay.cpp",
     "CMakeLists.txt", "CMakePresets.json", "src/video/CMakeLists.txt", "src/menus/*.cpp",
     "src/commands/GetInfoCommand.cpp", "src/ProjectAudioManager.*", "src/TrackPanel.cpp",
     "src/TrackUtilities.cpp", "src/tracks/ui/ChannelView.cpp", "libraries/lib-wave-track/WaveTrack.cpp",
     "libraries/lib-project-file-io/*", "lib-src/sqlite/*", "scripts/uv.lock", "scripts/pyproject.toml",
     "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
-    "scripts/piped-work/pipeclient.py", "scripts/piped-work/test_video_clip_edits.py",
+    "scripts/piped-work/pipeclient.py", "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py",
 )
 
 
@@ -249,8 +253,85 @@ def select_groups(changed: list[str], all_checks: bool = False) -> tuple[list[Ch
     return [group for group in GROUPS if any(matches(path, group.inputs) for path in changed)], native
 
 
-def changed_paths(root: Path, base: str | None) -> tuple[list[str], str]:
+def select_qualification_baseline(releases: list[dict[str, Any]], level: str) -> dict[str, Any] | None:
+    """Choose the newest product version at the requested or a higher level.
+
+    Published AuTopsy preview releases are beta; explicitly named alpha previews
+    remain alpha. Stable releases rank higher, but age alone never wins over a
+    newer eligible version. Drafts and releases without our installer/manifest
+    are not product acceptance. This selection does not grant any test pass.
+    """
+    levels = {"alpha": 0, "beta": 1, "stable": 2}
+    if level not in levels:
+        raise ValueError(f"Unknown qualification level: {level}")
+    candidates = []
+    for release in releases:
+        if release.get("draft") or not release.get("published_at"):
+            continue
+        tag = str(release.get("tag_name", ""))
+        match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:-autopsy\.(?:(alpha|beta)\.)?(\d+))?", tag)
+        if not match:
+            continue
+        preview = match[5] is not None
+        if bool(release.get("prerelease")) != preview:
+            raise RuntimeError(f"Published release {tag} has conflicting version/level metadata.")
+        actual = (match[4] or "beta") if preview else "stable"
+        assets = {item.get("name") for item in release.get("assets", [])}
+        if (levels[actual] < levels[level] or "_build-manifest.json" not in assets
+                or not any(isinstance(name, str) and re.fullmatch(r"autopsy-win-.+-x64\.exe", name) for name in assets)):
+            continue
+        version = tuple(int(match[i]) for i in (1, 2, 3)) + (levels[actual], int(match[5] or 0))
+        candidates.append((version, {"tag": tag, "level": actual, "release_id": release.get("id"),
+                                     "source_revision": release.get("target_commitish")}))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    if len(candidates) > 1 and candidates[0][0] == candidates[1][0] and candidates[0][1] != candidates[1][1]:
+        raise RuntimeError("Published qualification baselines have an ambiguous product version.")
+    return candidates[0][1]
+
+
+def read_qualification_baseline(root: Path, level: str) -> dict[str, Any] | None:
+    """Read current published releases, then resolve only the selected Git tag.
+
+    GitHub's release metadata owns level/publication state; Git owns the commit.
+    Every call reads current service state. There is no second release catalog,
+    saved execution progress or local override that can select an older release.
+    """
+    repository = json.loads(run_command(["gh", "repo", "view", "--json", "nameWithOwner"], root))["nameWithOwner"]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise RuntimeError("GitHub returned an unusable repository identity.")
+    pages = json.loads(run_command(["gh", "api", "--paginate", "--slurp",
+                                   f"repos/{repository}/releases?per_page=100"], root))
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise RuntimeError("GitHub release metadata has an unexpected page shape.")
+    selected = select_qualification_baseline([release for page in pages for release in page], level)
+    if selected is None:
+        return None
+    tag = selected["tag"]
+    if not isinstance(selected["source_revision"], str) or not re.fullmatch(r"[0-9a-f]{40}", selected["source_revision"]):
+        raise RuntimeError("The newest eligible release does not identify its immutable source revision.")
+    # Fetch exactly the selected public tag. Git refuses a conflicting local tag;
+    # never silently move it or fall back to a different comparison base.
+    run_command(["git", "fetch", "--no-tags", "origin", f"refs/tags/{tag}:refs/tags/{tag}"], root)
+    selected["commit"] = run_command(["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"], root).strip()
+    if selected["commit"] != selected["source_revision"]:
+        raise RuntimeError("Published qualification metadata and the selected Git tag disagree.")
+    return selected
+
+
+def changed_paths(root: Path, base: str | None, level: str | None = None) -> tuple[list[str], str]:
     """Include staged/unstaged changes, renames, deletions and untracked inputs."""
+    if level:
+        selected = read_qualification_baseline(root, level)
+        if selected is None:
+            return [], "all: no published same-or-higher-level baseline"
+        if base is not None:
+            supplied = run_command(["git", "rev-parse", "--verify", f"{base}^{{commit}}"], root).strip()
+            if supplied != selected["commit"]:
+                raise RuntimeError("Explicit test base differs from the newest eligible qualification baseline.")
+        base = selected["commit"]
+        print(json.dumps({"qualification_baseline": selected, "requested_level": level}), file=sys.stderr)
     if base is None:
         try:
             base = run_command(["git", "merge-base", "HEAD", "origin/main"], root).strip()
@@ -455,13 +536,17 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path(".build/_core"))
     parser.add_argument("--base", default=os.environ.get("AUTOPSY_TEST_BASE"))
+    parser.add_argument("--qualification-level", choices=("alpha", "beta", "stable"),
+                        default=os.environ.get("AUTOPSY_TEST_LEVEL"),
+                        help="Compare with the newest published version at this level or higher.")
     parser.add_argument("--all", action="store_true", help="Explicitly select every portable check.")
     parser.add_argument("--before-package", type=Path, help="Check an already compiled native payload before Inno Setup.")
     parser.add_argument("--native-tests", help="Additional native CTest expression, or an explicit scope when no base exists.")
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[1]
     if args.before_package:
-        print(json.dumps(run_prepackage_checks(root, args.before_package.resolve(), args.base, args.native_tests)))
+        print(json.dumps(run_prepackage_checks(root, args.before_package.resolve(), args.base, args.native_tests,
+                                              args.qualification_level)))
         return 0
     build = args.build_dir.resolve()
     if not build.is_relative_to(root / ".build"):
@@ -469,11 +554,15 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
     for command in ("git", "cmake", "ctest"):
         if not shutil.which(command):
             raise RuntimeError(f"Required test tool is missing: {command}")
-    changed, comparison = changed_paths(root, args.base)
+    changed, comparison = changed_paths(root, args.base, args.qualification_level)
     groups, native = select_groups(changed, args.all or comparison.startswith("all:"))
     if bool(os.environ.get("AUTOPSY_VIDEO_BUILD_DIR")) != bool(os.environ.get("AUTOPSY_VIDEO_TEST_NAME")):
         raise RuntimeError("A native test session needs both AUTOPSY_VIDEO_BUILD_DIR and AUTOPSY_VIDEO_TEST_NAME.")
     native_session = bool(os.environ.get("AUTOPSY_VIDEO_BUILD_DIR") and os.environ.get("AUTOPSY_VIDEO_TEST_NAME"))
+    if native_session:
+        # Native sessions test their explicitly selected compiled host. Never
+        # stamp current-source portable acceptance onto an older core binary.
+        groups = []
     if not groups and not native_session:
         print(json.dumps({"result": "no-portable-tests-affected", "comparison": comparison,
                           "native_inputs_requiring_separate_acceptance": native}))
@@ -529,6 +618,10 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
 def select_installer_tests(changed: list[str], catalogue: list[dict[str, Any]],
                            extra: str | None = None, unknown_base: bool = False) -> list[str]:
     """Select desktop impact by declared inputs; absent contracts stop packaging."""
+    names = [test["name"] for test in catalogue]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise RuntimeError(f"CTest names need one registration owner before desktop checks: {duplicates}")
     available = {test["name"] for test in catalogue}
     selected = set(INSTALLER_BASELINE_TESTS)
     if unknown_base and not extra:
@@ -619,7 +712,8 @@ def read_native_acceptance(output: str, test: dict[str, Any], build: Path) -> di
     return {"name": test["name"], "result": results[0]["result"], "acceptance": receipts}
 
 
-def run_prepackage_checks(root: Path, build: Path, base: str | None, extra: str | None) -> dict[str, Any]:
+def run_prepackage_checks(root: Path, build: Path, base: str | None, extra: str | None,
+                          level: str | None = None) -> dict[str, Any]:
     """Gate packaging on current checks of the same compiled payload.
 
     Native cases retain their own original acceptance records. Only the headless
@@ -629,7 +723,9 @@ def run_prepackage_checks(root: Path, build: Path, base: str | None, extra: str 
     """
     catalogue = json.loads(run_command(["ctest", "--test-dir", str(build), "-C", "Release",
                                        "--show-only=json-v1"], root))["tests"]
-    changed, comparison = changed_paths(root, base)
+    changed, comparison = changed_paths(root, base, level)
+    if level and comparison.startswith("all:") and not extra:
+        extra = "."  # First qualification has no earlier acceptance to inherit.
     selected = select_installer_tests(changed, catalogue, extra, comparison.startswith("all:"))
     executable = next(Path(test["command"][test["command"].index("--executable") + 1]).resolve()
                       for test in catalogue if test["name"] == "fork-preview" and "--executable" in test.get("command", []))
@@ -661,7 +757,7 @@ def run_prepackage_checks(root: Path, build: Path, base: str | None, extra: str 
             results.append(result)
     if native_payload_identity(catalogue) != payload:
         raise RuntimeError("Compiled payload changed during prepackage checks; packaging is blocked.")
-    return {"result": "passed", "scope": "prepackage", "comparison": comparison,
+    return {"result": "passed", "scope": "prepackage", "comparison": comparison, "qualification_level": level,
             "checks": results, "payload": payload,
             "payload_directory": executable.parent.relative_to(build).as_posix()}
 

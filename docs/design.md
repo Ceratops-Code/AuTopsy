@@ -25,6 +25,7 @@ Owner: AuTopsy maintainers.
     {"path": "src/video/CreateVideoTrack.cpp", "role": "implemented native track and persistence adapter"},
     {"path": "src/clip-groups/LinkMediaClips.cpp", "role": "implemented mixed-media editing adapter"},
     {"path": "src/clip-groups/SelectMediaClips.h", "role": "host-free temporary move-selection policy"},
+    {"path": "src/recording/CreateCursorCapture.cpp", "role": "native adapter binding recording writes to one pending clip"},
     {"path": "src/video/TestVideoPlayback.cpp", "role": "independent behavior evidence"},
     {"path": "src/video/TestVideoEdits.cpp", "role": "dedicated planner behavior evidence"},
     {"path": "src/video/TestVideoComposition.cpp", "role": "dedicated composition behavior evidence"},
@@ -45,7 +46,7 @@ Owner: AuTopsy maintainers.
     "interfaces": {"heading": "8. Adapter and rendering contracts", "status": "documented"},
     "protection": {"heading": "9. Failure containment and owned files", "status": "documented"},
     "decisions": {"heading": "4. Strategy and decisions", "status": "documented"},
-    "quality": {"heading": "11. Quality targets", "status": "unverified", "reason": "Targets are proposed; the listed performance, long-run and future-operation measurements have not been completed."},
+  "quality": {"heading": "11. Quality targets", "status": "unverified", "reason": "Short machine-scoped preview measurements passed; hours-long use, other hardware and future-operation targets remain unmeasured."},
     "risks": {"heading": "13. Risks and remaining decisions", "status": "documented"},
     "glossary": {"heading": "14. Glossary and references", "status": "documented"},
     "verification": {"heading": "12. Behavior evidence and delivery", "status": "documented"},
@@ -111,7 +112,7 @@ flowchart LR
   GitHub -->|"installer download"| Editor
 ```
 
-**System-context view — one AuTopsy installation.** Boxes name people, systems,
+**System-context view â€” one AuTopsy installation.** Boxes name people, systems,
 components or files; arrows name the interaction. GitHub builds/distributes the
 product; local media processing does not upload the editor's content. User media
 is untrusted input to bundled decoders. Project save and export are separate
@@ -177,7 +178,7 @@ flowchart TB
   Export -->|"local encoding"| Decoder
 ```
 
-**Component view — AuTopsy editing process.** Boxes are components within the
+**Component view â€” AuTopsy editing process.** Boxes are components within the
 desktop process, except FFmpeg child processes. Arrows show dependency/data flow.
 The kernel has no native UI, XML, mpv or audio-object dependencies. Native track
 objects own the authoritative current states; the kernel does not own a second
@@ -219,6 +220,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `scripts/run_affected_tests.py` and `test_run_affected_tests.py` | One portable input/check map, named execution and bounded receipts | Local/CI affected selection; separate native-acceptance impact |
 | `scripts/piped-work/test_fork_features.py` | Native feature dispatch, exact-input result reuse and bounded attempt outcomes | Adapter contracts through public commands |
 | `scripts/piped-work/test_video_clip_edits.py` | Dedicated split edges, structural edits and compound rendering cases | Reused public-command/gesture cases with generated media |
+| `scripts/piped-work/test_video_transport.py` | Owned preview-window helpers, transport/navigation journeys and pixel observations | Private-process input and surface reads confined to the required display |
 
 The small native transport facade currently lives in `ShowVideoPreview.cpp`;
 its desired-state policy lives in `SyncVideoPlayback.h`. It uses the existing
@@ -319,6 +321,14 @@ sample-aligned stop is the earliest following clip or earlier selection end.
 No following boundary means open-ended recording. A new capture interval is
 inserted only into the pending track copy; a device-start failure cannot insert
 an empty clip into the original. Punch-and-roll keeps its existing adapter path.
+`CreateCursorCapture` implements the existing `RecordableSequence` interface and
+pins the pending track and its newly created interval through the audio worker's
+final flush. Append, flush and dropout repair address that interval directly;
+they cannot append to the track's later rightmost clip or shift a neighbor.
+The pending-track owner still controls publication and cancellation. This
+adapter repairs the middle-gap defect exposed by physical capture. The opt-in
+native case passed repeated full/early-stop recording and Undo/Redo with the
+original clip geometry and generated sound unchanged, followed by normal exit.
 Pure `cursor-recording::` cases exercise range/rate rejection, complete-sample
 boundaries, multiple capture tracks and repeated requests without a microphone.
 
@@ -461,7 +471,7 @@ handles and transparent gaps. Simple clips use source seconds directly; joined
 clips use content seconds. Tracks own placements, a default source and visibility.
 The model remains limited to ordered non-overlapping, non-negative picture
 ranges. Playback rate is content seconds per project second, defaults to 1 and
-supports 0.01–100 including the effective product through nested joined content.
+supports 0.01â€“100 including the effective product through nested joined content.
 Named project/content conversions are shared by trim, split, copy, join, flags,
 frame stepping, preview and export. Retiming changes the visible placement map;
 retained media and hidden source handles are immutable.
@@ -680,7 +690,7 @@ sequenceDiagram
   end
 ```
 
-**Sequence view — one linked edit.** Participants are a person and in-process
+**Sequence view â€” one linked edit.** Participants are a person and in-process
 components. Arrows are synchronous semantic calls/results; history publication
 is the visible effect. This is the target transaction, not a claim that every
 current native edit already uses a common planner.
@@ -995,7 +1005,7 @@ flowchart LR
   App -->|"leased derived files"| Cache["Store: local preview cache"]
 ```
 
-**Container/store view — build to local editing.** Boxes name applications and
+**Container/store view â€” build to local editing.** Boxes name applications and
 stores, not classes; arrows name data/effects. No automatic service connection
 exists from local media to the release build. A separate deployment view adds no
 useful distribution detail: the desktop app and bundled media tools run on one
@@ -1126,6 +1136,15 @@ does not revoke an unchanged installer or schedule its media acceptance again.
 This uses the Ceratops refactor plan's existing-owner/affected-input/result-reuse
 idea; Nx, a new database and a second cache/dependency service are unnecessary.
 
+Product qualification selects the newest published product version at the same
+or a higher level. The runner reads current GitHub release state, requires the
+installer/manifest pair and agreement between its immutable source revision and
+Git tag, then computes affected inputs from that commit. CI and installer builds
+request beta. Missing eligibility expands the test scope; conflicting metadata
+blocks qualification rather than silently selecting an older release. An explicit
+native session accepts only its selected compiled host and cannot attribute
+portable passes to current source without compiling those portable inputs.
+
 The last installed baseline is source `eae1e5fec14576a87544f13b13cb84444e157940`,
 installer SHA-256 `d920ed6a3eb80e3d4a72286781c17662ff872a0b0e0171252ee359906d72d9f6`.
 Its ten native groups/selection/clipboard, split-edge, structural-edit,
@@ -1135,6 +1154,42 @@ then completed through the declared SDLC action. These facts belong to that
 baseline; new transport/visibility acceptance belongs to each current executable's
 named receipts. No NVIDIA hardware result is available. Document mechanics do
 not establish implementation quality.
+
+The coverage expansion adds separate native identities for VFR export, encoder
+failure boundaries, sustained preview and opt-in physical recording. VFR footage
+uses actual alternating presentation intervals plus independent sound/flash
+cues. The preview target uses 32 linked clips at a six-hour offset for 60--240
+seconds, with live clock/resource measurements and a bounded final timing window.
+The capture case repeats full and early-stop recording, checks original clips
+and sound, and exercises Undo/Redo without recapturing. Its private microphone
+project and samples are deleted only after the owned process stops. Default CI
+does not capture; a zero-correction mono MME pass does not cover other devices,
+hosts, stereo or latency compensation. Real NVIDIA encoding remains conditional
+on a successful device probe; advertised encoder names are insufficient evidence.
+All four scoped native cases passed on one Windows host. The 180-second preview
+run completed 13 loop wraps with about 17.5 MiB private-memory growth and four
+extra handles. The retained final 256 timing samples span 31.9 seconds, with
+zero observed drop-counter increases and a drift p95 of 0.0343 seconds. Counter
+resets on seeks prevent an end-of-run read from establishing full-run drops;
+the corrected window calculation has separate headless cases and was applied to
+the captured observations, retaining the native pass's original check version.
+Full-duration drop telemetry remains a coverage gap. These results do not establish hours-long stability,
+other hardware, or complete exact-PTS editing support. The NVIDIA probe could
+not load its driver; only the unavailable-encoder rejection path passed here.
+The storage power-cut model now preserves several acknowledged edits while a
+later edit is interrupted; concurrent checkpoint scheduling and actual firmware
+remain separate limits.
+
+Two additional opt-in native cases stop the private app immediately before and
+after the saved-document transaction commit. Each repeats a fresh recording,
+normal save/reopen and interrupted save/reopen journey twice; clip geometry and
+decoded recorded mixes remained intact, and the post-commit edit was complete.
+The barrier is inert outside an explicitly marked private project root and has
+a 20-second lifetime. Its live synchronization files, captured mixes and project
+companions belong to that disposable directory and are deleted after all owned
+processes stop. These cases retain separate result identities from the earlier
+cursor-capture pass. They establish process-interruption behavior on this mono
+MME device; real OS-cache loss remains covered only by the independent VFS model.
 
 The urgent general Undo/Redo fix is built separately from the new core foundation:
 source `d43451e1fddfd039eb576b1dd88d30c11fae3927`, installer SHA-256
@@ -1198,8 +1253,10 @@ require the applicable approval before creation.
   publication does not claim they are fixed or that signing sponsorship exists.
 - **Shipping cleanup:** the lifecycle helper removed the active task workspace and
   its temporary drafts after publication. The workspace was recreated from shipped
-  main. Helper ownership/retention repair belongs to shared tooling, not the video
-  kernel; do not rely on temporary drafts as the only copy of authoritative docs.
+  main. The deployed lifecycle helper now automatically retains the requesting
+  linked worktree and its task outputs; focused repeated/interrupted shipping
+  cases passed. Authoritative documents still belong in Git rather than only
+  in temporary drafts.
 
 ## 14. Glossary and references
 

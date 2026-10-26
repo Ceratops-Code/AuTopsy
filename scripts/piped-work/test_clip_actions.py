@@ -3,10 +3,12 @@
 Dialogs are identified by caption and their fields by adjacent labels. Only this
 worker's PID is touched, and the shared display/input guards remain in force.
 All outputs belong to the harness case directory and its existing cleanup owner.
-No test opens a microphone: recording-gap boundaries live in the pure C++ suite.
+Physical capture is a separate opt-in hardware case: its project lives only in
+the disposable audio directory and no captured samples are retained as fixtures.
 """
 import array
 import ctypes
+import faulthandler
 import json
 import math
 import os
@@ -15,7 +17,7 @@ import time
 from ctypes import wintypes as w
 
 from run_fork_test_harness import assert_owned_test_display, operate_owned_video_track, run_process
-from test_video_clip_edits import PreviewNativeWindows, wait_for_native_state
+from test_video_transport import PreviewNativeWindows, wait_for_native_state
 
 
 class ClipDialogWindows(PreviewNativeWindows):
@@ -187,6 +189,254 @@ def selected_audio(client, root, name, track, start, end, ffmpeg):
     client.file("Export2", target, "NumChannels=1")
     return array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(target),
                                          "-ar", "8000", "-ac", "1", "-f", "f32le", "pipe:1"], timeout=30))
+
+
+def read_recording_devices():
+    """Query MME input capabilities without opening or recording from a device."""
+    class InputCaps(ctypes.Structure):
+        _fields_ = [("manufacturer", w.WORD), ("product", w.WORD), ("driver", w.DWORD),
+                    ("name", w.WCHAR * 32), ("formats", w.DWORD),
+                    ("channels", w.WORD), ("reserved", w.WORD)]
+
+    api = ctypes.WinDLL("winmm", use_last_error=True)
+    api.waveInGetNumDevs.restype = w.UINT
+    api.waveInGetDevCapsW.argtypes = [ctypes.c_size_t, ctypes.POINTER(InputCaps), w.UINT]
+    api.waveInGetDevCapsW.restype = w.UINT
+    result = []
+    for index in range(api.waveInGetNumDevs()):
+        caps = InputCaps()
+        error = api.waveInGetDevCapsW(index, ctypes.byref(caps), ctypes.sizeof(caps))
+        if error:
+            raise RuntimeError(f"Reading MME input {index} failed with multimedia status {error}.")
+        result.append({"name": caps.name, "index": index, "channels": int(caps.channels),
+                       "driver": int(caps.driver), "manufacturer": int(caps.manufacturer),
+                       "product": int(caps.product), "formats": int(caps.formats)})
+    return result
+
+
+def require_recording_device():
+    """Bind hardware acceptance to one explicitly selected, currently present input."""
+    requested = os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE", "")
+    if not requested or any(character in requested for character in "\r\n"):
+        raise RuntimeError("Set AUTOPSY_TEST_RECORDING_DEVICE to one exact, available MME input name.")
+    selected = [device for device in read_recording_devices() if device["name"] == requested]
+    if len(selected) != 1 or not selected[0]["channels"]:
+        raise RuntimeError("Set AUTOPSY_TEST_RECORDING_DEVICE to one exact, available MME input name.")
+    return selected[0]
+
+
+def check_cursor_recording(client, root, ffmpeg):
+    """Capture in a bounded gap, interrupt it, and repeat Undo/Redo without recapture.
+
+    The harness deletes the entire private audio directory after closing its
+    process, including the project, autosave and SQLite companions. Only geometry
+    and device capabilities enter the receipt. Only original generated ranges
+    are selected for sound comparisons. Keep every post-capture audio comparison
+    in that disposable directory too: even a regression writing into an original
+    range must not leave microphone samples in retained test fixtures.
+    """
+    device = require_recording_device()
+    selected = client.send('GetPreference: Name="/AudioIO/RecordingDevice"')
+    assert device["name"] in selected, (device, selected)
+    client.file("Import2", root / "tone-a.wav")
+    imported = client.data("GetInfo: Type=Clips Format=JSON")
+    duration = imported[0]["end"] - imported[0]["start"]
+    left, right = duration / 4, duration * 3 / 4
+    cursor = left + min(0.1, (right - left) / 4)
+    client.send(f"SelectTime: Start={left} End={right}")
+    client.send("SplitDelete")
+    baseline = client.data("GetInfo: Type=Clips Format=JSON")
+    assert len(baseline) == 2, baseline
+    original_sound = [selected_audio(client, root, f"_original-{side}.wav", 0, start, end, ffmpeg)
+                      for side, start, end in (("left", 0, left), ("right", right, duration))]
+    client.file("SaveProject2", root / "_audio_temp" / "_cursor-recording.aup3")
+    captures = []
+    for interrupted in (False, True, False, True):
+        client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+        client.send(f"SelectTime: Start={cursor} End={cursor}")
+        client.send("Record1stChoice")
+        if interrupted:
+            time.sleep(min(0.12, (right - cursor) / 3))
+            client.send("Stop")
+        else:
+            time.sleep(right - cursor + 0.6)
+        clips = client.data("GetInfo: Type=Clips Format=JSON")
+        added = [clip for clip in clips if abs(clip["start"] - cursor) <= 2 / 44100]
+        if interrupted and clips == baseline:
+            captures.append({"interrupted": True, "no_sample_published": True})
+            continue
+        assert len(clips) == 3 and len(added) == 1, (baseline, clips)
+        clip = added[0]
+        assert abs(clip["start"] - cursor) <= 2 / 44100, (cursor, clip)
+        assert cursor < clip["end"] <= right + 2 / 44100, (right, clip)
+        if not interrupted:
+            assert abs(clip["end"] - right) <= 2 / 44100, (right, clip)
+        assert all(any((original["start"], original["end"]) == (row["start"], row["end"])
+                       for row in clips) for original in baseline), (baseline, clips)
+        for expected, (side, start, end) in zip(original_sound,
+                (("left", 0, left), ("right", right, duration)), strict=True):
+            assert selected_audio(client, root / "_audio_temp", f"_after-{side}.wav", 0, start, end, ffmpeg) == expected
+        captures.append({"interrupted": interrupted, "start": clip["start"], "end": clip["end"]})
+        client.send("Undo")
+        assert client.data("GetInfo: Type=Clips Format=JSON") == baseline
+        client.send("Redo")
+        assert client.data("GetInfo: Type=Clips Format=JSON") == clips
+        client.send("Undo")
+    (root / "_playback.json").write_text(json.dumps({"device": device, "captures": captures}), encoding="utf-8")
+
+
+def check_recording_save_boundary(client, root, ffmpeg, phase):
+    """Repeat real record/save/reopen, then wait in the exact native save barrier.
+
+    All captured projects, comparisons and expected data stay in _audio_temp.
+    The outer owner stops this process only after the native barrier signals.
+    No successful result is returned by this deliberately interrupted worker.
+    """
+    # A wedged IPC/window call must leave its Python stack in the bounded
+    # worker error stream before the outer owner stops the private process.
+    faulthandler.dump_traceback_later(55)
+    try:
+        require_recording_device()
+        private = root / "_audio_temp"
+        project = private / "_recording-storage.aup3"
+        client.file("Import2", root / "tone-a.wav")
+        duration = client.data("GetInfo: Type=Clips Format=JSON")[0]["end"]
+        left, right = duration / 4, duration * 3 / 4
+        cursor = left + 0.1
+        client.send(f"SelectTime: Start={left} End={right}")
+        client.send("SplitDelete")
+        baseline = client.data("GetInfo: Type=Clips Format=JSON")
+        client.file("SaveProject2", project)
+        # The outer owner repeats the entire journey with a fresh process/project.
+        # One normal save/reopen per journey avoids duplicating hardware capture
+        # inside that repeat and keeps the input reservation bounded.
+        client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+        client.send(f"SelectTime: Start={cursor} End={cursor}")
+        client.send("Record1stChoice")
+        time.sleep(right - cursor + 0.6)
+        clips = client.data("GetInfo: Type=Clips Format=JSON")
+        assert len(clips) == 3 and all(row in clips for row in baseline), (baseline, clips)
+        recorded = next(row for row in clips if abs(row["start"] - cursor) < 2 / 44100)
+        assert abs(recorded["end"] - right) < 2 / 44100, recorded
+        expected_audio = selected_audio(client, private, "_saved-mix-0.wav", 0, 0, duration, ffmpeg)
+        client.send("Save")
+        client.send("Close")
+        client.file("OpenProject2", project)
+        assert client.data("GetInfo: Type=Clips Format=JSON") == clips
+        actual = selected_audio(client, private, "_reopened-mix-0.wav", 0, 0, duration, ffmpeg)
+        assert len(actual) == len(expected_audio)
+        assert max(abs(a - b) for a, b in zip(actual, expected_audio, strict=True)) < 0.0002
+        tracks = client.data("GetInfo: Type=Tracks Format=JSON")
+        pending_name = "Recording boundary edit"
+        expected = {"clips": clips, "duration": duration, "audio": "_saved-mix-0.wav",
+                    "track_names": [tracks[0]["name"], pending_name], "normal_reopen_count": 1, "phase": phase}
+        (private / "_recording_expected.json").write_text(json.dumps(expected), encoding="utf-8")
+        client.send(f'SetTrackStatus: Name="{pending_name}"')
+        (private / "_save_boundary_arm").write_text(phase, encoding="utf-8")
+        client.send("Save")
+        raise AssertionError("The native save boundary returned without the requested process interruption.")
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
+
+def check_reopened_recording(client, root, ffmpeg):
+    """Read the actual interrupted project through the ordinary native importer."""
+    private = root / "_audio_temp"
+    expected = json.loads((private / "_recording_expected.json").read_text(encoding="utf-8"))
+    client.file("OpenProject2", private / "_recording-storage.aup3")
+    clips = client.data("GetInfo: Type=Clips Format=JSON")
+    assert clips == expected["clips"], (expected["clips"], clips)
+    name = client.data("GetInfo: Type=Tracks Format=JSON")[0]["name"]
+    assert name in expected["track_names"], name
+    if expected["phase"] == "after":
+        assert name == expected["track_names"][1], name
+    before = array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(private / expected["audio"]),
+                                          "-ar", "8000", "-ac", "1", "-f", "f32le", "pipe:1"], timeout=30))
+    after = selected_audio(client, private, "_after-cut.wav", 0, 0, expected["duration"], ffmpeg)
+    assert len(before) == len(after)
+    assert max(abs(a - b) for a, b in zip(before, after, strict=True)) < 0.0002
+    client.send("Save")
+    (root / "_playback.json").write_text(json.dumps({"normal_reopen_count": expected["normal_reopen_count"],
+        "phase": expected["phase"], "clips": len(clips), "saved_audio_preserved": True,
+        "saved_name_is_old_or_complete_new": True}), encoding="utf-8")
+
+
+def run_recording_save_faults(command, environment, app, root, restart_app, cleanup_audio):
+    """Own two fresh native stop/reopen journeys and all private child processes.
+
+    The native save signal is live synchronization, not a saved execution plan.
+    Each normal case starts from generated media; no prior execution is resumed.
+    Captured data is removed only after both old and reopened apps have stopped.
+    """
+    import sqlite3
+    from contextlib import closing
+    from run_fork_test_harness import run_behavior_worker
+
+    observations = []
+    try:
+        for repeat in range(2):
+            if repeat:
+                cleanup_audio()
+                (root / "_audio_temp").mkdir()
+                app = restart_app(True)
+            stopped = threading.Event()
+            replies, failures = [], []
+            worker_environment = {**environment, "AUTOPSY_OWNED_APP_PID": str(app.pid)}
+
+            def prepare():
+                try:
+                    replies.append(run_behavior_worker(command, worker_environment, app, root,
+                                                       timeout_seconds=90, expected_app_stop=stopped))
+                except BaseException as error:
+                    failures.append(error)
+
+            worker = threading.Thread(target=prepare, daemon=True)
+            worker.start()
+            boundary_failure = None
+            try:
+                ready = root / "_audio_temp" / "_save_boundary_ready"
+                deadline = time.monotonic() + 65
+                while not ready.is_file() or ready.read_text(encoding="utf-8") not in ("before", "after"):
+                    if not worker.is_alive() or app.poll() is not None or time.monotonic() >= deadline:
+                        boundary_failure = "The worker ended, its app exited, or the 65-second boundary deadline expired."
+                        break
+                    time.sleep(0.02)
+                if boundary_failure is None:
+                    assert not failures and worker.is_alive() and app.poll() is None
+                    stopped.set()
+                    app.terminate()
+                    app.wait(timeout=10)
+            finally:
+                if app.poll() is None:
+                    app.terminate()
+                    app.wait(timeout=10)
+                worker.join(timeout=12)
+            if boundary_failure is not None:
+                output = replies[0].stdout if replies else (root / "_commands.log").read_text(encoding="utf-8")
+                errors = replies[0].stderr if replies else (root / "_errors.log").read_text(encoding="utf-8")
+                raise RuntimeError(f"Recording did not reach its native commit boundary: {boundary_failure}\n"
+                    f"Command: {command!r}\nWorker failures: {failures or '<absent>'}\n"
+                    f"stdout:\n{output[-12000:] or '<absent>'}\nstderr:\n{errors or '<absent>'}")
+            if worker.is_alive() or failures or not replies:
+                raise RuntimeError(f"Recording fault worker cleanup failed: {failures}")
+            project = root / "_audio_temp" / "_recording-storage.aup3"
+            with closing(sqlite3.connect(project.as_uri() + "?mode=rw", uri=True)) as connection:
+                assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+            app = restart_app(False)
+            result = run_behavior_worker([*command, "--recording-storage-recovery"],
+                {**environment, "AUTOPSY_OWNED_APP_PID": str(app.pid)}, app, root)
+            if result.returncode:
+                raise RuntimeError(f"Recording reopen worker exited {result.returncode}: {result.stdout}\n{result.stderr}")
+            assert app.wait(timeout=20) == 0
+            observations.append({**json.loads((root / "_playback.json").read_text(encoding="utf-8")),
+                                 "integrity_check": "ok", "repeat": repeat + 1})
+        (root / "_playback.json").write_text(json.dumps({"fault_journeys": observations}), encoding="utf-8")
+        return app
+    finally:
+        if app.poll() is None:
+            app.terminate()
+            app.wait(timeout=10)
 
 
 def check_audio_clip_actions(client, root, ffmpeg):

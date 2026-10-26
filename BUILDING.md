@@ -414,11 +414,20 @@ without opening AuTopsy; its temporary media is removed after the check.
 The SDLC Windows installer build compiles first, then calls the same affected-test
 runner with `--before-package BUILD_DIR`. Its baseline is `fork-fixtures`,
 `fork-preview` and `fork-project-compatibility`; the native input map adds named
-cases for changed features. `AUTOPSY_TEST_BASE` chooses the comparison revision.
-An unavailable base requires an explicit native scope through the builder's
-`--test-name` option; an unmapped native input or missing named test stops the build.
-That option adds checks and never removes the baseline or known affected cases.
+cases for changed features. The builder requests beta qualification: the runner
+reads current GitHub releases and compares with the newest published beta or
+stable product version containing the installer and build manifest. It resolves
+that release's tag and requires agreement with its immutable source revision.
+An ambiguous or conflicting latest release stops packaging; no older fallback
+is chosen. With no eligible release, every declared native case is selected.
+The builder's `--test-name` option adds checks and never removes the baseline or
+known affected cases. An unmapped native input or missing named test stops the build.
 The native harness reuses its own matching passes without opening another editor.
+Video's generated CTest list excludes module-owned registrations; track-group
+testing belongs to its feature CMake directory and keeps the same public CLI
+operation. The catalogue producer rejects overlapping ownership, and the package
+selector rejects duplicate CTest names before starting any desktop case. Repeated
+delivery of different completed results is still ambiguous and blocks packaging.
 Only after the checks pass does Inno Setup stage the same compiled runtime. A
 failed desktop check, unavailable desktop, changed source or changed runtime
 blocks packaging. No installed application is stopped, updated or used as a host.
@@ -447,14 +456,22 @@ launching. That process-local adapter constrains each wx top-level window before
 Windows applies its placement, covering the loading splash, editor, welcome,
 About, and video preview. A missing or too-small target stops the test instead
 of falling back to screen 1. It changes no system display settings or user windows.
-Each placement resolves the selected device afresh in the callback's DPI
-coordinate space. The guard retains neither monitor handles nor geometry as an
-identity, and never falls back to screen 1. Private test windows use wx's
+Startup and display-change messages bind the selected device's Windows monitor
+handle. Each placement reads its current bounds in the window owner's DPI
+coordinate space and checks the device identity; missing or replaced handles
+stop the private app. Geometry is never retained as identity, and placements do
+not re-enumerate the desktop from inside window-move callbacks. The guard never
+falls back to screen 1. Private test windows use wx's
 stay-on-top style so the host retains their exposure during activation; the
 runner also checks the window under the target point before sending input.
 Its held mouse button is released even when the owned window disappears.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
+`fork-display-guard` repeats native moves, resizing, hide/show and display-change
+messages under all five caller DPI contexts, without pointer or keyboard input.
+The affected-test suite stops its probe immediately before and after each
+window effect, checking that cleanup restores the caller context and never acts
+on a recycled window handle.
 `fork-branding` also repeats hidden/visible placement requests toward the other
 screen, including oversized windows. GUI cases check the owned windows before
 commands, mouse input, and screenshots; pre-show observations stay in each case's
@@ -700,11 +717,15 @@ runner. Its direct developer entry point is:
 
     uv run --project scripts --locked --with cmake==3.31.10 python scripts/run_affected_tests.py
 
-The runner compares against the merge base with `origin/main`, including current
-staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use `--base REF`
-for another comparison. CI supplies the event's base revision; an unavailable
-shallow base conservatively selects all portable checks. `--all` explicitly
-selects that full scope. Docs-only changes need no portable tests.
+Local development defaults to the merge base with `origin/main`, including
+current staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use
+`--base REF` for another development comparison. Product qualification uses
+`--qualification-level alpha|beta|stable` or `AUTOPSY_TEST_LEVEL`; CI and the
+installer builder request beta. The newest eligible published product version
+at that level or higher owns the comparison, with no caller-pinned older base.
+The runner reads release metadata afresh and fetches only its selected tag.
+No eligible release conservatively selects all checks. `--all` explicitly
+selects every portable check. Docs-only changes need no portable tests.
 
 One input map in `run_affected_tests.py` selects dependent groups; unknown owned
 executable inputs require a map entry or an explicit scope decision. CMake builds
@@ -712,6 +733,8 @@ only their targets, and Catch2/CTest discovers individual compiled case names.
 Separate suites cover edit plans, composition geometry, existing playback,
 branding, installer production, harness policy/lifecycle and affected selection.
 Native adapter inputs are reported separately, without implying desktop acceptance.
+An explicitly scoped native session runs only its selected compiled host cases;
+it never records portable passes against core binaries that session did not build.
 
 The runner owns `.build/_core` and `.build/_test-results`. Immutable results retain
 their original IDs and source/test/fixture/lock/executable/runtime/command inputs.
@@ -760,6 +783,68 @@ does not fetch or merge upstream updates automatically.
 microphone. The adapter creates a fresh pending capture clip at the cursor and
 passes the earliest free-space/selection end to the native stream. Actual capture
 device behavior still depends on the user's audio device.
+`CreateCursorCapture` binds append, flush and dropout repair to that exact pending
+clip; ordinary track append chooses the rightmost clip and cannot record into a
+middle gap safely.
+
+List device capabilities without opening a microphone:
+
+    uv run --project scripts --locked python scripts/piped-work/test_fork_features.py --list-recording-devices
+
+Set `AUTOPSY_TEST_RECORDING_DEVICE` to one exact returned name before configuring
+or running the selected `fork-cursor-recording` case through the SDLC test action.
+`fork-cursor-recording-save-before` and `fork-cursor-recording-save-after` are
+separate opt-in identities for recorded-clip save/reopen and process interruption.
+Each repeats a fresh record/save/reopen/stop/reopen journey twice. The earlier
+cursor-recording pass keeps its original check version and is not repurposed.
+That explicit scope enables physical capture; normal CI and default build tests
+never record a microphone. The private mono MME profile uses zero latency
+correction and no software playthrough. Other hosts, stereo, default latency
+compensation and other sample rates need their own device-scoped cases.
+Captured projects and autosave/audio files live only in the marked case's
+`_audio_temp`; after its process stops, success and failure cleanup delete that
+directory. A live process, foreign marker or redirected path blocks deletion.
+The cursor-recording case compares original generated ranges; save-boundary cases
+also compare the recorded mix before and after reopening. Every audio output
+created after capture stays in that disposable directory. A regression that
+writes into an original range therefore cannot leave captured samples in retained
+fixtures. Acceptance records contain capabilities, geometry and numeric outcomes.
+
+`AwaitProjectSaveTestBoundary` is inert unless the harness sets
+`AUTOPSY_TEST_SAVE_ROOT` for its exact marked `_audio_temp` project directory.
+That directory owns the arm/ready/release signals and an atomic pending sibling.
+A live barrier waits at most 20 seconds around the saved-document transaction;
+normal release removes signals, and stopping the owned process lets the harness
+delete the entire private directory. Failed preparation keeps bounded worker
+streams and a Python stack, not captured media. Neither another project path
+nor an unmarked or redirected directory can enable the barrier. These native
+checks cover application-process interruption, not a physical power failure;
+the storage unit suite separately discards unsynced writes through its test VFS.
+
+`AUTOPSY_PREVIEW_SOAK_SECONDS` selects 60 to 240 seconds (default 180) for
+`fork-preview-soak`. The test observes native window state during playback,
+because configured scripting commands stop audio. After stopping, it reads the
+player's bounded final timing window. Drop counters can reset on seeks; only
+observed increases inside that window are combined. End-of-run counter values
+cannot establish a complete looped run's dropped-frame total.
+Targets are a response p95 below 0.5 seconds, timing drift p95 below 0.15 seconds,
+at most 2% sampled-window counter increases plus three frames, at most 128 MiB private-memory growth
+and at most 64 extra handles. A pass describes that machine and fixture; it does
+not establish hours of uninterrupted playback or behavior on every GPU.
+Its worker budget is 285 seconds and CTest's outer limit is 360 seconds, leaving
+setup, stop and cleanup time around the maximum 240-second measurement. Other
+native cases retain their existing worker budget. Headless lifecycle cases
+repeat deadline expiry and check worker cleanup without terminating the app.
+The scoped Windows run measured 180 seconds, 13 wraps, about 17.5 MiB
+private-memory growth and four extra handles. Its retained final 256 timing
+samples span 31.9 seconds, with zero observed drop-counter increases and a
+drift p95 of 0.0343 seconds. Full-run dropped-frame totals remain unmeasured.
+The corrected window calculation is checked independently, including seek
+resets, against synthetic cases and the captured observations; the original
+native pass retains its original check version. Physical mono MME
+capture also passed full/early-stop repeats, Undo/Redo and normal process exit.
+NVENC could not load `nvcuda.dll`; its rejection/cleanup case passed, while
+successful NVIDIA encoding remains unchecked.
 
 `project-storage::` cases compile the application's owned SQLite configuration
 against its bundled SQLite. A private VFS separates volatile writes from synced
@@ -771,6 +856,10 @@ setting must lose an acknowledged edit, so an app-only crash test cannot stand
 in for this power-cut model. No user files, physical input, or disk artifacts are
 used. The native connection/save adapters still need their separate app checks;
 this suite cannot prove storage firmware honors the operating system's flushes.
+The multi-edit case first commits six clips and distinct sample blocks, then
+interrupts replacement of the last two clips at every VFS effect. Earlier clips
+must remain byte-exact, the later document must be old or completely new, and a
+fresh repeated edit must converge after reopening.
 
 `fork-video-clip-mute` owns the individual clip menu, repeated/no-op requests,
 canceled menus, Undo/Redo, split and joined properties, save/reopen, preview and

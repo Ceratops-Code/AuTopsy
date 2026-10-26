@@ -11,6 +11,7 @@ Paul Licameli split from ProjectManager.cpp
 
 #include "ProjectAudioManager.h"
 #include "recording/PlanCursorRecording.h"
+#include "recording/CreateCursorCapture.h"
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
 #include "video/CreateVideoTrack.h"
 #endif
@@ -853,12 +854,15 @@ bool ProjectAudioManager::DoRecord(AudacityProject &project,
             };
 
             WaveTrack* pending{};
+            std::shared_ptr<RecordableSequence> cursorCapture;
             if (createCaptureClipAtCursor) {
                // Create only in the pending copy. Failed or cancelled capture
                // cannot leave an empty interval in the original track.
                pending = static_cast<WaveTrack*>(
                   pendingTracks.RegisterPendingChangedTrack(updater, wt));
-               insertEmptyInterval(*pending, t0, false);
+               cursorCapture = CursorRecording::CreateCursorCapture(
+                  pending->SharedPointer<WaveTrack>(),
+                  insertEmptyInterval(*pending, t0, false));
             }
             else {
                // End of current track is before or at recording start time.
@@ -897,7 +901,8 @@ bool ProjectAudioManager::DoRecord(AudacityProject &project,
                   copiedClip->SetIsPlaceholder(false);
             }
             transportSequences.captureSequences
-               .push_back(pending->SharedPointer<WaveTrack>());
+               .push_back(cursorCapture ? std::move(cursorCapture)
+                  : pending->SharedPointer<WaveTrack>());
          }
          pendingTracks.UpdatePendingTracks();
       }

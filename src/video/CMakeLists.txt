@@ -234,7 +234,16 @@ if(TARGET video-playback-test)
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
-        foreach(_case delete-gap clip-properties visual-crop collect-media video-fades clip-snapping clip-selection clip-actions video-clip-export video-clip-mute edit-cursor-line groups tracks video video-selection video-edges video-linked-edges video-split-edges video-linked-split-edges video-clip-edits video-linked-clip-edits video-compound-render video-crop video-crop-controls video-export-timing video-transport video-visibility video-speed video-speed-storage video-clip-storage video-parent-links video-clipboard video-track-menu media preview branding fixtures history-view transport-toolbar preview-navigation preview-controls preview-quality video-cursor project-compatibility)
+       # The behavior runner owns case identities; adding a test must not
+       # require changing the application's CMake source and rebuilding it.
+       execute_process(COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py" --list-native-cases
+          RESULT_VARIABLE autopsy_cases_status OUTPUT_VARIABLE autopsy_native_cases
+          ERROR_VARIABLE autopsy_cases_error OUTPUT_STRIP_TRAILING_WHITESPACE)
+       if(NOT autopsy_cases_status EQUAL 0 OR NOT autopsy_native_cases)
+          message(FATAL_ERROR "Native case catalogue failed (${autopsy_cases_status}): ${autopsy_cases_error}")
+       endif()
+       foreach(_case IN LISTS autopsy_native_cases)
          add_test(NAME fork-${_case}
             COMMAND "${Python3_EXECUTABLE}"
                "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"
@@ -245,6 +254,7 @@ if(TARGET video-playback-test)
                --ffprobe "${audacity_video_ffmpeg_runtime}/ffprobe.exe")
          set_tests_properties(fork-${_case} PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
       endforeach()
+      set_tests_properties(fork-preview-soak PROPERTIES TIMEOUT 360)
       set_tests_properties(fork-project-compatibility PROPERTIES TIMEOUT 600)
    endif()
 endif()

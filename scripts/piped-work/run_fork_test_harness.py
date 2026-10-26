@@ -102,8 +102,18 @@ def check_neutral_preview_fixture(work_root, ffmpeg, ffprobe):
     print("fixtures: PASS (synthetic picture/audio, repeated calls and interrupted publication)")
 
 
-def run_behavior_worker(command, environment, app, root):
-    """Collect both worker streams and stop promptly when the owned app fails."""
+def run_behavior_worker(command, environment, app, root, *, timeout_seconds=240, expected_app_stop=None):
+    """Collect worker streams with a finite budget; stop on owned-app failure.
+
+    The outer case owner closes the app. This function owns only its worker,
+    including termination and both output streams on interruption or expiry.
+    Long soak callers reserve extra setup/cleanup time in their outer deadline.
+    A fault-test owner may set expected_app_stop only after observing its exact
+    native boundary, immediately before stopping this app. That acknowledgement
+    changes shutdown handling, never the worker's exit code or acceptance.
+    """
+    if not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 285:
+        raise ValueError("Choose a finite positive worker deadline of at most 285 seconds.")
     if app.poll() is not None:
         raise RuntimeError(
             f"Command: {subprocess.list2cmdline(command)}\n"
@@ -118,7 +128,7 @@ def run_behavior_worker(command, environment, app, root):
         env=environment,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
-    deadline, stopped_at = time.monotonic() + 240, None
+    deadline, stopped_at = time.monotonic() + timeout_seconds, None
     cause, output, errors = None, "", ""
     try:
         while True:
@@ -128,13 +138,15 @@ def run_behavior_worker(command, environment, app, root):
             except subprocess.TimeoutExpired:
                 status = app.poll()
                 if status is not None:
+                    if expected_app_stop is not None and expected_app_stop.is_set():
+                        break
                     if stopped_at is None:
                         stopped_at = time.monotonic()
                     if status or time.monotonic() - stopped_at > 2:
                         cause = f"Owned app exited with status {status} while its worker was active."
                         break
                 if time.monotonic() >= deadline:
-                    cause = "Behavior worker exceeded its 240-second deadline."
+                    cause = f"Behavior worker exceeded its {timeout_seconds:g}-second deadline."
                     break
     finally:
         if operation.poll() is None:
@@ -342,12 +354,99 @@ def check_test_display_selection():
     )
 
 
+def check_owned_display_guard(client):
+    """Exercise the real module's placement hooks without pointer/key injection.
+
+    Each operation checks the current HWND's process, including after failures;
+    cleanup never touches a recycled handle. Caller DPI changes, repeated native
+    moves, visibility changes and topology messages all travel through Windows.
+    No actual display configuration is changed. The caller's DPI context and
+    the owned project's original placement are restored on every exit path.
+    """
+    from ctypes import wintypes as w
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetAncestor.argtypes = [w.HWND, w.UINT]
+    user.GetAncestor.restype = w.HWND
+    user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.IsWindow.argtypes = [w.HWND]
+    user.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int,
+                                  ctypes.c_int, ctypes.c_int, w.UINT]
+    user.ShowWindow.argtypes = [w.HWND, ctypes.c_int]
+    user.SetThreadDpiAwarenessContext.argtypes = [w.HANDLE]
+    user.SetThreadDpiAwarenessContext.restype = w.HANDLE
+    user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
+                                        w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    pane = client.data("GetVideoPreviewInfo")["videoTrackPanelHandle"]
+    window = user.GetAncestor(pane, 2)
+    owner = w.DWORD()
+    user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+    if not window or not owner.value:
+        raise RuntimeError("The display probe has no owned project window.")
+    original = w.RECT()
+    if not user.GetWindowRect(window, ctypes.byref(original)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    def is_owned():
+        current = w.DWORD()
+        return (user.IsWindow(window)
+                and user.GetWindowThreadProcessId(window, ctypes.byref(current))
+                and current.value == owner.value)
+
+    def check_window():
+        if not is_owned():
+            raise RuntimeError("The private display-probe window exited or changed owner.")
+        assert_owned_test_display(owner.value, include_window=window)
+
+    completed = 0
+    try:
+        for _ in range(2):
+            for context in (-1, -2, -3, -4, -5):
+                previous = user.SetThreadDpiAwarenessContext(w.HANDLE(context))
+                if not previous:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    target = select_test_display(connected_test_displays())
+                    left, top, right, bottom = target["work"]
+                    for width, height in ((700, 500), (right-left-32, bottom-top-32)):
+                        check_window()
+                        if not user.SetWindowPos(window, None, left+16, top+16,
+                                                 width, height, 0x14):
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        check_window()
+                        completed += 1
+                    check_window()
+                    reply = ctypes.c_size_t()
+                    if not user.SendMessageTimeoutW(window, 0x7E, 32,
+                            ((bottom-top) << 16) | (right-left), 2, 2000, ctypes.byref(reply)):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    check_window()
+                    user.ShowWindow(window, 0)
+                    check_window()
+                    user.ShowWindow(window, 4)
+                    check_window()
+                    completed += 3
+                finally:
+                    user.SetThreadDpiAwarenessContext(previous)
+    finally:
+        if is_owned():
+            user.ShowWindow(window, 4)
+            check_window()
+            if not user.SetWindowPos(window, None, original.left, original.top,
+                    original.right-original.left, original.bottom-original.top, 0x14):
+                raise ctypes.WinError(ctypes.get_last_error())
+            check_window()
+    print(json.dumps({"display_guard": "passed", "operations": completed,
+                      "caller_dpi_contexts": 5, "repetitions": 2}))
+
+
 def check_behavior_worker_lifecycle(work_root):
-    """No GUI: repeat normal exit and app failure on both sides of worker launch."""
+    """No GUI: repeat normal exit, bounded expiry and both app-failure boundaries."""
     import tempfile
 
     work_root.mkdir(parents=True, exist_ok=True)
-    for boundary in ("normal", "before", "after"):
+    for boundary in ("normal", "before", "after", "deadline"):
         for _ in range(2):
             with tempfile.TemporaryDirectory(
                 prefix="_worker-lifecycle-", dir=work_root
@@ -368,7 +467,7 @@ def check_behavior_worker_lifecycle(work_root):
                     if boundary == "after"
                     else (
                         "import time,sys;time.sleep("
-                        + ("10" if boundary == "normal" else "0")
+                        + ("10" if boundary in ("normal", "deadline") else "0")
                         + ");sys.exit(197)"
                     )
                 )
@@ -394,15 +493,21 @@ def check_behavior_worker_lifecycle(work_root):
                 try:
                     try:
                         result = run_behavior_worker(
-                            command, os.environ.copy(), app, root
+                            command, os.environ.copy(), app, root,
+                            timeout_seconds=0.25 if boundary == "deadline" else 240,
                         )
                     except RuntimeError as error:
                         assert boundary != "normal", str(error)
-                        assert "status 197" in str(error), str(error)
-                        if boundary == "before":
+                        if boundary == "deadline":
+                            assert "0.25-second deadline" in str(error), str(error)
+                            assert "Worker exit:" in str(error) and "stdout:" in str(error) and "stderr:" in str(error)
+                            assert app.poll() is None, "The worker owner terminated an app it does not own."
+                        elif boundary == "before":
+                            assert "status 197" in str(error), str(error)
                             assert "<not started>" in str(error)
                             assert not (root / "_commands.log").exists()
                         else:
+                            assert "status 197" in str(error), str(error)
                             assert (
                                 "worker output" in (root / "_commands.log").read_text()
                             )
@@ -875,6 +980,7 @@ def operate_owned_video_track(
         if not user.SetWindowPos(root, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x53):
             raise RuntimeError(f"Cannot expose owned project {root}: Windows error {ctypes.get_last_error()}.")
         activated = user.SetForegroundWindow(root)
+        thread = user.GetWindowThreadProcessId(panel, None)
         deadline = time.monotonic() + 3
         while True:
             enabled = True
@@ -885,7 +991,13 @@ def operate_owned_video_track(
                     break
                 ancestor = user.GetParent(ancestor)
             hit = user.WindowFromPoint(point)
-            if enabled and hit == panel:
+            state = Gui()
+            state.size = ctypes.sizeof(state)
+            active = user.GetGUIThreadInfo(thread, ctypes.byref(state)) and state.active == root
+            # Script replies can precede their progress window's destruction.
+            # Exposed pixels alone do not make the pane an active input target;
+            # wait for that owned command window to return activation first.
+            if enabled and hit == panel and active:
                 break
             obscurer = user.GetAncestor(hit, 2) if hit else None
             title = ctypes.create_unicode_buffer(256)
@@ -906,7 +1018,7 @@ def operate_owned_video_track(
                 user.ClientToScreen(panel, ctypes.byref(pane_origin))
                 raise RuntimeError(
                     f"The owned native pane did not become enabled and exposed: enabled={enabled}; "
-                    f"root={root}; visible={user.IsWindowVisible(root)}; rect={list(root_rect)}; "
+                    f"root={root}; active={state.active}; visible={user.IsWindowVisible(root)}; rect={list(root_rect)}; "
                     f"activated={activated}; topmost={bool(user.GetWindowLongPtrW(root, -20) & 8)}; "
                     f"pane_origin={(pane_origin.x,pane_origin.y)}; client_size={list(rectangle)}; "
                     f"panel={panel}; hit={hit}; obscurer_pid={obscurer_pid.value}; title={title.value!r}; "
@@ -918,7 +1030,6 @@ def operate_owned_video_track(
         position_pointer(x0, y0)
         if any(user.GetAsyncKeyState(key) & 0x8000 for key in (1, 16, 17, 18, 91, 92)):
             raise RuntimeError("Human input changed before the owned drag began.")
-        thread = user.GetWindowThreadProcessId(panel, None)
         if prior_click_time is not None:
             position_pointer(*position(prior_click_time, source))
             button(2)

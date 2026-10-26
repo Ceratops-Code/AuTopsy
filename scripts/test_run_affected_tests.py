@@ -23,6 +23,379 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_display_probe_repeats_and_stops_at_each_window_effect_boundary(self) -> None:
+        import ctypes
+        from ctypes import wintypes as w
+
+        import run_fork_test_harness as harness
+
+        # Exercise the probe's cleanup and recycled-HWND contract independently
+        # of Windows. The native display-guard case covers the actual module.
+        target = {"device": r"\\.\DISPLAY2", "primary": False, "work": [-1280, 113, 0, 913]}
+        def run_probe(boundary: str | None, index: int) -> None:
+            state = {"alive": True, "effect": 0, "foreign_effects": 0, "context": 24592}
+            rectangle = [-1200, 150, -300, 750]
+
+            def process_owner(_window: Any, pointer: Any) -> int:
+                ctypes.cast(pointer, ctypes.POINTER(w.DWORD)).contents.value = 7 if state["alive"] else 8
+                return 10
+
+            def read_rectangle(_window: Any, pointer: Any) -> bool:
+                output = ctypes.cast(pointer, ctypes.POINTER(w.RECT)).contents
+                output.left, output.top, output.right, output.bottom = rectangle
+                return True
+
+            def context(value: Any) -> int:
+                previous = state["context"]
+                state["context"] = value.value if hasattr(value, "value") else value
+                return previous
+
+            def effect(*_args: Any) -> int:
+                if not state["alive"]:
+                    state["foreign_effects"] += 1
+                    raise AssertionError("Window operation reached a recycled HWND")
+                state["effect"] += 1
+                if state["effect"] == index:
+                    state["alive"] = False
+                    if boundary == "before":
+                        raise InterruptedError("Private app stopped immediately before the effect")
+                return 1
+
+            user = SimpleNamespace(
+                GetAncestor=unittest.mock.Mock(return_value=42),
+                GetWindowThreadProcessId=unittest.mock.Mock(side_effect=process_owner),
+                GetWindowRect=unittest.mock.Mock(side_effect=read_rectangle),
+                IsWindow=unittest.mock.Mock(side_effect=lambda _window: state["alive"]),
+                SetThreadDpiAwarenessContext=unittest.mock.Mock(side_effect=context),
+                SetWindowPos=unittest.mock.Mock(side_effect=effect),
+                ShowWindow=unittest.mock.Mock(side_effect=effect),
+                SendMessageTimeoutW=unittest.mock.Mock(side_effect=effect),
+            )
+            client = unittest.mock.Mock()
+            client.data.return_value = {"videoTrackPanelHandle": 43}
+            with patch.object(harness.ctypes, "WinDLL", return_value=user, create=True), \
+                    patch.object(harness, "connected_test_displays", return_value=[target]), \
+                    patch.object(harness, "assert_owned_test_display"), redirect_stdout(io.StringIO()):
+                if boundary:
+                    with self.assertRaises((InterruptedError, RuntimeError)):
+                        harness.check_owned_display_guard(client)
+                else:
+                    harness.check_owned_display_guard(client)
+                    self.assertEqual(state["effect"], 52)
+                self.assertEqual(state["foreign_effects"], 0)
+                self.assertEqual(state["context"], 24592)
+
+        for boundary, index in [(None, 0), (None, 0),
+                *((boundary, index) for boundary in ("before", "after") for index in range(1, 53))]:
+            with self.subTest(boundary=boundary, index=index):
+                run_probe(boundary, index)
+
+    def test_expected_fault_stop_keeps_streams_and_never_stops_an_unacknowledged_app(self) -> None:
+        import threading
+
+        import run_fork_test_harness as harness
+
+        for acknowledged in (False, True, False, True):
+            with self.subTest(acknowledged=acknowledged), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "_app.log").write_text("private test app", encoding="utf-8")
+                event = threading.Event()
+                if acknowledged:
+                    event.set()
+                app = unittest.mock.Mock()
+                app.poll.side_effect = [None, 17]
+                app.returncode = 17
+                command = [sys.executable, "-c", "import sys,time; print('started',flush=True); print('details',file=sys.stderr,flush=True); time.sleep(60)"]
+                if acknowledged:
+                    result = harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
+                    self.assertIsNotNone(result.returncode)
+                    self.assertIn("started", result.stdout)
+                    self.assertIn("details", result.stderr)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "Owned app exited with status 17"):
+                        harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
+                app.terminate.assert_not_called()
+                self.assertIn("started", (root / "_commands.log").read_text(encoding="utf-8"))
+                self.assertIn("details", (root / "_errors.log").read_text(encoding="utf-8"))
+
+    @staticmethod
+    def published_release(tag: str, *, preview: bool = True, draft: bool = False) -> dict[str, Any]:
+        return {"id": tag, "tag_name": tag, "draft": draft, "prerelease": preview,
+                "target_commitish": "a" * 40,
+                "published_at": "2026-10-25T00:00:00Z",
+                "assets": [{"name": "_build-manifest.json"}, {"name": "autopsy-win-3.7.10-test-x64.exe"}]}
+
+    def test_latest_baseline_excludes_lower_levels_and_compares_versions(self) -> None:
+        rows = [self.published_release("v3.7.10-autopsy.2"),
+                self.published_release("v3.7.9", preview=False),
+                self.published_release("v3.8.0-autopsy.alpha.3"),
+                self.published_release("v3.7.10-autopsy.10")]
+        original = json.dumps(rows, sort_keys=True)
+        for _ in range(2):
+            for level, tag in (("alpha", "v3.8.0-autopsy.alpha.3"), ("beta", "v3.7.10-autopsy.10"), ("stable", "v3.7.9")):
+                selected = runner.select_qualification_baseline(rows, level)
+                assert selected is not None
+                self.assertEqual(selected["tag"], tag)
+            self.assertEqual(json.dumps(rows, sort_keys=True), original)
+        rows.append(self.published_release("v3.8.0", preview=False))
+        selected = runner.select_qualification_baseline(rows, "beta")
+        assert selected is not None
+        self.assertEqual(selected["tag"], "v3.8.0")
+
+    def test_baseline_requires_published_installer_acceptance_and_unambiguous_metadata(self) -> None:
+        missing = self.published_release("v4.0.0-autopsy.1")
+        missing["assets"] = []
+        rows = [missing, self.published_release("v4.1.0-autopsy.1", draft=True),
+                self.published_release("v3.8.0-autopsy.alpha.1")]
+        self.assertIsNone(runner.select_qualification_baseline(rows, "beta"))
+        with self.assertRaisesRegex(RuntimeError, "conflicting"):
+            runner.select_qualification_baseline([self.published_release("v3.7.10", preview=True)], "beta")
+        with self.assertRaisesRegex(ValueError, "level"):
+            runner.select_qualification_baseline([], "unknown")
+        first = self.published_release("v3.7.10-autopsy.10")
+        with self.assertRaisesRegex(RuntimeError, "ambiguous"):
+            runner.select_qualification_baseline([first, {**first, "id": "another-release"}], "beta")
+
+    def test_baseline_rejects_missing_source_and_disagreeing_tag_before_tests(self) -> None:
+        release = self.published_release("v3.7.10-autopsy.10")
+        for source, tag, message in ((None, "a" * 40, "immutable source"),
+                                     ("a" * 40, "b" * 40, "disagree")):
+            calls: list[list[str]] = []
+
+            def execute(command, cwd, *, source=source, tag=tag, calls=calls):
+                calls.append(command)
+                if command[:3] == ["gh", "repo", "view"]:
+                    return json.dumps({"nameWithOwner": "owner/AuTopsy"})
+                if command[:2] == ["gh", "api"]:
+                    return json.dumps([[{**release, "target_commitish": source}]])
+                if command[:2] == ["git", "fetch"]:
+                    return ""
+                return tag
+
+            with self.subTest(source=source, tag=tag), patch.object(runner, "run_command", side_effect=execute):
+                for _ in range(2):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        runner.read_qualification_baseline(Path("repo"), "beta")
+                self.assertFalse(any(command[0] in ("cmake", "ctest") for command in calls))
+                self.assertEqual(any(command[:2] == ["git", "fetch"] for command in calls), source is not None)
+
+    def test_native_session_never_accepts_current_portable_sources_against_an_old_binary(self) -> None:
+        calls = []
+
+        def execute(command, cwd):
+            calls.append(command)
+            if "--show-only=json-v1" in command:
+                return json.dumps({"tests": [{"name": "fork-test-runner"}, {"name": "fork-native-media-session"}]})
+            return ""
+
+        with patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "private-build",
+                                     "AUTOPSY_VIDEO_TEST_NAME": "^fork-cursor-recording-save-before$"}), \
+             patch.object(runner, "changed_paths", return_value=(["scripts/run_affected_tests.py"], "commit")), \
+             patch.object(runner.shutil, "which", return_value="available"), \
+             patch.object(runner, "ReceiptStore"), patch.object(runner, "file_digest", return_value="runtime"), \
+             patch.object(runner, "run_command", side_effect=execute), \
+             patch.object(runner, "run_named_check") as portable_check, redirect_stdout(io.StringIO()) as output:
+            for _ in range(2):
+                output.seek(0)
+                output.truncate()
+                self.assertEqual(runner.run_selected_tests([]), 0)
+                report = json.loads(output.getvalue())
+                self.assertEqual(report["scope"], "native")
+                self.assertEqual(report["checks"], [{"name": "fork-native-media-session", "result": "passed"}])
+            portable_check.assert_not_called()
+            self.assertFalse(any("--build" in command for command in calls))
+
+    def test_qualification_base_cannot_be_silently_pinned_to_an_older_version(self) -> None:
+        chosen = {"tag": "v3.7.10-autopsy.10", "level": "beta", "commit": "a" * 40}
+        with patch.object(runner, "read_qualification_baseline", return_value=chosen), \
+             patch.object(runner, "run_command", return_value="b" * 40) as command:
+            with self.assertRaisesRegex(RuntimeError, "newest eligible"):
+                runner.changed_paths(Path("repo"), "v3.7.10-autopsy.9", "beta")
+            self.assertEqual(command.call_count, 1)
+
+    def test_baseline_reads_current_service_state_after_each_interruption(self) -> None:
+        root = Path("repo")
+        rows = [self.published_release("v3.7.10-autopsy.10")]
+        for boundary in ("before-fetch", "after-fetch"):
+            calls: list[list[str]] = []
+            interrupted = False
+            effects: list[str] = []
+
+            def execute(command, cwd, *, calls=calls, effects=effects, boundary=boundary):
+                nonlocal interrupted
+                self.assertEqual(cwd, root)
+                calls.append(command)
+                if command[:3] == ["gh", "repo", "view"]:
+                    return json.dumps({"nameWithOwner": "owner/AuTopsy"})
+                if command[:2] == ["gh", "api"]:
+                    return json.dumps([rows])
+                if command[:2] == ["git", "fetch"]:
+                    self.assertEqual(command[-1], "refs/tags/v3.7.10-autopsy.10:refs/tags/v3.7.10-autopsy.10")
+                    if boundary == "after-fetch":
+                        effects.append(command[-1])
+                    if not interrupted:
+                        interrupted = True
+                        raise KeyboardInterrupt(boundary)
+                    if boundary == "before-fetch":
+                        effects.append(command[-1])
+                    return ""
+                return "a" * 40
+
+            with self.subTest(boundary=boundary), patch.object(runner, "run_command", side_effect=execute):
+                with self.assertRaises(KeyboardInterrupt):
+                    runner.read_qualification_baseline(root, "beta")
+                for _ in range(2):
+                    selected = runner.read_qualification_baseline(root, "beta")
+                    assert selected is not None
+                    self.assertEqual(selected["commit"], "a" * 40)
+                self.assertEqual(sum(command[:2] == ["gh", "api"] for command in calls), 3)
+                self.assertEqual(len(effects), 2 if boundary == "before-fetch" else 3)
+
+    def test_preview_sample_window_counts_seek_resets_and_preserves_observations(self) -> None:
+        from test_preview_controls import measure_preview_sample_window
+
+        rows = [{"audioPosition": audio, "position": audio - 10 - drift,
+                 "expectedPosition": audio - 10, "paused": False,
+                 "droppedFrames": drops, "decoderDroppedFrames": decoder}
+                for audio, drift, drops, decoder in ((22.8, .1, 2, 0), (23, .05, 5, 2),
+                                                     (10.1, .2, 1, 0), (11, .02, 3, 1))]
+        report = {"loopStart": 10, "loopEnd": 24, "samples": rows}
+        original = json.dumps(report, sort_keys=True)
+        for _ in range(2):
+            result = measure_preview_sample_window(report)
+            self.assertAlmostEqual(result["timing_window_seconds"], 2.2)
+            self.assertAlmostEqual(result["drift_p95_seconds"], .05)
+            self.assertEqual(result["sampled_window_dropped_frames"], 6)
+            self.assertEqual(result["sampled_window_decoder_dropped_frames"], 3)
+            self.assertEqual(json.dumps(report, sort_keys=True), original)
+
+    def test_preview_sample_window_rejects_missing_or_unusable_observations(self) -> None:
+        from test_preview_controls import measure_preview_sample_window
+
+        row = {"audioPosition": 11, "position": 1, "expectedPosition": 1, "paused": False,
+               "droppedFrames": 0, "decoderDroppedFrames": 0}
+        reports = [{"loopStart": 10, "loopEnd": 24, "samples": rows} for rows in ([], [row], [row, row])]
+        for key, value in (("position", float("nan")), ("droppedFrames", -1), ("audioPosition", 50)):
+            reports.append({"loopStart": 10, "loopEnd": 24, "samples": [row, {**row, key: value}]})
+        for report in reports:
+            with self.subTest(report=report), self.assertRaises(ValueError):
+                measure_preview_sample_window(report)
+
+    def test_invalid_worker_deadline_blocks_before_any_process_effect(self) -> None:
+        import run_fork_test_harness as harness
+
+        for seconds in (0, -1, 286, float("nan"), float("inf")):
+            with self.subTest(seconds=seconds), \
+                 patch.object(harness.subprocess, "Popen", side_effect=AssertionError("started a process")):
+                app = unittest.mock.Mock()
+                with self.assertRaises(ValueError):
+                    harness.run_behavior_worker([sys.executable], {}, app, Path("_unused"), timeout_seconds=seconds)
+                app.poll.assert_not_called()
+
+    def test_invalid_soak_duration_blocks_before_gui_or_file_work(self) -> None:
+        for value in ("0", "59", "241", "nan", "inf", "not-a-duration"):
+            with self.subTest(value=value), patch.dict(os.environ, {"AUTOPSY_PREVIEW_SOAK_SECONDS": value}), \
+                 patch.object(sys, "argv", ["test_fork_features.py", "--case", "preview-soak"]), \
+                 patch.object(native, "connected_test_displays", side_effect=AssertionError("opened the desktop")):
+                with self.assertRaises(ValueError):
+                    native.main()
+
+    def test_capture_needs_explicit_device_before_reading_hardware(self) -> None:
+        import test_clip_actions
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTOPSY_TEST_RECORDING_DEVICE", None)
+            with patch.object(test_clip_actions, "read_recording_devices", side_effect=AssertionError("read hardware")), \
+                 self.assertRaisesRegex(RuntimeError, "AUTOPSY_TEST_RECORDING_DEVICE"):
+                test_clip_actions.require_recording_device()
+
+    def test_native_catalogue_is_side_effect_free_and_capture_is_explicit(self) -> None:
+        for device in (None, "explicit test microphone"):
+            with self.subTest(device=device), patch.dict(os.environ, {}, clear=False):
+                if device is None:
+                    os.environ.pop("AUTOPSY_TEST_RECORDING_DEVICE", None)
+                else:
+                    os.environ["AUTOPSY_TEST_RECORDING_DEVICE"] = device
+                output = io.StringIO()
+                with patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
+                     patch.object(native, "worker", side_effect=AssertionError("opened a worker")), \
+                     patch.object(native, "connected_test_displays", side_effect=AssertionError("opened the desktop")), \
+                     patch.object(native.subprocess, "Popen", side_effect=AssertionError("started a process")), \
+                     redirect_stdout(output):
+                    native.main()
+                names = output.getvalue().strip().split(";")
+                self.assertEqual(len(names), len(set(names)))
+                self.assertTrue(all(re.fullmatch(r"[a-z0-9-]+", name) for name in names))
+                self.assertTrue({"preview-soak", "video-vfr-export", "video-encoder-boundaries"} <= set(names))
+                self.assertEqual("cursor-recording" in names, device is not None)
+                self.assertNotIn("display-policy", names)
+                self.assertNotIn("track-groups", names)
+        # The feature-owned registration still calls the same public operation;
+        # absence of its required GUI inputs fails before any desktop effect.
+        with patch.object(sys, "argv", ["test_fork_features.py", "--case", "track-groups"]), \
+             redirect_stdout(io.StringIO()), patch.object(sys, "stderr", io.StringIO()) as error:
+            with self.assertRaises(SystemExit):
+                native.main()
+            self.assertIn("GUI cases require --executable and --work-root", error.getvalue())
+
+    def test_duplicate_ctest_registrations_block_before_any_desktop_case(self) -> None:
+        catalogue = [{"name": name} for name in runner.INSTALLER_BASELINE_TESTS]
+        catalogue.extend([{"name": "fork-track-groups"}, {"name": "fork-track-groups"}])
+        for _ in range(2):
+            with self.assertRaisesRegex(RuntimeError, "one registration owner.*fork-track-groups"):
+                runner.select_installer_tests([], catalogue)
+        with patch.object(native, "NATIVE_CASES", (*native.NATIVE_CASES, "track-groups")), \
+             patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
+             redirect_stdout(io.StringIO()) as output, patch.object(sys, "stderr", io.StringIO()) as error:
+            with self.assertRaises(SystemExit):
+                native.main()
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn("different registration owners", error.getvalue())
+
+    def test_capture_audio_cleanup_repeats_after_interruption_and_preserves_other_outputs(self) -> None:
+        for boundary in ("before", "after"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory(prefix="_capture-cleanup-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as raw:
+                root = Path(raw)
+                (root / "_owner").write_text("AuTopsy behavior tests 1")
+                keep = root / "source.wav"
+                keep.write_bytes(b"generated fixture")
+                audio = root / "_audio_temp"
+                audio.mkdir()
+                for name in ("capture.aup3", "capture.aup3-wal", "capture.aup3-shm"):
+                    (audio / name).write_bytes(b"private sample pages")
+                original = native.shutil.rmtree
+
+                def interrupted(path, *args, audio=audio, boundary=boundary, original=original, **kwargs):
+                    self.assertEqual(path, audio)
+                    if boundary == "after":
+                        original(path, *args, **kwargs)
+                    raise OSError("interrupted capture cleanup")
+
+                with patch.object(native.shutil, "rmtree", interrupted), self.assertRaises(OSError):
+                    native.remove_private_capture_audio(root, process_stopped=True)
+                self.assertEqual(audio.exists(), boundary == "before")
+                for _ in range(2):
+                    native.remove_private_capture_audio(root, process_stopped=True)
+                self.assertFalse(audio.exists())
+                self.assertEqual(keep.read_bytes(), b"generated fixture")
+                self.assertTrue((root / "_owner").is_file())
+
+    def test_capture_cleanup_rejects_live_or_foreign_work_before_deletion(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="_capture-guard-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as raw:
+            root = Path(raw)
+            audio = root / "_audio_temp"
+            audio.mkdir()
+            keep = audio / "capture.aup3"
+            keep.write_bytes(b"must remain")
+            marker = root / "_owner"
+            marker.write_text("AuTopsy behavior tests 1")
+            with self.assertRaisesRegex(RuntimeError, "live"):
+                native.remove_private_capture_audio(root, process_stopped=False)
+            marker.write_text("another owner")
+            with self.assertRaisesRegex(RuntimeError, "owner"):
+                native.remove_private_capture_audio(root, process_stopped=True)
+            self.assertEqual(keep.read_bytes(), b"must remain")
+
     @staticmethod
     def native_catalogue(executable: Path) -> list[dict[str, Any]]:
         names = set(runner.INSTALLER_BASELINE_TESTS)
@@ -35,7 +408,7 @@ class SelectionTests(unittest.TestCase):
         baseline = set(runner.INSTALLER_BASELINE_TESTS)
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
-                               "fork-video-cursor", "fork-video-transport"}
+                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
@@ -594,7 +967,7 @@ class NativeReceiptTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import Mock
 
-        import test_video_clip_edits as edits
+        import test_video_transport as edits
         for kind in ("Button", "wxWindowClassNR"):
             def class_name(_handle, buffer, _size, name=kind):
                 buffer.value = name
@@ -639,7 +1012,7 @@ class NativeReceiptTests(unittest.TestCase):
         driver = self.root / "_test_driver.py"
         recipe = self.root / "test_video_clip_edits.py"
         executable, module = self.root / "_app.exe", self.root / "_script.dll"
-        for path in (driver, recipe, executable, module, self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+        for path in (driver, recipe, executable, module, self.root / "run_fork_test_harness.py", self.root / "pipeclient.py", self.root / "test_video_transport.py"):
             path.write_bytes(b"first input")
         arguments = SimpleNamespace(case="video-clip-mute", ffmpeg=None, ffprobe=None)
         with patch.object(native, "__file__", str(driver)):
@@ -673,7 +1046,7 @@ class NativeReceiptTests(unittest.TestCase):
         recipe = self.root / "test_preview_controls.py"
         executable, module = self.root / "_app.exe", self.root / "_script.dll"
         for path in (driver, recipe, executable, module, self.root / "test_video_clip_edits.py", self.root / "test_clip_actions.py",
-                     self.root / "run_fork_test_harness.py", self.root / "pipeclient.py"):
+                     self.root / "run_fork_test_harness.py", self.root / "pipeclient.py", self.root / "test_video_transport.py"):
             path.write_bytes(b"original input")
         for case in ("preview-quality", "preview-controls", "video-cursor"):
             arguments = SimpleNamespace(case=case, ffmpeg=None, ffprobe=None)

@@ -4,12 +4,29 @@
 #include <sqlite3.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
+#include <thread>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
+#endif
 
 namespace {
 using autopsy::project_storage::ConfigureProjectStorage;
@@ -280,6 +297,68 @@ TEST_CASE("Power-cut model exposes the previous NORMAL durability loss", "[proje
    });
 }
 
+TEST_CASE("An interrupted later edit cannot lose previously acknowledged clip blocks", "[project-storage]") {
+   // Several acknowledged transactions and page-sized, distinct blocks model a
+   // real arrangement rather than a single saved row. Only its final two clips
+   // change in the interrupted edit; every older clip must remain byte-exact.
+   const auto change = std::string("BEGIN; DELETE FROM sampleblocks WHERE blockid>4;")
+      + "INSERT INTO sampleblocks VALUES(7,CAST('" + std::string(8192, 'z') + "' AS BLOB));"
+      + "UPDATE project SET doc='1,2,3,4,7'; COMMIT;";
+   for (const auto mode : {StorageMode::LiveProject, StorageMode::StandaloneCopy}) {
+      const auto populate = [mode](Database& db) {
+         Prepare(db, mode);
+         std::string document = "1";
+         for (int id = 2; id <= 6; ++id) {
+            document += "," + std::to_string(id);
+            const auto sql = "BEGIN; INSERT INTO sampleblocks VALUES(" + std::to_string(id)
+               + ",CAST('" + std::string(8192, static_cast<char>('a' + id)) + "' AS BLOB));"
+               + "UPDATE project SET doc='" + document + "'; COMMIT;";
+            REQUIRE(db.Execute(sql.c_str()) == SQLITE_OK);
+         }
+         std::vector<std::string> stable;
+         for (int id = 1; id <= 4; ++id)
+            stable.push_back(db.Value(("SELECT hex(samples) FROM sampleblocks WHERE blockid="
+               + std::to_string(id)).c_str()));
+         return stable;
+      };
+      int effects{};
+      {
+         PowerCutDisk disk; Database db(disk); populate(db); disk.Arm(0, false);
+         REQUIRE(db.Execute(change.c_str()) == SQLITE_OK);
+         effects = disk.effects;
+      }
+      REQUIRE(effects > 0);
+      for (int at = 1; at <= effects; ++at) {
+         for (const bool after : {false, true}) {
+            CAPTURE(static_cast<int>(mode), at, after);
+            PowerCutDisk disk; Database db(disk);
+            const auto expected = populate(db);
+            disk.Arm(at, after);
+            const auto status = db.Execute(change.c_str());
+            CutAndReopen(disk, db, [&](Database& reopened) {
+               REQUIRE(reopened.Value("PRAGMA integrity_check") == "ok");
+               for (int id = 1; id <= 4; ++id)
+                  REQUIRE(reopened.Value(("SELECT hex(samples) FROM sampleblocks WHERE blockid="
+                     + std::to_string(id)).c_str()) == expected[id - 1]);
+               const auto document = reopened.Value("SELECT doc FROM project");
+               REQUIRE((document == "1,2,3,4,5,6" || document == "1,2,3,4,7"));
+               if (status == SQLITE_OK) REQUIRE(document == "1,2,3,4,7");
+               REQUIRE(reopened.Value("SELECT count(*) FROM sampleblocks")
+                  == (document == "1,2,3,4,7" ? "5" : "6"));
+               if (document == "1,2,3,4,7")
+                  REQUIRE(reopened.Value("SELECT length(samples) FROM sampleblocks WHERE blockid=7") == "8192");
+               REQUIRE(ConfigureProjectStorage(reopened.handle, "main", mode) == SQLITE_OK);
+               for (int repeat = 0; repeat != 2; ++repeat) {
+                  REQUIRE(reopened.Execute(change.c_str()) == SQLITE_OK);
+                  REQUIRE(reopened.Value("SELECT doc FROM project") == "1,2,3,4,7");
+                  REQUIRE(reopened.Value("SELECT count(*) FROM sampleblocks") == "5");
+               }
+            });
+         }
+      }
+   }
+}
+
 TEST_CASE("Edits remain atomic across every interrupted write and sync", "[project-storage]") {
    for (auto mode : {StorageMode::LiveProject, StorageMode::StandaloneCopy}) {
       int count{};
@@ -372,4 +451,148 @@ TEST_CASE("Storage setup rejects unsupported modes and active transactions", "[p
    const auto rc = ConfigureProjectStorage(memory, "main", StorageMode::LiveProject);
    REQUIRE(sqlite3_close(memory) == SQLITE_OK);
    REQUIRE(rc != SQLITE_OK);
+}
+
+namespace {
+struct PrivateSaveBoundary {
+   static unsigned long ProcessId() {
+#ifdef _WIN32
+      return GetCurrentProcessId();
+#else
+      return static_cast<unsigned long>(getpid());
+#endif
+   }
+   static bool ProcessRunning(unsigned long pid) {
+#ifdef _WIN32
+      const auto process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+      if (!process) return GetLastError() != ERROR_INVALID_PARAMETER;
+      const bool running = WaitForSingleObject(process, 0) != WAIT_OBJECT_0;
+      CloseHandle(process);
+      return running;
+#else
+      return kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH;
+#endif
+   }
+   static void RemoveAbandonedRoots() {
+      // The CTest working directory owns only this prefix. Preserve every live
+      // PID, ambiguous owner or redirected path, including a reused PID.
+      const auto parent = std::filesystem::current_path();
+      const std::string prefix = "_save-boundary-";
+      for (const auto& item : std::filesystem::directory_iterator(parent)) {
+         const auto name = item.path().filename().string();
+         if (name.rfind(prefix, 0) != 0 || item.is_symlink() || !item.is_directory()) continue;
+         const auto end = name.find('-', prefix.size());
+         if (end == std::string::npos) continue;
+         const auto id = name.substr(prefix.size(), end - prefix.size());
+         if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos) continue;
+         unsigned long pid{};
+         try { pid = std::stoul(id); }
+         catch (const std::exception&) { continue; }
+         if (!pid || ProcessRunning(pid)) continue;
+         std::ifstream marker(item.path() / "_owner");
+         const std::string signature{std::istreambuf_iterator<char>(marker), {}};
+         marker.close();
+         if (signature == "AuTopsy behavior tests 1" || std::filesystem::is_empty(item.path())) {
+            if (std::filesystem::weakly_canonical(item.path()).parent_path() == parent)
+               std::filesystem::remove_all(item.path());
+         }
+      }
+   }
+   std::filesystem::path caseRoot = std::filesystem::current_path() /
+      ("_save-boundary-" + std::to_string(ProcessId()) + "-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+   std::filesystem::path audio = caseRoot / "_audio_temp";
+   sqlite3* db{};
+   std::optional<std::string> previous;
+   bool ownsRoot{};
+
+   static void SetRoot(const std::string& value) {
+#ifdef _WIN32
+      _putenv_s("AUTOPSY_TEST_SAVE_ROOT", value.c_str());
+#else
+      if (value.empty()) unsetenv("AUTOPSY_TEST_SAVE_ROOT");
+      else setenv("AUTOPSY_TEST_SAVE_ROOT", value.c_str(), 1);
+#endif
+   }
+   PrivateSaveBoundary() {
+      if (const auto value = std::getenv("AUTOPSY_TEST_SAVE_ROOT")) previous = value;
+      try {
+         RemoveAbandonedRoots();
+         if (!(ownsRoot = std::filesystem::create_directory(caseRoot)))
+            throw std::runtime_error("Private save test directory already exists.");
+         std::ofstream(caseRoot / "_owner") << "AuTopsy behavior tests 1";
+         std::filesystem::create_directory(audio);
+         if (sqlite3_open((audio / "test.aup3").u8string().c_str(), &db) != SQLITE_OK)
+            throw std::runtime_error("Private save test database did not open.");
+         SetRoot(audio.u8string());
+      }
+      catch (...) { Cleanup(); throw; }
+   }
+   void Cleanup() {
+      if (db) { sqlite3_close(db); db = nullptr; }
+      SetRoot(previous.value_or(""));
+      std::error_code error;
+      if (ownsRoot && std::filesystem::weakly_canonical(caseRoot, error) == caseRoot)
+         std::filesystem::remove_all(caseRoot, error);
+   }
+   ~PrivateSaveBoundary() { Cleanup(); }
+};
+}
+
+TEST_CASE("Private save barriers repeat both boundaries and remove completed signals", "[project-storage]") {
+   using autopsy::project_storage::AwaitProjectSaveTestBoundary;
+   PrivateSaveBoundary test;
+   for (const auto phase : {"before", "after", "before", "after"}) {
+      std::ofstream(test.audio / "_save_boundary_arm") << phase;
+      const auto other = std::string(phase) == "before" ? "after" : "before";
+      AwaitProjectSaveTestBoundary(test.db, other);
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_ready"));
+      auto worker = std::async(std::launch::async, [&] { AwaitProjectSaveTestBoundary(test.db, phase); });
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (!std::filesystem::exists(test.audio / "_save_boundary_ready") &&
+             std::chrono::steady_clock::now() < deadline)
+         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      const bool observed = std::filesystem::exists(test.audio / "_save_boundary_ready");
+      // Always release before assertions, so a failed observation cannot strand
+      // its worker or the SQLite handle that the fixture must close.
+      // Publish only a closed file: Windows refuses the worker's removal while
+      // the writer still owns its handle. A pending file is never a signal.
+      const auto pending = test.audio / "_save_boundary_release.pending";
+      std::ofstream signal(pending, std::ios::binary);
+      signal << "continue";
+      signal.flush();
+      const bool waitingForPublication =
+         worker.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout;
+      signal.close();
+      if (!signal)
+         throw std::runtime_error("Cannot write the private save release signal.");
+      std::filesystem::rename(pending, test.audio / "_save_boundary_release");
+      worker.get();
+      REQUIRE(observed);
+      REQUIRE(waitingForPublication);
+      REQUIRE_FALSE(std::filesystem::exists(pending));
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_ready"));
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_arm"));
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_release"));
+   }
+}
+
+TEST_CASE("Save barriers refuse foreign ownership and leave ordinary projects untouched", "[project-storage]") {
+   using autopsy::project_storage::AwaitProjectSaveTestBoundary;
+   PrivateSaveBoundary test;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      PrivateSaveBoundary::SetRoot("");
+      REQUIRE_NOTHROW(AwaitProjectSaveTestBoundary(test.db, "before"));
+      PrivateSaveBoundary::SetRoot((test.caseRoot / "unrelated").u8string());
+      REQUIRE_NOTHROW(AwaitProjectSaveTestBoundary(test.db, "before"));
+      PrivateSaveBoundary::SetRoot(test.audio.u8string());
+      REQUIRE_NOTHROW(AwaitProjectSaveTestBoundary(test.db, "before"));
+      std::ofstream(test.caseRoot / "_owner", std::ios::trunc) << "different owner";
+      REQUIRE_THROWS(AwaitProjectSaveTestBoundary(test.db, "before"));
+      std::ofstream(test.caseRoot / "_owner", std::ios::trunc) << "AuTopsy behavior tests 1";
+      std::filesystem::create_directory(test.audio / "_save_boundary_arm");
+      REQUIRE_THROWS(AwaitProjectSaveTestBoundary(test.db, "before"));
+      std::filesystem::remove(test.audio / "_save_boundary_arm");
+      REQUIRE_FALSE(std::filesystem::exists(test.audio / "_save_boundary_ready"));
+   }
 }
