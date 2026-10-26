@@ -62,8 +62,8 @@ def check_video_recording_controls(client):
             camera = windows.field(dialog, "Camera", "ComboBox")
             display = windows.field(dialog, "Display", "ComboBox")
             quality = windows.field(dialog, "Maximum picture size", "ComboBox")
-            assert windows.message(source, 0x147) == 3  # CB_GETCOUNT
-            assert windows.message(quality, 0x147) == 3
+            assert windows.message(source, 0x146) == 3  # CB_GETCOUNT; 0x147 reads the selection
+            assert windows.message(quality, 0x146) == 3
             windows.button(dialog, "Choose File and Record...")
             for selection in (1, 2, 0, 1):
                 windows.message(source, 0x14E, selection)  # CB_SETCURSEL
