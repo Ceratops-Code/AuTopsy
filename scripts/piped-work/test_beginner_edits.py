@@ -13,7 +13,7 @@ import struct
 from pathlib import Path
 
 from run_fork_test_harness import operate_owned_video_track, save_reopen
-from test_clip_actions import selected_audio, with_native_dialog
+from test_clip_actions import audio_context, selected_audio, with_native_dialog
 from run_audacity_consumer import read_audio_project_state, select_audio_project_tracks
 
 # One declared scope feeds command choices, neutral-video production and input
@@ -219,21 +219,49 @@ def check_delete_gap(client, root, ffmpeg):
     audio_end = original["audio"][0]["end"]
     before = selected_audio(client, root, "_delete-before.wav", 1, 0, end, ffmpeg)
     for repeat in range(2):
-        client.send("SelectAll")
-        client.send("SelectTime: Start=2 End=3")
-        client.send("Delete")
-        after = model(client)
-        assert_bounds(after["video"], [(0, 2), (3, end)])
-        assert_bounds(after["audio"], [(0, 2), (3, audio_end)])
-        assert abs(after["video"][1]["sourceStart"] - 3) < 0.0001
-        actual = selected_audio(client, root, f"_delete-after-{repeat}.wav", 1, 0, end, ffmpeg)
-        assert max(abs(sample) for sample in actual[16400:23600]) < 0.00001
-        assert max(abs(a - b) for a, b in zip(actual[25000:40000], before[25000:40000], strict=True)) < 0.0001
-        client.send("Undo")
-        assert model(client) == original
-        client.send("Redo")
-        assert model(client) == after
-        client.send("Undo")
+        for route in ("command", "delete-key", "ripple-key", "video-gap", "audio-gap",
+                      "video-ripple", "audio-ripple"):
+            # Focus the actual pane first, then make the range through the normal
+            # selection commands. Sending the shortcut must not click it away.
+            operate_owned_video_track(client, 1, track=0, gesture="click", area="picture")
+            client.send("SelectAll")
+            client.send("SelectTime: Start=2 End=3")
+            selection = client.data("GetInfo: Type=Selection Format=JSON")
+            operate_owned_video_track(client, 2.5, track=0, gesture="context")
+            assert model(client) == original
+            assert client.data("GetInfo: Type=Selection Format=JSON") == selection
+            ripple = "ripple" in route
+            if route == "command":
+                client.send("Delete")
+            elif route.endswith("key"):
+                operate_owned_video_track(client, 2.5, track=0, gesture="key", key=0x2E, control=ripple)
+            else:
+                label = "Ripple Delete (Close Gap)" if ripple else "Delete and Leave Gap"
+                if route.startswith("audio"):
+                    audio_context(client, 2.5, 1, label)
+                else:
+                    operate_owned_video_track(client, 2.5, track=0, gesture="context", menu_path=(label,))
+            after = model(client)
+            if ripple:
+                assert abs(max(row["end"] for row in after["video"]) - (end - 1)) < .0001, after
+                assert abs(max(row["end"] for row in after["audio"]) - (audio_end - 1)) < .0001, after
+                assert any(row["start"] <= 2.25 < row["end"] for row in after["video"]), after
+                assert any(row["start"] <= 2.25 < row["end"] for row in after["audio"]), after
+            else:
+                assert_bounds(after["video"], [(0, 2), (3, end)])
+                assert_bounds(after["audio"], [(0, 2), (3, audio_end)])
+                assert abs(after["video"][1]["sourceStart"] - 3) < 0.0001
+            actual = selected_audio(client, root, f"_delete-after-{repeat}-{route}.wav", 1, 0, end, ffmpeg)
+            if ripple:
+                assert max(abs(a - b) for a, b in zip(actual[16400:23600], before[24400:31600], strict=True)) < .0001
+            else:
+                assert max(abs(sample) for sample in actual[16400:23600]) < .00001
+                assert max(abs(a - b) for a, b in zip(actual[25000:40000], before[25000:40000], strict=True)) < .0001
+            client.send("Undo")
+            assert model(client) == original
+            client.send("Redo")
+            assert model(client) == after
+            client.send("Undo")
     # Deletion covering the leading portion keeps the remaining clip at its
     # absolute timestamp. Repeating the empty-range effect cannot move it.
     client.send("SelectAll")

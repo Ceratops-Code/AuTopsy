@@ -11,12 +11,14 @@
 #include <wx/filename.h>
 #include <wx/log.h>
 #include <wx/progdlg.h>
+#include <wx/generic/progdlgg.h>
 #include <wx/stdpaths.h>
 #include <wx/msw/wrapwin.h>
 #include <rapidjson/document.h>
 #include <optional>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
@@ -46,6 +48,20 @@ struct CloseNativeHandle {
    { if (handle && handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
 };
 using NativeHandle = std::unique_ptr<void, CloseNativeHandle>;
+struct CloseRecordingFile {
+   void operator()(void *handle) const noexcept {
+      if (!handle || handle == INVALID_HANDLE_VALUE) return;
+      LARGE_INTEGER size{};
+      // Mark the opened file itself, rather than deleting a potentially reused
+      // pathname. Completed/partial media is user content and remains recoverable.
+      if (GetFileSizeEx(handle, &size) && size.QuadPart == 0) {
+         FILE_DISPOSITION_INFO remove{TRUE};
+         SetFileInformationByHandle(handle, FileDispositionInfo, &remove, sizeof(remove));
+      }
+      else FlushFileBuffers(handle);
+      CloseHandle(handle);
+   }
+};
 
 std::runtime_error WindowsError(const std::string &operation)
 {
@@ -191,12 +207,15 @@ std::string DescribeProcessOutput(const std::string &text)
 // exceptions and termination of AuTopsy cannot leave an encoder running.
 class FfmpegProcess final {
    NativeHandle mJob, mProcess, mOutputRead, mErrorRead;
+   NativeHandle mInputWrite;
+   std::unique_ptr<void, CloseRecordingFile> mRecordingFile;
    size_t mOutputLimit;
    bool mOutputOverflow{};
 public:
    std::wstring invocation;
    std::string output, errors;
-   explicit FfmpegProcess(const std::vector<std::wstring> &arguments, size_t outputLimit = 16384)
+   explicit FfmpegProcess(const std::vector<std::wstring> &arguments, size_t outputLimit = 16384,
+      const std::wstring &recordingPath = {})
       : mOutputLimit(outputLimit)
    {
       if (!outputLimit || outputLimit > 8 * 1024 * 1024)
@@ -207,17 +226,35 @@ public:
       }
       SECURITY_ATTRIBUTES security{ sizeof(security), nullptr, TRUE };
       HANDLE outputRead{}, outputWrite{}, errorRead{}, errorWrite{};
-      if (!CreatePipe(&outputRead, &outputWrite, &security, 0)) throw WindowsError("Creating FFmpeg output pipe");
-      mOutputRead.reset(outputRead);
-      NativeHandle outputWriter{ outputWrite };
+      NativeHandle outputWriter;
+      if (recordingPath.empty()) {
+         if (!CreatePipe(&outputRead, &outputWrite, &security, 0)) throw WindowsError("Creating FFmpeg output pipe");
+         mOutputRead.reset(outputRead); outputWriter.reset(outputWrite);
+         if (!SetHandleInformation(outputRead, HANDLE_FLAG_INHERIT, 0)) throw WindowsError("Protecting FFmpeg output pipe");
+      }
+      else {
+         mRecordingFile.reset(CreateFileW(recordingPath.c_str(), GENERIC_WRITE | DELETE,
+            FILE_SHARE_READ, &security, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+         if (mRecordingFile.get() == INVALID_HANDLE_VALUE)
+            throw WindowsError("Creating a new recording file (existing files are never replaced)");
+         outputWrite = mRecordingFile.get();
+      }
       if (!CreatePipe(&errorRead, &errorWrite, &security, 0)) throw WindowsError("Creating FFmpeg error pipe");
       mErrorRead.reset(errorRead);
       NativeHandle errorWriter{ errorWrite };
-      SetHandleInformation(outputRead, HANDLE_FLAG_INHERIT, 0);
-      SetHandleInformation(errorRead, HANDLE_FLAG_INHERIT, 0);
-      NativeHandle input{ CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-         &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
-      if (input.get() == INVALID_HANDLE_VALUE) throw WindowsError("Opening FFmpeg input");
+      if (!SetHandleInformation(errorRead, HANDLE_FLAG_INHERIT, 0)) throw WindowsError("Protecting FFmpeg error pipe");
+      NativeHandle input;
+      if (mRecordingFile) {
+         HANDLE reader{}, writer{};
+         if (!CreatePipe(&reader, &writer, &security, 0)) throw WindowsError("Creating recording stop pipe");
+         input.reset(reader); mInputWrite.reset(writer);
+         if (!SetHandleInformation(writer, HANDLE_FLAG_INHERIT, 0)) throw WindowsError("Protecting recording stop pipe");
+      }
+      else {
+         input.reset(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+         if (input.get() == INVALID_HANDLE_VALUE) throw WindowsError("Opening FFmpeg input");
+      }
 
       SIZE_T attributeSize{};
       InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeSize);
@@ -277,21 +314,49 @@ public:
       const wxString &title = _("Export Video with Audio Mix"),
       const wxString &status = _("Writing video with the edited audio..."))
    {
-      wxProgressDialog progress{ title, status,
-         100, parent, wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE | wxPD_ELAPSED_TIME };
+      const auto style = wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE | wxPD_ELAPSED_TIME;
+      // Windows' task-dialog implementation has a fixed Cancel caption. Capture
+      // needs a truthful Stop action; use wx's supported generic implementation.
+      std::unique_ptr<wxGenericProgressDialog> dialog;
+      if (mRecordingFile) dialog = std::make_unique<wxGenericProgressDialog>(title, status, 100, parent, style);
+      else dialog = std::make_unique<wxProgressDialog>(title, status, 100, parent, style);
+      auto &progress = *dialog;
+      if (mRecordingFile) if (auto *stop = progress.FindWindow(wxID_CANCEL)) stop->SetLabel(_("Stop and Add"));
+      using Clock = std::chrono::steady_clock;
+      auto lastFlush = Clock::now();
+      std::optional<Clock::time_point> stopped;
       while (true) {
-         mOutputOverflow |= Drain(mOutputRead.get(), output, mOutputLimit); Drain(mErrorRead.get(), errors);
+         if (mOutputRead) mOutputOverflow |= Drain(mOutputRead.get(), output, mOutputLimit);
+         Drain(mErrorRead.get(), errors);
          const auto state = WaitForSingleObject(mProcess.get(), 20);
-         if (!progress.Pulse()) return false;
          if (state == WAIT_OBJECT_0) break;
          if (state == WAIT_FAILED) throw WindowsError("Waiting for FFmpeg");
+         if (!progress.Pulse()) {
+            if (!mRecordingFile) return false;
+            if (!stopped) {
+               DWORD sent{};
+               if (!WriteFile(mInputWrite.get(), "q\n", 2, &sent, nullptr) || sent != 2)
+                  throw WindowsError("Stopping video recording");
+               stopped = Clock::now();
+            }
+            progress.Resume();
+         }
+         if (mRecordingFile && Clock::now()-lastFlush >= std::chrono::seconds(1)) {
+            if (!FlushFileBuffers(mRecordingFile.get())) throw WindowsError("Flushing recorded video");
+            lastFlush = Clock::now();
+         }
+         if (stopped && Clock::now()-*stopped > std::chrono::seconds(10))
+            throw std::runtime_error("The recording device did not stop within ten seconds.\nCommand: " +
+               Utf8(wxString(invocation)) + "\nstdout: <streamed to recording>\nstderr:\n" + DescribeProcessOutput(errors));
       }
-      mOutputOverflow |= Drain(mOutputRead.get(), output, mOutputLimit); Drain(mErrorRead.get(), errors);
+      if (mOutputRead) mOutputOverflow |= Drain(mOutputRead.get(), output, mOutputLimit);
+      Drain(mErrorRead.get(), errors);
+      if (mRecordingFile && !FlushFileBuffers(mRecordingFile.get())) throw WindowsError("Flushing completed recording");
       DWORD exit{};
       if (!GetExitCodeProcess(mProcess.get(), &exit)) throw WindowsError("Reading the FFmpeg exit status");
       if (exit != 0)
          throw std::runtime_error("FFmpeg operation failed (exit " + std::to_string(exit) + ").\nCommand: " +
-            Utf8(wxString(invocation)) + "\nstdout:\n" + DescribeProcessOutput(output) +
+            Utf8(wxString(invocation)) + "\nstdout:\n" + (mRecordingFile ? "  <streamed to recording>" : DescribeProcessOutput(output)) +
             "\nstderr:\n" + DescribeProcessOutput(errors) +
             "\nIf this video codec cannot be stored in MP4, try MKV.");
       if (mOutputLimit != 16384 && mOutputOverflow)
@@ -357,6 +422,23 @@ bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *paren
    if (!process.Wait(parent, title, status)) return false;
    if (output) *output = std::move(process.output);
    return true;
+}
+
+void RecordBundledVideoInput(const std::vector<wxString> &arguments,
+   const wxString &destination, wxWindow *parent)
+{
+   const auto executable = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPathWithSep() + "ffmpeg.exe";
+   if (!wxFileExists(executable)) throw std::runtime_error("The bundled ffmpeg.exe is missing. Reinstall AuTopsy.");
+   std::vector<std::wstring> native{executable.ToStdWstring()};
+   for (const auto &argument : arguments) native.push_back(argument.ToStdWstring());
+   try {
+      FfmpegProcess process{native, 16384, destination.ToStdWstring()};
+      process.Wait(parent, _("Record Video"), _("Recording video. Stop and Add places it at the edit cursor."));
+   }
+   catch (const std::exception &error) {
+      throw std::runtime_error(Utf8(destination) + "\n" + error.what() +
+         "\nAny nonempty recording has been kept at this location. Existing files are never replaced.");
+   }
 }
 
 bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTimeline,

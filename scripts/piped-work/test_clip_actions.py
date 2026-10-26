@@ -439,8 +439,33 @@ def run_recording_save_faults(command, environment, app, root, restart_app, clea
             app.wait(timeout=10)
 
 
+def check_background_video_menu(client):
+    """Create a real video row from the empty pane menu, including cancel/history."""
+    assert client.data("GetInfo: Type=Tracks Format=JSON") == []
+    for repeat in range(2):
+        info = client.data("GetVideoPreviewInfo")
+        boxes = client.data("GetInfo: Type=Boxes Format=JSON")
+        pane = next(row["box"] for row in boxes if row.get("label") == "Track Panel")
+        # This is the painted empty background, not a fabricated media track.
+        info["videoTrackRows"] = [{"index": -1, "x": 0, "y": 0,
+            "height": pane[3] - pane[1], "dataTop": 20,
+            "dataLeft": info["videoTrackLeftOffset"], "dataWidth": info["videoTrackDataWidth"]}]
+        operate_owned_video_track(client, 0, track=-1, gesture="context", painted=info)
+        assert client.data("GetInfo: Type=Tracks Format=JSON") == []
+        operate_owned_video_track(client, 0, track=-1, gesture="context", painted=info,
+                                  menu_path=("Add Video Track",))
+        created = client.data("GetInfo: Type=Tracks Format=JSON")
+        assert len(created) == 1 and created[0]["kind"] == "video", (repeat, created)
+        client.send("Undo")
+        assert client.data("GetInfo: Type=Tracks Format=JSON") == []
+        client.send("Redo")
+        assert client.data("GetInfo: Type=Tracks Format=JSON") == created
+        client.send("Undo")
+
+
 def check_audio_clip_actions(client, root, ffmpeg):
     """Whole clicked clip scope, negative/positive dB, cancellation and Undo."""
+    check_background_video_menu(client)
     for name in ("tone-a.wav", "tone-b.wav"):
         client.file("Import2", root / name)
     client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")

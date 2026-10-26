@@ -82,6 +82,8 @@ WaveClipUIUtilities::GetWaveClipMenuItems()
       { L"Cut", XO("Cut") },
       { L"Copy", XO("Copy") },
       { L"Paste", XO("Paste") },
+       { L"DeleteKey2", XO("Delete and Leave Gap") },
+       { L"RippleDelete", XO("Ripple Delete (Close Gap)") },
       {},
       { L"Split", XO("Split Clip") },
       { L"Join", XO("Join Clips") },

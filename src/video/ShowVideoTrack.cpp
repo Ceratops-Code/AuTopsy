@@ -626,7 +626,12 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          const auto clickTime = mClickTime;
          wxMenu menu;
          menu.Append(1,_("Cut")); menu.Append(2,_("Copy")); menu.Append(3,_("Paste"));
-         menu.AppendSeparator(); menu.Append(4,_("Split at Cursor")); menu.Append(5,_("Delete and Leave Gap"));
+          menu.AppendSeparator(); menu.Append(4,_("Split at Cursor"));
+          const auto gapLabel = XO("Delete and Leave Gap");
+          const auto rippleLabel = XO("Ripple Delete (Close Gap)");
+          auto &commandManager = CommandManager::Get(*project);
+          menu.Append(5, commandManager.FormatLabelForMenu("DeleteKey2", &gapLabel));
+          menu.Append(18, commandManager.FormatLabelForMenu("RippleDelete", &rippleLabel));
          menu.Append(6,_("Trim to Selection"));
          menu.AppendSeparator(); menu.Append(7,_("Heal Split")); menu.Append(8,_("Join"));
          menu.Append(9,_("Separate Joined Clip"));
@@ -641,7 +646,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             if (clip.id == clipId) menu.Check(13, clip.muted);
          menu.AppendSeparator(); menu.Append(12, _("Export Clip...")); menu.Enable(12, clipId != 0);
          for (int id : {7, 8, 9}) menu.Enable(id, clipId != 0);
-         for (int id : {1, 2, 4, 5, 6})
+          for (int id : {1, 2, 4, 5, 6, 18})
             menu.Enable(id, !ViewInfo::Get(*project).selectedRegion.isPoint());
          menu.Enable(3, !Clipboard::Get().GetTracks().Any<const AuTopsyVideoTrack>().empty());
          menu.Enable(4, clipId != 0);
@@ -658,7 +663,9 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             if (found != track->Timeline().clips.end())
                MoveVideoClipBetweenTracks(*project,*track,*targets[choice-100],clipId,found->start);
          }
-         else if (choice == 16 || choice == 17)
+          else if (choice == 18)
+             commandManager.HandleTextualCommand("RippleDelete", CommandContext{*project}, AlwaysEnabledFlag, false);
+          else if (choice == 16 || choice == 17)
             VideoEditing::ShowVideoClipFades(*project, *track, clipId, parent, choice == 17);
          else if (choice == 14)
             ClipActions::ShowVideoClipProperties(*project, *track, clipId, parent);
@@ -693,7 +700,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             EditSelectedVideoStructure(*project, kinds[choice - 7], selection.t0(), selection.t1());
          }
          else {
-            const wxString commands[]{"","Cut","Copy","Paste","Split","SplitDelete","Trim"};
+             const wxString commands[]{"","Cut","Copy","Paste","Split","DeleteKey2","Trim"};
             if (choice > 0 && choice < 7) {
                if (choice == 4)
                   ViewInfo::Get(*project).selectedRegion.setTimes(clickTime, clickTime);

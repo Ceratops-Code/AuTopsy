@@ -212,6 +212,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/ExportVideoMix.h/.cpp` | Audio mix export and FFmpeg filter translation | Export orchestration consuming the shared render plan and explicit project audio range |
 | `src/clip-groups/OpenClipActions.h/.cpp` | Clicked-clip targeting, native dB effect and export dialogs | Selection scope and cancellation stay at the host boundary |
 | `src/recording/PlanCursorRecording.h/.cpp` | Host-free cursor/gap/sample-edge policy | Reject occupied starts and choose the earliest stop across capture tracks |
+| `src/recording/PlanVideoRecording.h/.cpp` and `RecordVideoInput.h/.cpp` | Capture options/device identities and native recording UI | Owned values, one bundled media worker and the existing atomic import boundary |
 | `src/video/ChooseVideoExport.h/.cpp` | Export preset values and chooser | Explicit codec/size/FPS/quality policy |
 | `src/video/RelinkVideoMedia.h/.cpp` | Source replacement and native chooser | Catalog relinking through a complete edit plan |
 | `src/video/TestVideoPlayback.cpp` | Independent timing/playback/flags/export tests | Preserve current simple model contracts |
@@ -336,6 +337,44 @@ The edit cursor overlay uses the native time-to-pixel conversion and draws one
 vertical line across the entire track pane, including blank space. Its position
 is the time-selection start even when a whole clip or range is selected; native
 scrolling, zoom and overlay invalidation retain ownership of the view.
+
+### Direct camera and screen capture
+
+`RecordVideo` freezes the project cursor and chosen source before starting.
+Webcam capture uses a DirectShow input; screen/window capture uses GDI. Device
+labels are presentation only: selection retains stable provider identifiers,
+and a disconnected display fails instead of switching to another screen. A
+per-monitor DPI context supplies physical capture coordinates. Optional screen
+audio uses a listed DirectShow input and the same wall clock as picture; webcam
+audio shares the camera input. Captured audio remains separate editable audio.
+
+The desired state is a completed user-owned media file plus one linked import at
+the frozen cursor. An existing file, invalid options, unavailable source or
+unusable path must never replace media or partially alter the project. The
+planner checks settings before effects; the shared FFmpeg adapter exclusively
+creates the destination and streams stdout directly into its handle. It uses
+MKV or fragmented MP4, bounded progress/error text, and periodic file flushing.
+Fragmented MP4 trades compatibility with older players for readable completed
+fragments after interruption ([FFmpeg container contract](https://ffmpeg.org/ffmpeg-formats.html#Fragmentation)).
+
+The child joins the existing kill-on-close Windows job while suspended; Stop
+sends its ordinary quit command and waits at most ten seconds before reporting
+failure. The owner removes an empty output using its open file handle, and
+retains nonempty media as user content. There is no hidden recording cache,
+diagnostic file or recovery checkpoint to accumulate. The native importer offsets
+new sound before its Undo snapshot, so picture and sound appear together and
+Undo removes both. Failed import keeps the completed recording for a normal
+later import. Repeating a successful capture to that filename refuses replacement;
+the next recording requires a fresh destination. No general exactly-once import
+claim is made across an application crash between commit and user feedback.
+
+The independent `video-recording::` policy suite and four native
+`fork-video-recording*` cases cover generated media, format decoding, placement,
+Stop, encoder interruption, protected files and fresh calls. The screen test
+targets only the owned test window; physical camera/microphone devices and
+power-failure durability remain outside that automated claim. Synthetic input
+requires an explicitly marked private test profile and destination below its
+owner root; ordinary profiles cannot enable it through scripting.
 
 ### Temporary clip move selection
 
@@ -1070,6 +1109,17 @@ edits, trims/untrim, clipboard/range operations, composition, transport effects,
 flags, relinking and preset bounds. Native scenarios in
 `scripts/piped-work/test_fork_features.py` exercise public commands, project save
 and media outputs. `fork-fixtures` checks generated video without opening the app.
+
+The audio/video parity boundary uses the normal editing commands, not separate
+video-only substitutes. `fork-video-audio-parity` compares occupied ranges after
+Copy/Paste, Cut, Split Cut, Trim and Duplicate on linked/unlinked imports. Normal
+mixed-media Join is owned by `JoinSelectedMediaClips`: it prepares all picture
+changes first, uses native audio joins, and publishes one Undo snapshot. New
+soundtrack groups bind joined picture parents while retained child links preserve
+the original pieces. Failure restores the prior project state. Repeating a
+completed join adds no history entry. Existing native selection, edge/split-edge,
+clipboard, clip-structure, speed, mute/solo, crop, group-movement and compatibility
+cases cover the other relevant host operations; audio effects remain audio-only.
 
 `fork-project-compatibility` saves complete native AUP3 projects, including one
 with video, linked/grouped audio and a label, plus one containing only video.

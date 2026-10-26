@@ -14,7 +14,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import run_affected_tests as runner
 
@@ -23,6 +23,133 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_owned_display_waits_for_same_device_and_stops_before_effects(self) -> None:
+        import ctypes
+
+        import run_fork_test_harness as harness
+
+        first = {"device": "first", "primary": True, "work": [0, 0, 1920, 1040]}
+        second = {"device": r"\\.\DISPLAY2", "primary": False, "work": [-1920, 0, 0, 1040]}
+        api = Mock()
+        for _ in range(2):
+            with patch.dict(os.environ, {"AUTOPSY_TEST_DISPLAY": second["device"]}), \
+                    patch.object(harness, "connected_test_displays", side_effect=[[first], [first, second]]), \
+                    patch.object(harness.time, "monotonic", side_effect=[0, 0.5]), \
+                    patch.object(harness.time, "sleep") as sleep, \
+                    patch.object(ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE, create=True):
+                self.assertEqual(harness.assert_owned_test_display(721), [])
+                sleep.assert_called_once_with(0.02)
+            with patch.dict(os.environ, {"AUTOPSY_TEST_DISPLAY": second["device"]}), \
+                    patch.object(harness, "connected_test_displays", return_value=[first]), \
+                    patch.object(harness.time, "monotonic", side_effect=[0, 3]), \
+                    patch.object(ctypes, "WinDLL", create=True) as windows, \
+                    self.assertRaisesRegex(RuntimeError, "disconnected"):
+                harness.assert_owned_test_display(721)
+            windows.assert_not_called()
+
+    def test_gui_session_preflight_repeats_and_releases_its_query_buffer(self) -> None:
+        import ctypes
+        import struct
+
+        for level, session, state, flags, size in ((1, 7, 0, 1, 24), (1, 7, 0, 0, 24),
+                (1, 7, 0, -1, 24), (1, 7, 4, 1, 24), (2, 7, 0, 1, 24),
+                (1, 8, 0, 1, 24), (1, 7, 0, 1, 8)):
+            with self.subTest(level=level, session=session, state=state, flags=flags, size=size):
+                kernel, sessions = Mock(), Mock()
+                buffer = ctypes.create_string_buffer(struct.pack("<IIIIiI", level, 0, session, state, flags, 0))
+
+                def identify(pid: int, result: Any) -> bool:
+                    result._obj.value = 7
+                    return True
+
+                def query(server: Any, sid: int, kind: int, pointer: Any, length: Any,
+                          buffer: Any = buffer, size: int = size) -> bool:
+                    self.assertEqual((sid, kind), (7, 25))
+                    pointer._obj.value, length._obj.value = ctypes.addressof(buffer), size
+                    return True
+
+                kernel.ProcessIdToSessionId.side_effect = identify
+                sessions.WTSQuerySessionInformationW.side_effect = query
+                for _ in range(2):
+                    if (level, session, state, flags, size) == (1, 7, 0, 1, 24):
+                        native.require_unlocked_desktop(kernel, sessions)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "unlock Windows|incomplete"):
+                            native.require_unlocked_desktop(kernel, sessions)
+                self.assertEqual(sessions.WTSFreeMemory.call_count, 2)
+
+    def test_gui_session_query_failure_stops_without_freeing_an_unowned_buffer(self) -> None:
+        import ctypes
+
+        for identify in (False, True):
+            kernel, sessions = Mock(), Mock()
+            kernel.ProcessIdToSessionId.return_value = identify
+            sessions.WTSQuerySessionInformationW.return_value = False
+            for _ in range(2):
+                with patch.object(ctypes, "get_last_error", return_value=5, create=True), \
+                        self.assertRaisesRegex(RuntimeError, "Windows error 5"):
+                    native.require_unlocked_desktop(kernel, sessions)
+            sessions.WTSFreeMemory.assert_not_called()
+            self.assertEqual(sessions.WTSQuerySessionInformationW.call_count, 2 if identify else 0)
+
+    def test_native_crash_trace_owns_only_its_app_and_bounded_log(self) -> None:
+        import run_fork_test_harness as harness
+
+        for status in (0, 9):
+            with self.subTest(status=status), tempfile.TemporaryDirectory(prefix="_crash-trace-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+                root = Path(temporary)
+                cdb = root / "cdb.exe"
+                cdb.write_bytes(b"fake debugger, never executed")
+                state = {"running": True}
+                app = SimpleNamespace(pid=719, returncode=status,
+                    poll=lambda state=state, status=status: None if state["running"] else status)
+                child = Mock()
+                child.wait.side_effect = [subprocess.TimeoutExpired([str(cdb)], 5), 0]
+
+                def launch(command: list[str], child: Any = child, **kwargs: Any) -> Any:
+                    self.assertEqual(command[command.index("-p")+1], "719")
+                    kwargs["stdout"].write(b"x"*300000)
+                    return child
+
+                with patch.dict(os.environ, {"AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
+                        patch.object(harness.subprocess, "Popen", side_effect=launch):
+                    trace = harness.NativeCrashDebugger(app, root)
+                    with self.assertRaisesRegex(RuntimeError, "Stop the private app"):
+                        trace.close()
+                    state["running"] = False
+                    trace.close()
+                    trace.close()
+                child.terminate.assert_called_once()
+                log = root / "_native-debugger.log"
+                if status:
+                    self.assertEqual(log.stat().st_size, 262144)
+                else:
+                    self.assertFalse(log.exists())
+
+    def test_native_crash_trace_failure_before_launch_removes_empty_output(self) -> None:
+        import run_fork_test_harness as harness
+
+        with tempfile.TemporaryDirectory(prefix="_crash-trace-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            cdb = root / "cdb.exe"
+            cdb.write_bytes(b"not an executable")
+            app = SimpleNamespace(pid=719, poll=lambda: None)
+            for _ in range(2):
+                with patch.dict(os.environ, {"AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
+                        patch.object(harness.subprocess, "Popen", side_effect=OSError("test startup failure")), \
+                        self.assertRaisesRegex(RuntimeError, "Exit: <not started>"):
+                    harness.NativeCrashDebugger(app, root)
+                self.assertFalse((root / "_native-debugger.log").exists())
+
+    def test_debugger_scope_and_new_capture_check_versions_keep_distinct_acceptance(self) -> None:
+        original = {"executable_sha256": "app", "script_module_sha256": "pipe", "payload_dependencies": {},
+                    "execution_scope": {"platform": "test"}, "video_recording_sha256": "old check"}
+        changed_check = dict(original, video_recording_sha256="new check")
+        self.assertEqual(native.native_work_scope(original), native.native_work_scope(changed_check))
+        debugged = dict(original, execution_scope={"platform": "test", "native_debugger_sha256": "debugger"})
+        self.assertNotEqual(native.native_work_scope(original), native.native_work_scope(debugged))
+
     def test_display_probe_repeats_and_stops_at_each_window_effect_boundary(self) -> None:
         import ctypes
         from ctypes import wintypes as w
@@ -407,8 +534,12 @@ class SelectionTests(unittest.TestCase):
         catalogue = self.native_catalogue(Path("AuTopsy.exe"))
         baseline = set(runner.INSTALLER_BASELINE_TESTS)
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
+        self.assertIn("fork-video-audio-join-links", runner.select_installer_tests(
+            ["src/clip-groups/LinkMediaClips.cpp"], catalogue))
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
-                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak"}
+                               "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
+                               "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
+                               "fork-video-recording-controls"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
@@ -627,6 +758,14 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(self.names([path]), {"cursor-recording"})
         for path in ("src/clip-groups/OpenClipActions.cpp", "src/ProjectAudioManager.cpp",
                      "src/tracks/ui/EditCursorOverlay.cpp", "scripts/piped-work/test_clip_actions.py"):
+            groups, native = runner.select_groups([path])
+            self.assertEqual(groups, [])
+            self.assertEqual(native, [path])
+
+    def test_video_recording_policy_and_capture_adapters_have_separate_scopes(self) -> None:
+        for path in ("src/recording/PlanVideoRecording.cpp", "src/recording/TestVideoRecording.cpp"):
+            self.assertEqual(self.names([path]), {"video-recording"})
+        for path in ("src/recording/RecordVideoInput.cpp", "scripts/piped-work/test_video_recording.py"):
             groups, native = runner.select_groups([path])
             self.assertEqual(groups, [])
             self.assertEqual(native, [path])

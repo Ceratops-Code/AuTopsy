@@ -21,6 +21,61 @@ from run_audacity_consumer import (
 )
 
 
+class NativeCrashDebugger:
+    """Optional CDB attachment to the caller's private app PID, with one log.
+
+    The caller must stop its app before close. A failed app keeps at most 256 KiB
+    of this case's current trace; normal exit removes it. No system debugger or
+    registry setting is changed, and no other process name is used for selection.
+    """
+
+    def __init__(self, app, root):
+        self.app, self.process, self.stream = app, None, None
+        self.path = root / "_native-debugger.log"
+        selected = os.environ.get("AUTOPSY_TEST_NATIVE_DEBUGGER")
+        if not selected:
+            return
+        executable = Path(selected).resolve(strict=True)
+        if executable.name.casefold() != "cdb.exe" or app.poll() is not None:
+            raise RuntimeError("Native crash tracing requires CDB and a live private test app.")
+        action = ".ecxr; kv 40; .detach; q"
+        commands = "; ".join(f'sxe -c "{action}" {kind}' for kind in ("av", "sov", "ii", "dz")) + "; g"
+        command = [str(executable), "-p", str(app.pid), "-g", "-G", "-lines", "-c", commands]
+        self.stream = self.path.open("wb")
+        try:
+            self.process = subprocess.Popen(command, stdout=self.stream, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except BaseException as error:
+            self.stream.close()
+            self.stream = None
+            self.path.unlink(missing_ok=True)
+            raise RuntimeError(f"Starting native crash trace: {subprocess.list2cmdline(command)}\n"
+                f"Exit: <not started>\nstdout: <absent>\nstderr: {error}") from error
+
+    def close(self):
+        if self.stream is None:
+            return
+        if self.app.poll() is None:
+            raise RuntimeError("Stop the private app before closing its debugger.")
+        assert self.process is not None
+        try:
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+        finally:
+            self.stream.close()
+            self.stream = None
+        if self.app.returncode == 0:
+            self.path.unlink(missing_ok=True)
+        elif self.path.stat().st_size > 262144:
+            with self.path.open("rb") as source:
+                source.seek(-262144, 2)
+                tail = source.read()
+            self.path.write_bytes(tail)
+
+
 def write_neutral_preview_video(ffmpeg, output):
     """Create a 16-second synthetic picture/tone in a caller-owned test directory.
 
@@ -271,11 +326,14 @@ def assert_owned_test_display(pid, include_window=None):
     """Check the child's windows before input/capture; never move another process."""
     from ctypes import wintypes as w
 
-    target = select_test_display(connected_test_displays())
-    if target["device"] != os.environ["AUTOPSY_TEST_DISPLAY"]:
-        raise RuntimeError(
-            "The selected test display disconnected or its identity changed."
-        )
+    deadline = time.monotonic() + 2
+    while True:
+        target = select_test_display(connected_test_displays())
+        if target["device"] == os.environ["AUTOPSY_TEST_DISPLAY"]:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError("The selected test display disconnected or its identity changed.")
+        time.sleep(0.02)  # No input/capture occurs until the same device returns.
     user = ctypes.WinDLL("user32", use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
     user.EnumWindows.argtypes = [callback_type, w.LPARAM]
@@ -641,10 +699,12 @@ def operate_owned_video_track(
     """
     if end_time is None:
         end_time = start_time
-    if gesture not in ("drag", "click", "double-click", "context"):
+    if gesture not in ("drag", "click", "double-click", "context", "key"):
         raise ValueError("Unknown native video gesture: " + gesture)
-    if control and gesture not in ("click", "drag"):
-        raise ValueError("Ctrl is supported for clip clicks and time-locked drags.")
+    if control and gesture not in ("click", "drag", "key"):
+        raise ValueError("Ctrl is supported for clip clicks, time-locked drags and pane keys.")
+    if gesture == "key" and key is None:
+        raise ValueError("A pane-key gesture requires its virtual key.")
     if alt and gesture != "drag":
         raise ValueError("Alt is supported only for unsnapped clip drags.")
     user = ctypes.WinDLL("user32", use_last_error=True)
@@ -831,13 +891,18 @@ def operate_owned_video_track(
     def button(flags, expected_window=panel):
         # Position and button transition share one OS event, so another mouse
         # movement cannot turn a narrow edge press into a clip-header press.
-        if flags & (2 | 8) and user.WindowFromPoint(point) != expected_window:
+        hit = user.WindowFromPoint(point)
+        if flags & (2 | 8) and hit != expected_window:
             bounds = (ctypes.c_long * 4)()
             user.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
             user.GetWindowRect(expected_window, ctypes.byref(bounds))
+            hit_owner, hit_title = ctypes.c_uint32(), ctypes.create_unicode_buffer(256)
+            user.GetWindowThreadProcessId(hit, ctypes.byref(hit_owner))
+            user.GetWindowTextW(user.GetAncestor(hit, 2), hit_title, len(hit_title))
             raise RuntimeError(
                 f"Owned mouse press target changed before input; expected_window={expected_window}; "
-                f"hit={user.WindowFromPoint(point)}; initial_screen={initial_screen_point}; "
+                f"hit={hit}; hit_owner={hit_owner.value}; hit_title={hit_title.value!r}; "
+                f"foreground={user.GetForegroundWindow()}; initial_screen={initial_screen_point}; "
                 f"screen={(point.x, point.y)}; bounds={list(bounds)}; native_point={(x0, y0)}; "
                 f"physical_client={list(rectangle)}; reported_client="
                 f"{(info['videoTrackPanelWidth'], info['videoTrackPanelHeight'])}."
@@ -1061,7 +1126,7 @@ def operate_owned_video_track(
                     raise RuntimeError(f"Right-click did not open an owned native popup menu: flags={state.flags}; root={root}; foreground={user.GetForegroundWindow()}; point={(point.x, point.y)}; hit={user.WindowFromPoint(point)}; panel={panel}.")
                 time.sleep(0.01)
             choose_popup_path()
-        else:
+        elif gesture != "key":
             for _ in range(2 if gesture == "double-click" else 1):
                 button(2)
                 pressed = True
@@ -1131,6 +1196,11 @@ def operate_owned_video_track(
                     time.sleep(0.01)
                 time.sleep(0.06)
         if key is not None:
+            if gesture == "key":
+                state = Gui()
+                state.size = ctypes.sizeof(state)
+                if not user.GetGUIThreadInfo(thread, ctypes.byref(state)) or state.focus != panel:
+                    raise RuntimeError("The owned pane must have keyboard focus before sending a selection key.")
             keyboard(key)
 
     finally:

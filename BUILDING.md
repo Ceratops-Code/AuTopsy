@@ -458,17 +458,27 @@ About, and video preview. A missing or too-small target stops the test instead
 of falling back to screen 1. It changes no system display settings or user windows.
 Startup and display-change messages bind the selected device's Windows monitor
 handle. Each placement reads its current bounds in the window owner's DPI
-coordinate space and checks the device identity; missing or replaced handles
-stop the private app. Geometry is never retained as identity, and placements do
-not re-enumerate the desktop from inside window-move callbacks. The guard never
+coordinate space and checks the device identity. An invalidated or retargeted
+handle is resolved again by the same device name before placement; a missing,
+forbidden or too-small startup target stops the private app. If a previously
+bound device temporarily disappears during a driver mode change, placement waits
+up to two seconds for that same device, then stops if it is still missing.
+Other unsafe states stop immediately. Geometry is never retained
+as identity. Ordinary placements reuse the live handle. The guard never
 falls back to screen 1. Private test windows use wx's
 stay-on-top style so the host retains their exposure during activation; the
 runner also checks the window under the target point before sending input.
+That controller check also waits at most two seconds for the selected device to
+return, before querying owned windows or sending input/capturing pixels.
 Its held mouse button is released even when the owned window disappears.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
+That negative case also removes an already bound device inside the scoped probe
+and requires timeout before the first window is exposed.
 `fork-display-guard` repeats native moves, resizing, hide/show and display-change
 messages under all five caller DPI contexts, without pointer or keyboard input.
+It injects stale handles, temporarily missing results and handles invalidated
+during enumeration, requiring a fresh device-identity lookup before exposure.
 The affected-test suite stops its probe immediately before and after each
 window effect, checking that cleanup restores the caller context and never acts
 on a recycled window handle.
@@ -732,7 +742,37 @@ executable inputs require a map entry or an explicit scope decision. CMake build
 only their targets, and Catch2/CTest discovers individual compiled case names.
 Separate suites cover edit plans, composition geometry, existing playback,
 branding, installer production, harness policy/lifecycle and affected selection.
+`video-recording::` covers device identifiers, bounded capture options and media
+arguments without devices or native project objects. Native `fork-video-recording`,
+`fork-video-recording-stop` and `fork-video-recording-failures` use fixed generated
+picture/tone input in a marked private profile. They exercise MKV/fragmented MP4,
+cursor placement, linked moves, one-step Undo/Redo, save/reopen, existing-file
+protection, graceful Stop and interrupted encoders. A real GDI case records only
+the owned AuTopsy window on the test display; hardware camera/microphone coverage
+requires a separate opt-in run. Generated capture cannot be selected in an
+ordinary user profile. `fork-delete-gap` also exercises physical Delete/Ctrl+Delete
+and both audio/video context-menu routes; `fork-clip-actions` includes the empty
+pane's Add Video Track menu and cancellation.
+`fork-video-recording-controls` opens the real Transport menu, changes source
+choices and cancels twice without recording or changing the project.
+`fork-video-audio-parity` compares the occupied ranges after Copy/Paste, Cut,
+Split Cut, Trim and Duplicate, with linked and unlinked media, repeated edits,
+Undo/Redo and save/reopen. Its mixed-media Join case checks both track types and
+movement of the resulting linked soundtrack.
+`fork-video-audio-join-links` joins audio beneath unchanged plain/compound picture, preserves
+linked partners outside the range and on unselected tracks, and repeats those
+edits through Undo/Redo and save/reopen. Capture-model cases keep inactive
+virtual cameras in the camera choices while excluding known audio inputs.
 Native adapter inputs are reported separately, without implying desktop acceptance.
+For a failed private-process case, `AUTOPSY_TEST_NATIVE_DEBUGGER` can name an
+existing Microsoft `cdb.exe`. The harness attaches only to that case's exact PID,
+records crash stacks in its bounded `_native-debugger.log`, and removes the log
+after normal app exit. Debugger-assisted checks have a separate execution scope;
+they cannot supply an ordinary candidate's desktop acceptance.
+Fresh desktop cases require Windows to report an active, unlocked session before
+creating their private media/profile or starting the app. Cached acceptance can
+still be reused while the desktop is locked; an unreadable session blocks fresh
+GUI work with the original Windows error.
 An explicitly scoped native session runs only its selected compiled host cases;
 it never records portable passes against core binaries that session did not build.
 

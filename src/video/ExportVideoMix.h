@@ -17,6 +17,10 @@ std::optional<std::pair<int, int>> ReadVideoSourcePictureSize(const wxString &so
 bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *parent,
    const wxString &title, const wxString &status, std::string *output = nullptr,
    VideoTool tool = VideoTool::Encoder, size_t maximumOutputBytes = 16384);
+// Recording owns a newly created user media file. Stop closes the container;
+// failure retains nonempty captured media and removes an empty owned output.
+void RecordBundledVideoInput(const std::vector<wxString> &arguments,
+   const wxString &destination, wxWindow *parent);
 bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &timeline,
    double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent,
    const ExportSettings &settings = {}, double projectAudioStart = 0.0);

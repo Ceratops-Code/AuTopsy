@@ -36,6 +36,7 @@ from run_audacity_consumer import (
     startup_window_messages,
 )
 from run_fork_test_harness import (
+    NativeCrashDebugger,
     ScriptClient,
     assert_owned_test_display,
     capture_owned_project,
@@ -77,7 +78,9 @@ from test_preview_controls import (
 )
 from test_track_groups import check_track_groups
 from test_video_clip_edits import (
+    check_audio_join_links,
     check_split_video_edges,
+    check_video_audio_edit_parity,
     check_video_clip_mute,
     check_video_clip_structure,
     check_video_compound_render,
@@ -86,7 +89,15 @@ from test_video_clip_edits import (
     check_video_visibility,
 )
 from test_video_export_timing import check_video_export_timing
+from test_video_recording import (
+    VIDEO_RECORDING_CASES,
+    check_video_recording,
+    check_video_recording_controls,
+    check_video_recording_failures,
+    check_video_recording_stop,
+)
 from test_video_transport import (
+    check_preview_close,
     check_preview_navigation,
     check_transport_toolbar,
     check_video_transport,
@@ -1009,6 +1020,20 @@ def worker(args, root):
         check_audio_clip_actions(client, root, args.ffmpeg)
     elif args.case == "clip-selection":
         check_clip_selection(client, root)
+    elif args.case == "video-preview-close":
+        check_preview_close(client, root)
+    elif args.case == "video-audio-parity":
+        check_video_audio_edit_parity(client, root)
+    elif args.case == "video-audio-join-links":
+        check_audio_join_links(client, root)
+    elif args.case == "video-recording":
+        check_video_recording(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case == "video-recording-stop":
+        check_video_recording_stop(client, root, args.ffprobe)
+    elif args.case == "video-recording-failures":
+        check_video_recording_failures(client, root, args.ffprobe)
+    elif args.case == "video-recording-controls":
+        check_video_recording_controls(client)
     elif args.case == "delete-gap":
         check_delete_gap(client, root, args.ffmpeg)
     elif args.case == "clip-properties":
@@ -1198,7 +1223,7 @@ def native_test_inputs(args, executable, module, display):
                       for name in ("ffmpeg", "ffprobe") if (value := getattr(args, name))},
         },
     }
-    if args.case in ("video-split-edges", "video-linked-split-edges", "video-clip-edits",
+    if args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
@@ -1208,6 +1233,11 @@ def native_test_inputs(args, executable, module, display):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "track-groups":
         inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
+    if args.case in VIDEO_RECORDING_CASES:
+        inputs["video_recording_sha256"] = sha(here / "test_video_recording.py")
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+        inputs["beginner_edits_sha256"] = sha(here / "test_beginner_edits.py")
+        inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
     if args.case == "clip-selection":
         inputs["clip_selection_sha256"] = sha(here / "test_clip_selection.py")
     if args.case in BEGINNER_VIDEO_CASES:
@@ -1232,7 +1262,49 @@ def native_test_inputs(args, executable, module, display):
     if args.case == "video-encoder-boundaries":
         from test_video_export_timing import video_hardware_scope
         inputs["execution_scope"]["video_hardware"] = video_hardware_scope()
+    if args.case == "display-guard":
+        inputs["execution_scope"]["display_handle_probe"] = "stale-missing-and-interrupted-enumeration.v3"
+    if debugger := os.environ.get("AUTOPSY_TEST_NATIVE_DEBUGGER"):
+        inputs["execution_scope"]["native_debugger_sha256"] = sha(Path(debugger).resolve(strict=True))
     return inputs
+
+
+def require_unlocked_desktop(kernel=None, sessions=None):
+    """Reject fresh GUI work on a locked/disconnected or unreadable session.
+
+    WTSSessionInfoEx has an eight-byte-aligned union; only its documented level-1
+    prefix is read. This is an environmental precondition, not an app failure.
+    Existing accepted results need no desktop. A later lock is still caught by
+    the input target guards, since Windows can change state after this query.
+    """
+    class SessionPrefix(ctypes.Structure):
+        _fields_ = [("level", ctypes.c_uint32), ("padding", ctypes.c_uint32),
+                    ("session", ctypes.c_uint32), ("state", ctypes.c_uint32),
+                    ("flags", ctypes.c_int32)]
+
+    kernel = kernel or ctypes.WinDLL("kernel32", use_last_error=True)
+    sessions = sessions or ctypes.WinDLL("wtsapi32", use_last_error=True)
+    kernel.ProcessIdToSessionId.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    session = ctypes.c_uint32()
+    if not kernel.ProcessIdToSessionId(kernel.GetCurrentProcessId(), ctypes.byref(session)):
+        raise RuntimeError(f"Cannot read the GUI test session: Windows error {ctypes.get_last_error()}.")
+    sessions.WTSQuerySessionInformationW.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+        ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint32)]
+    sessions.WTSFreeMemory.argtypes = [ctypes.c_void_p]
+    sessions.WTSFreeMemory.restype = None
+    pointer, size = ctypes.c_void_p(), ctypes.c_uint32()
+    if not sessions.WTSQuerySessionInformationW(None, session.value, 25,
+            ctypes.byref(pointer), ctypes.byref(size)):
+        raise RuntimeError(f"Cannot read GUI session {session.value}: Windows error {ctypes.get_last_error()}.")
+    try:
+        if not pointer.value or size.value < ctypes.sizeof(SessionPrefix):
+            raise RuntimeError("Windows returned incomplete GUI session information.")
+        info = SessionPrefix.from_buffer_copy(ctypes.string_at(pointer, ctypes.sizeof(SessionPrefix)))
+        if info.level != 1 or info.session != session.value or info.state != 0 or info.flags != 1:
+            raise RuntimeError(f"GUI session {session.value} is locked, disconnected or unknown "
+                f"(level={info.level}, state={info.state}, flags={info.flags}); unlock Windows before fresh desktop checks.")
+    finally:
+        sessions.WTSFreeMemory(pointer)
 
 
 def write_behavior_record(target, payload):
@@ -1294,7 +1366,8 @@ def native_work_scope(inputs):
         return None
     check_fields = {"check_sha256", "harness_sha256", "pipe_client_sha256", "shared_process_checks",
         "clip_edits_sha256", "clip_actions_sha256", "track_groups_sha256", "clip_selection_sha256",
-        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256", "video_transport_sha256"}
+        "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256", "video_transport_sha256",
+        "video_recording_sha256"}
     return {name: value for name, value in inputs.items() if name not in check_fields}
 
 
@@ -1434,6 +1507,10 @@ RECORDING_CASES = ("cursor-recording", "cursor-recording-save-before", "cursor-r
 # normal CLI operations but must not also enter video's generated CTest list.
 MODULE_REGISTERED_NATIVE_CASES = ("track-groups",)
 NATIVE_CASES = (
+    *VIDEO_RECORDING_CASES,
+    "video-audio-parity",
+    "video-audio-join-links",
+    "video-preview-close",
     *BEGINNER_VIDEO_CASES,
     "display-guard",
     "groups",
@@ -1537,6 +1614,7 @@ def main():
         raise RuntimeError("An AuTopsy scripting session is already active.")
     root.parent.mkdir(parents=True, exist_ok=True)
     def execute(run_id, identities):
+        require_unlocked_desktop()
         marker = root / "_owner"
         signature = "AuTopsy behavior tests 1"
         shared_cache = root.parent / "_preview_media"
@@ -1570,7 +1648,7 @@ def main():
             ("tone-stereo.wav", 2),
         ):
             write_tone(root / name, channels)
-        if args.case in BEGINNER_VIDEO_CASES or args.case in ("clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+        if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
             run_process(
                 [
                     args.ffmpeg,
@@ -1676,12 +1754,19 @@ def main():
             AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
             AUTOPSY_TEST_FFMPEG=args.ffmpeg,
             AUTOPSY_TEST_DISPLAY=display["device"]
-            if not args.reject_display
+            if args.reject_display is not True
             else "missing-test-display",
         )
         initial_preferences = (profile / "autopsy.cfg").read_text(encoding="utf-8")
+        environment.pop("AUTOPSY_TEST_STALE_MONITOR", None)
+        if args.case == "display-guard":
+            environment["AUTOPSY_TEST_STALE_MONITOR"] = "1"
+        if args.reject_display == "transition":
+            environment["AUTOPSY_TEST_STALE_MONITOR"] = "lost"
         if args.case in RECORDING_CASES[1:]:
             environment["AUTOPSY_TEST_SAVE_ROOT"] = str(audio.resolve())
+        if args.case in VIDEO_RECORDING_CASES:
+            environment["AUTOPSY_TEST_VIDEO_RECORDING_INPUT"] = "generated"
         user = ctypes.WinDLL("user32", use_last_error=True)
         user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
         with (root / "_app.log").open("w") as log:
@@ -1692,13 +1777,19 @@ def main():
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
+            debugger = None
             try:
                 if args.reject_display:
+                    started = time.monotonic()
                     status = app.wait(timeout=30)
                     log.flush()
                     report = (root / "_app.log").read_text(
                         encoding="utf-8", errors="replace"
                     )
+                    if args.reject_display == "transition" and (
+                            "AUTOPSY_TEST_DISPLAY bound-before-permanent-loss" not in report or
+                            not 1.8 <= time.monotonic()-started < 15):
+                        raise RuntimeError("Permanent monitor loss did not stop at its bounded placement boundary: " + report[-2000:])
                     if (
                         status != 197
                         or "AUTOPSY_TEST_WINDOW show" in report
@@ -1823,6 +1914,7 @@ def main():
                         restart_recording_app, lambda: remove_private_capture_audio(root, process_stopped=True))
                     result = None  # Fault journeys checked each real child result.
                 else:
+                    debugger = NativeCrashDebugger(app, root)
                     result = run_behavior_worker(worker_command, environment, app, root,
                         timeout_seconds=285 if args.case == "preview-soak" else 240)
                 if result is not None and result.returncode:
@@ -1839,11 +1931,25 @@ def main():
                         "Owned app did not exit; " + startup_window_messages(app.pid)
                     ) from error
                 if status:
-                    raise RuntimeError(f"The owned app exited with status {status}.")
+                    if debugger:
+                        debugger.close()
+                    log.flush()
+                    trace = root / "_native-debugger.log"
+                    raise RuntimeError(f"The owned app exited with status {status}.\n"
+                        f"Command: {subprocess.list2cmdline(worker_command)}\n"
+                        f"Worker stdout:\n{result.stdout[-8000:] if result and result.stdout else '<absent>'}\n"
+                        f"Worker stderr:\n{result.stderr if result and result.stderr else '<absent>'}\n"
+                        f"App output:\n{(root / '_app.log').read_text(encoding='utf-8', errors='replace')[-8000:]}\n"
+                        f"Native crash trace: {trace if trace.is_file() else '<absent>'}")
                 log.flush()
+                app_output = (root / "_app.log").read_text(encoding="utf-8", errors="replace")
+                if args.case == "display-guard" and "AUTOPSY_TEST_DISPLAY rebound-stale-handle" not in app_output:
+                    raise RuntimeError("The native display guard did not exercise stale-handle replacement.")
+                if args.case == "display-guard" and "AUTOPSY_TEST_DISPLAY waited-for-monitor" not in app_output:
+                    raise RuntimeError("The native display guard did not defer placement during a monitor transition.")
                 shows = re.findall(
                     r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
-                    (root / "_app.log").read_text(encoding="utf-8", errors="replace"),
+                    app_output,
                     re.MULTILINE,
                 )
                 assert shows, "No pre-show placement observations were recorded."
@@ -1881,6 +1987,8 @@ def main():
                 if app.poll() is None:
                     app.terminate()
                     app.wait(timeout=20)
+                if debugger:
+                    debugger.close()
                 if args.case in RECORDING_CASES:
                     remove_private_capture_audio(root, process_stopped=app.poll() is not None)
                 if profile_owner.is_file() and profile_owner.read_text() == str(
@@ -1898,6 +2006,12 @@ def main():
     if args.reject_display or args.interrupt_cache:
         retain_behavior_result(root.parent)
         execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display))
+        if args.reject_display:
+            # The same negative journey also loses an already bound display;
+            # it must expire before the first Show rather than wait forever.
+            args.reject_display = "transition"
+            root = root.with_name(root.name + "_transition")
+            execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display))
         return
     def read_inputs():
         return native_test_inputs(args, executable, module, display)

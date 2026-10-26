@@ -162,6 +162,9 @@ auto BackgroundCell::GetMenuItems(
    return {
       { L"NewMonoTrack", XO("Add Mono Track")},
       { L"NewStereoTrack", XO("Add Stereo Track") },
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+       { L"NewVideoTrack", XO("Add Video Track") },
+#endif
       { L"NewLabelTrack", XO("Add Label Track"),  },
       {},
       { L"Export", XO("Export Audio..."),  },

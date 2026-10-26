@@ -36,6 +36,8 @@ namespace {
 class TestDisplayGuard final : public wxEventFilter {
    wxString mDevice;
    HMONITOR mMonitor{};
+   bool mProbeStaleMonitor{}, mProbePermanentLoss{}, mReportedProbe{}, mReportedTransition{};
+   unsigned mProbeQueries{};
    std::set<HWND> mWindows;
 
    [[noreturn]] static void Fail(const char *operation)
@@ -50,38 +52,71 @@ class TestDisplayGuard final : public wxEventFilter {
 
    void BindMonitor()
    {
-      // Resolve identity at startup and actual topology changes, outside the
-      // repeated window-placement path. HMONITOR survives DPI-context changes;
-      // rectangles do not, so WorkArea() always reads current bounds afresh.
-      struct Displays {
-         const wxString &device;
-         HMONITOR monitor{};
-         RECT work{};
-         unsigned count{}, matches{};
-         DWORD queryError{};
-         wxString devices;
-      } displays{mDevice};
-      const auto enumerated = EnumDisplayMonitors(nullptr, nullptr,
-         [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
-            auto &found = *reinterpret_cast<Displays *>(data);
-            MONITORINFOEXW info{}; info.cbSize = sizeof(info);
-            if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&info))) {
-               found.queryError = GetLastError();
-               return FALSE;
+      // A driver can remove then restore the same display during a mode change.
+      // Defer placement while that known precondition is missing; never return
+      // stale coordinates or let Windows choose another monitor. An absent
+      // startup target and all other unsafe states still fail immediately.
+      const bool previouslyBound = mMonitor != nullptr;
+      const auto deadline = GetTickCount64() + 2000;
+      unsigned attempts{};
+      if (mProbePermanentLoss && previouslyBound) {
+         std::fprintf(stderr, "AUTOPSY_TEST_DISPLAY bound-before-permanent-loss\n");
+         std::fflush(stderr);
+      }
+      for (;;) {
+         ++attempts;
+         struct Displays {
+            const wxString &device;
+            HMONITOR monitor{};
+            RECT work{};
+            unsigned count{}, matches{};
+            DWORD queryError{};
+            wxString devices;
+         } displays{mDevice};
+         auto enumerated = EnumDisplayMonitors(nullptr, nullptr,
+            [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+               auto &found = *reinterpret_cast<Displays *>(data);
+               MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+               if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&info))) {
+                  found.queryError = GetLastError();
+                  return FALSE;
+               }
+               ++found.count;
+               found.devices += wxString{info.szDevice} + ";";
+               if (found.device == info.szDevice) {
+                  ++found.matches;
+                  found.monitor = monitor;
+                  found.work = info.rcWork;
+               }
+               return TRUE;
+            }, reinterpret_cast<LPARAM>(&displays));
+
+         if (mProbePermanentLoss && previouslyBound) displays.matches = 0;
+         else if (mProbeStaleMonitor && previouslyBound && attempts == 1) {
+            // Alternate the two observable boundaries of a driver transition:
+            // no target, and a handle invalidated part-way through enumeration.
+            if (++mProbeQueries % 2) displays.matches = 0;
+            else { enumerated = FALSE; displays.queryError = ERROR_INVALID_MONITOR_HANDLE; }
+         }
+         const bool forbidden = displays.count > 1 && mDevice == L"\\\\.\\DISPLAY1";
+         const bool usable = enumerated && displays.matches == 1 && !forbidden &&
+            displays.work.right - displays.work.left >= 640 &&
+            displays.work.bottom - displays.work.top >= 480;
+         if (usable) {
+            mMonitor = displays.monitor;
+            if (attempts > 1 && !mReportedTransition) {
+               std::fprintf(stderr, "AUTOPSY_TEST_DISPLAY waited-for-monitor\n");
+               std::fflush(stderr);
+               mReportedTransition = true;
             }
-            ++found.count;
-            found.devices += wxString{info.szDevice} + ";";
-            if (found.device == info.szDevice) {
-               ++found.matches;
-               found.monitor = monitor;
-               found.work = info.rcWork;
-            }
-            return TRUE;
-         }, reinterpret_cast<LPARAM>(&displays));
-      if (!enumerated || displays.matches != 1 ||
-         (displays.count > 1 && mDevice == L"\\\\.\\DISPLAY1") ||
-         displays.work.right - displays.work.left < 640 ||
-         displays.work.bottom - displays.work.top < 480) {
+            return;
+         }
+         if (previouslyBound && ((enumerated && displays.matches == 0) ||
+             (!enumerated && displays.queryError == ERROR_INVALID_MONITOR_HANDLE)) &&
+             GetTickCount64() < deadline) {
+            Sleep(20);
+            continue;
+         }
          std::fprintf(stderr, "Test display enumeration: completed=%d count=%u matches=%u "
             "work=%ld,%ld,%ld,%ld query_error=%lu\n", enumerated, displays.count,
             displays.matches, displays.work.left, displays.work.top,
@@ -94,25 +129,37 @@ class TestDisplayGuard final : public wxEventFilter {
             static_cast<long long>(read ? reinterpret_cast<INT_PTR>(read()) : 0),
             GetCurrentThreadId());
          Fail("the selected test display is missing, forbidden, or too small");
+
       }
-      mMonitor = displays.monitor;
    }
 
-   RECT WorkArea() const
+   RECT WorkArea()
    {
       MONITORINFOEXW info{}; info.cbSize = sizeof(info);
-      // A missing/replaced handle or changed identity stops the private app;
-      // neither old coordinates nor the nearest/primary monitor are fallbacks.
-      if (!mMonitor || !GetMonitorInfoW(mMonitor, reinterpret_cast<MONITORINFO *>(&info)) ||
-         mDevice != info.szDevice ||
+      if (mProbeStaleMonitor) mMonitor = reinterpret_cast<HMONITOR>(static_cast<INT_PTR>(-1));
+      if (!mMonitor) Fail("the test display has no binding");
+      const auto located = GetMonitorInfoW(mMonitor, reinterpret_cast<MONITORINFO *>(&info));
+      if (!located && GetLastError() != ERROR_INVALID_MONITOR_HANDLE)
+         Fail("read the bound test display");
+      if (!located || mDevice != info.szDevice) {
+         BindMonitor();
+         if (!GetMonitorInfoW(mMonitor, reinterpret_cast<MONITORINFO *>(&info)))
+            Fail("read the refreshed test display");
+         if (mProbeStaleMonitor && !mReportedProbe) {
+            std::fprintf(stderr, "AUTOPSY_TEST_DISPLAY rebound-stale-handle\n");
+            std::fflush(stderr);
+            mReportedProbe = true;
+         }
+      }
+      if (mDevice != info.szDevice ||
          (GetSystemMetrics(SM_CMONITORS) > 1 && mDevice == L"\\\\.\\DISPLAY1") ||
          info.rcWork.right - info.rcWork.left < 640 ||
          info.rcWork.bottom - info.rcWork.top < 480)
-         Fail("the bound test display is missing, replaced, forbidden, or too small");
+         Fail("the bound test display is missing, forbidden, or too small");
       return info.rcWork;
    }
 
-   void Constrain(HWND window, WINDOWPOS &position) const
+   void Constrain(HWND window, WINDOWPOS &position)
    {
       const auto work = WorkArea();
       RECT current{};
@@ -181,6 +228,10 @@ class TestDisplayGuard final : public wxEventFilter {
 public:
    explicit TestDisplayGuard(wxString device) : mDevice{std::move(device)}
    {
+      wxString probe;
+      wxGetEnv("AUTOPSY_TEST_STALE_MONITOR", &probe);
+      mProbeStaleMonitor = probe == "1" || probe == "lost";
+      mProbePermanentLoss = probe == "lost";
       BindMonitor();
       WorkArea();
       wxEvtHandler::AddFilter(this);

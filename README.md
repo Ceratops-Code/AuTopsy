@@ -349,7 +349,8 @@ Use the normal **Edit > Clips > Split**, **Split New**, **Trim**, Cut, Copy,
 Paste, Delete, and Duplicate actions. Right-click a clip for its editing menu.
 Selecting a middle section and pressing **Delete** leaves a gap in both picture
 and sound; later clips stay where they are. **Edit > Ripple Delete (Close Gap)**
-is available when you deliberately want later material to move earlier.
+or **Ctrl+Delete** closes the selected gap instead. Both choices are also in the
+audio and video clip menus. The empty track-pane menu includes **Add Video Track**.
 **Clip Properties...** in either clip menu offers precise Start, End, Duration,
 Speed and a timing lock. End/Duration retime the clip; dragging edges trims it.
 **Close Gap Before Clip** moves the clip and its linked media to the preceding
@@ -358,6 +359,8 @@ hold **Alt** during a drag to bypass magnetic snapping.
 Splits and video moves snap to source frames. Linked splits create separate
 left and right groups, so moving the right pair leaves the left pair in place.
 Each paste or duplication creates an independent linked set.
+When audio and video are selected together, the normal **Join** command joins
+both in one Undo action; joined linked clips continue to move together.
 Right-click a video clip and choose **Change Clip Speed...** to enter a playback
 percentage (1–10000%). Its start stays fixed; linked video and audio retime
 together with the host's pitch-preserving audio stretch. Flags, hidden trim
@@ -380,6 +383,17 @@ Below...** on the upper clip. These controls preserve clip positions and audio.
 Fades remain attached to retained footage through split, trim/untrim and speed
 changes, and appear in both preview and export. Preparation can be cancelled
 before an edit is applied. **Remove Fades** restores an opaque picture.
+
+**Transport > Recording > Record Video...** records a webcam, one screen, or the
+AuTopsy window. Choose an optional audio input, 720p/1080p/original picture size,
+frame rate and a new MKV or MP4 file. **Stop and Add** finishes capture and places
+the result at the edit cursor in separate linked video/audio tracks, with one
+Undo action. A duration of zero records until stopped. Screen audio uses a listed
+microphone or loopback input; it does not automatically capture system playback.
+Existing files are never overwritten. If capture or import fails, nonempty
+captured media stays at your chosen location and can be imported again. MKV is
+the default; MP4 uses fragments so completed fragments can survive interruption,
+at the cost of compatibility with some older players.
 
 **File > Collect Project Media...** creates a new portable folder with
 **Project.aup3** and **Media/**. It includes audio and the original footage needed
