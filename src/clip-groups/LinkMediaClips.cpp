@@ -384,13 +384,14 @@ bool JoinSelectedMediaClips(AudacityProject &project, double from, double to)
       throw std::runtime_error("Stop playback or recording before joining clips.");
    VideoEditing::VideoProjectSnapshot snapshot;
    std::vector<AuTopsyVideoTrack*> pictures;
-   for (auto *track : VideoTimeline::ProjectVideoTracks(project)) if (track->GetSelected()) {
+   for (auto *track : VideoTimeline::ProjectVideoTracks(project)) {
       snapshot.tracks.push_back({std::to_string(pictures.size()), 0, track->Timeline()});
       pictures.push_back(track);
    }
    std::vector<VideoEditing::VideoEditRequest> requests;
-   for (const auto &track : snapshot.tracks)
-      requests.push_back({VideoEditing::VideoEditKind::JoinClips, track.id, 0, from, to});
+   for (size_t i{}; i < pictures.size(); ++i)
+      if (pictures[i]->GetSelected())
+         requests.push_back({VideoEditing::VideoEditKind::JoinClips, snapshot.tracks[i].id, 0, from, to});
    const auto plan = VideoEditing::PlanVideoEdits(snapshot, requests);
    auto candidate = plan.After();
    struct SoundJoin { WaveTrack *track; std::set<std::string> groups; double start, end; };
@@ -420,29 +421,28 @@ bool JoinSelectedMediaClips(AudacityProject &project, double from, double to)
       sound.push_back(std::move(join));
    }
    if (sound.empty() && plan.ChangedTrackIds().empty()) return false;
-   // One joined picture can span links to several selected soundtrack tracks.
-   // Connect their new intervals through that parent instead of rejecting the
-   // otherwise ordinary join or arbitrarily choosing only one soundtrack.
+   // A picture can bridge several soundtrack groups even when its content did
+   // not need joining. Keep all existing partners in the merged component;
+   // selection limits structural edits, not updates to their shared identities.
    for (size_t i{}; i < pictures.size(); ++i)
       for (const auto &clip : candidate.tracks[i].timeline.clips) {
-         const auto old = std::find_if(snapshot.tracks[i].timeline.clips.begin(), snapshot.tracks[i].timeline.clips.end(),
-            [&](const auto &value) { return value.id == clip.id; });
-         if (!clip.content || (old != snapshot.tracks[i].timeline.clips.end() && old->content == clip.content)) continue;
          const auto groups = VideoTimeline::VideoContentLinkGroups(clip);
-         if (std::any_of(components.begin(), components.end(), [&](const auto &component) {
+         if (groups.size() > 1 || std::any_of(components.begin(), components.end(), [&](const auto &component) {
                return std::any_of(groups.begin(), groups.end(), [&](const auto &group) { return component.count(group) != 0; });
             })) mergeLinkedGroups({groups.begin(), groups.end()});
       }
    std::map<std::string, std::string> joinedGroups;
    for (const auto &component : components) {
+      if (std::none_of(sound.begin(), sound.end(), [&](const auto &join) {
+            return std::any_of(join.groups.begin(), join.groups.end(),
+               [&](const auto &group) { return component.count(group) != 0; });
+         })) continue;
       const auto group = CreateClipGroupId();
       for (const auto &old : component) joinedGroups.emplace(old, group);
    }
+   std::set<std::string> changedPictures{plan.ChangedTrackIds().begin(), plan.ChangedTrackIds().end()};
    for (size_t i{}; i < pictures.size(); ++i)
       for (auto &clip : candidate.tracks[i].timeline.clips) {
-         const auto old = std::find_if(snapshot.tracks[i].timeline.clips.begin(), snapshot.tracks[i].timeline.clips.end(),
-            [&](const auto &value) { return value.id == clip.id; });
-         if (!clip.content || (old != snapshot.tracks[i].timeline.clips.end() && old->content == clip.content)) continue;
          const auto groups = VideoTimeline::VideoContentLinkGroups(clip);
          std::set<std::string> matches;
          for (const auto &group : groups) if (const auto found = joinedGroups.find(group); found != joinedGroups.end())
@@ -450,7 +450,10 @@ bool JoinSelectedMediaClips(AudacityProject &project, double from, double to)
          if (matches.size() > 1) throw std::runtime_error("Join these independent soundtrack groups separately.");
          // A fresh parent link represents the whole joined soundtrack. Retained
          // child links still describe the original pieces for Separate/Undo.
-         if (!matches.empty()) clip.linkGroup = *matches.begin();
+         if (!matches.empty() && clip.linkGroup != *matches.begin()) {
+            clip.linkGroup = *matches.begin();
+            changedPictures.insert(std::to_string(i));
+         }
       }
    try {
       for (auto &join : sound) {
@@ -462,7 +465,14 @@ bool JoinSelectedMediaClips(AudacityProject &project, double from, double to)
                if (clip->GetPlayStartTime() < join.end && clip->GetPlayEndTime() > join.start)
                   SetClipGroupId(*clip, joinedGroups.at(*join.groups.begin()));
       }
-      for (size_t i{}; i < pictures.size(); ++i) pictures[i]->SetTimeline(candidate.tracks[i].timeline);
+      // Unjoined audio pieces can still share an imported clip's old group.
+      // Replacing that identity must preserve those partners outside the range.
+      for (auto *track : TrackList::Get(project).Any<WaveTrack>())
+         for (const auto &clip : track->SortedIntervalArray())
+            if (const auto found = joinedGroups.find(GetClipGroupId(*clip)); found != joinedGroups.end())
+               SetClipGroupId(*clip, found->second);
+      for (size_t i{}; i < pictures.size(); ++i)
+         if (changedPictures.count(std::to_string(i))) pictures[i]->SetTimeline(candidate.tracks[i].timeline);
       ProjectHistory::Get(project).PushState(XO("Joined selected media clips"), XO("Join"));
    }
    catch (...) { ProjectHistory::Get(project).RollbackState(); throw; }

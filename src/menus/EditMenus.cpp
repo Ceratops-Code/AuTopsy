@@ -1077,7 +1077,7 @@ void OnJoin(const CommandContext &context)
    auto &tracks = TrackList::Get(project);
    auto &selectedRegion = ViewInfo::Get(project).selectedRegion;
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
-   for (auto *track : VideoTimeline::ProjectVideoTracks(project)) if (track->GetSelected()) {
+   if (!VideoTimeline::ProjectVideoTracks(project).empty()) {
       try {
          ClipGroups::JoinSelectedMediaClips(project, selectedRegion.t0(), selectedRegion.t1());
       }

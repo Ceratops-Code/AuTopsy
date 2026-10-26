@@ -36,6 +36,18 @@ TEST_CASE("Capture device identities remain distinct from labels and list orderi
    REQUIRE_THROWS(ReadCaptureDeviceList(std::string(512*1024+1, 'x')));
 }
 
+TEST_CASE("Camera choices include inactive virtual cameras and exclude audio inputs") {
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto devices = ReadCaptureDeviceList("  camera [Camera] (video)\n"
+         "  microphone [Mic] (audio)\n  virtual [Inactive camera] (none)\n");
+      std::vector<std::string> choices;
+      for (const auto &device : devices)
+         if (device.IsCameraCandidate()) choices.push_back(device.identifier);
+      const std::vector<std::string> expected{"camera", "virtual"};
+      REQUIRE(choices == expected);
+   }
+}
+
 TEST_CASE("Webcam recording keeps one clock and quotes device syntax as data") {
    auto options = Options();
    options.camera = "Camera: Roman's [HD]"; options.audio = "Microphone: USB";

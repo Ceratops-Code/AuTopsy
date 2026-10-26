@@ -115,7 +115,7 @@ public:
          auto *camera = choice(_("Camera")); auto *display = choice(_("Display"));
          auto *audio = choice(_("Audio input")); audio->Append(_("No audio")); audio->SetSelection(0);
          for (const auto &device : devices) {
-            if (device.kind == DeviceKind::Video) { cameras.push_back(device.identifier); camera->Append(wxString::FromUTF8(device.label)); }
+            if (device.IsCameraCandidate()) { cameras.push_back(device.identifier); camera->Append(wxString::FromUTF8(device.label)); }
             if (device.kind == DeviceKind::Audio) { microphones.push_back(device.identifier); audio->Append(wxString::FromUTF8(device.label)); }
          }
          if (!cameras.empty()) camera->SetSelection(0);

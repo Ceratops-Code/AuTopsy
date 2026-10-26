@@ -110,34 +110,90 @@ def check_video_audio_edit_parity(client, root):
         assert model() == joined
         client.send("Close")
 
+    # An audio-only join must keep unchanged picture and all original partners,
+    # including an audio tail outside the range and unselected linked tracks.
+    for compound, extra_partner, only_audio in ((False, False, False), (True, False, False),
+                                               (False, True, False), (False, False, True)):
+        client.send("New")
+        client.file("ImportVideo", root / "source.mp4")
+        client.send('UnlinkMediaClips: Clips="0:0"')
+        if extra_partner:
+            client.file("ImportVideo", root / "source.mp4")
+            client.send('UnlinkMediaClips: Clips="2:0"')
+        if compound:
+            client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+            client.send("SelectTime: Start=2 End=2")
+            client.send("Split")
+            client.send("SelectTime: Start=0 End=4.05")
+            client.send("Join")
+        client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
+        for at in (1, 2):
+            client.send(f"SelectTime: Start={at} End={at}")
+            client.send("Split")
+        members = "0:0,1:0,1:1,1:2" + (",2:0,3:0" if extra_partner else "")
+        client.send(f'LinkMediaClips: Clips="{members}"')
+        client.send(f"SelectTracks: Track={1 if only_audio else 0} TrackCount={1 if only_audio else 2} Mode=Set")
+        client.send("SelectTime: Start=0 End=1.9")
+        split = model()
+        client.send("Join")
+        joined = model()
+        assert len(joined[0]) == (2 if extra_partner else 1), joined
+        assert len(joined[1]) == (3 if extra_partner else 2), joined
+        matching_occupied_ranges()
+        client.send("Join")
+        client.send("Undo")
+        assert model() == split
+        client.send("Redo")
+        assert model() == joined
+        save_reopen(client, root / f"_parity-audio-join-{compound}-{extra_partner}-{only_audio}.aup3")
+        assert model() == joined
+        picture = joined[0][0]
+        client.send(f'MoveVideoClip: Track={picture["track"]} Id="{picture["id"]}" Start=5')
+        moved = model()
+        for before_rows, after_rows in zip(joined, moved, strict=True):
+            assert len(before_rows) == len(after_rows)
+            assert all(abs(after["start"]-before["start"]-5) < 0.002 for before, after in
+                       zip(before_rows, after_rows, strict=True)), (joined, moved)
+        client.send("Undo")
+        assert model() == joined
+        client.send("Redo")
+        assert model() == moved
+        client.send("Close")
+
     # Two different soundtrack tracks can be linked to different pieces of one
     # picture. Their native joins must both follow the resulting picture parent.
-    client.send("New")
-    client.file("ImportVideo", root / "source.mp4")
-    client.send('UnlinkMediaClips: Clips="0:0"')
-    client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
-    client.send("SelectTime: Start=0 End=4.05")
-    client.send("Duplicate")
-    client.send("SelectAll")
-    client.send("SelectTime: Start=2 End=2")
-    client.send("Split")
-    client.send('LinkMediaClips: Clips="0:0,1:0"')
-    client.send('LinkMediaClips: Clips="0:1,2:1"')
-    client.send("SelectAll")
-    client.send("SelectTime: Start=0 End=4.05")
-    split = model()
-    client.send("Join")
-    joined = model()
-    assert len(joined[0]) == 1 and len(joined[1]) == 2, joined
-    client.send('MoveVideoClip: Track=0 Id="1" Start=5')
-    assert all(abs(row["start"]-5) < 0.002 for row in model()[1]), model()
-    client.send("Undo")
-    client.send("Undo")
-    assert model() == split
-    client.send("Redo")
-    assert model() == joined
-    save_reopen(client, root / "_parity-two-soundtracks.aup3")
-    assert model() == joined
+    for prejoined in (False, True):
+        client.send("New")
+        client.file("ImportVideo", root / "source.mp4")
+        client.send('UnlinkMediaClips: Clips="0:0"')
+        client.send("SelectTracks: Track=1 TrackCount=1 Mode=Set")
+        client.send("SelectTime: Start=0 End=4.05")
+        client.send("Duplicate")
+        client.send("SelectAll")
+        client.send("SelectTime: Start=2 End=2")
+        client.send("Split")
+        client.send('LinkMediaClips: Clips="0:0,1:0"')
+        client.send('LinkMediaClips: Clips="0:1,2:1"')
+        if prejoined:
+            client.send("SelectTracks: Track=0 TrackCount=1 Mode=Set")
+            client.send("SelectTime: Start=0 End=4.05")
+            client.send("Join")
+        client.send("SelectTracks: Track=1 TrackCount=2 Mode=Set" if prejoined else "SelectAll")
+        client.send("SelectTime: Start=0 End=4.05")
+        split = model()
+        client.send("Join")
+        joined = model()
+        assert len(joined[0]) == 1 and len(joined[1]) == 2, joined
+        client.send('MoveVideoClip: Track=0 Id="1" Start=5')
+        assert all(abs(row["start"]-5) < 0.002 for row in model()[1]), model()
+        client.send("Undo")
+        client.send("Undo")
+        assert model() == split
+        client.send("Redo")
+        assert model() == joined
+        save_reopen(client, root / f"_parity-two-soundtracks-{prejoined}.aup3")
+        assert model() == joined
+        client.send("Close")
 
 
 def crop_dialog_roundtrip(client, commit, reset=False):

@@ -10,6 +10,8 @@ enum class DeviceKind { Video, Audio, Unknown };
 struct CaptureDevice {
    std::string identifier, label;
    DeviceKind kind{DeviceKind::Unknown};
+   bool IsCameraCandidate() const noexcept
+   { return kind == DeviceKind::Video || kind == DeviceKind::Unknown; }
 };
 enum class SourceKind { Webcam, Screen, Window, GeneratedTest };
 struct ScreenRegion { int left{}, top{}, width{}, height{}; };
