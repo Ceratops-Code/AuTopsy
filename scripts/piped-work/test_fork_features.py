@@ -1263,7 +1263,7 @@ def native_test_inputs(args, executable, module, display):
         from test_video_export_timing import video_hardware_scope
         inputs["execution_scope"]["video_hardware"] = video_hardware_scope()
     if args.case == "display-guard":
-        inputs["execution_scope"]["display_handle_probe"] = "invalid-handle-on-every-query.v1"
+        inputs["execution_scope"]["display_handle_probe"] = "stale-missing-and-interrupted-enumeration.v3"
     if debugger := os.environ.get("AUTOPSY_TEST_NATIVE_DEBUGGER"):
         inputs["execution_scope"]["native_debugger_sha256"] = sha(Path(debugger).resolve(strict=True))
     return inputs
@@ -1754,13 +1754,15 @@ def main():
             AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
             AUTOPSY_TEST_FFMPEG=args.ffmpeg,
             AUTOPSY_TEST_DISPLAY=display["device"]
-            if not args.reject_display
+            if args.reject_display is not True
             else "missing-test-display",
         )
         initial_preferences = (profile / "autopsy.cfg").read_text(encoding="utf-8")
         environment.pop("AUTOPSY_TEST_STALE_MONITOR", None)
         if args.case == "display-guard":
             environment["AUTOPSY_TEST_STALE_MONITOR"] = "1"
+        if args.reject_display == "transition":
+            environment["AUTOPSY_TEST_STALE_MONITOR"] = "lost"
         if args.case in RECORDING_CASES[1:]:
             environment["AUTOPSY_TEST_SAVE_ROOT"] = str(audio.resolve())
         if args.case in VIDEO_RECORDING_CASES:
@@ -1778,11 +1780,16 @@ def main():
             debugger = None
             try:
                 if args.reject_display:
+                    started = time.monotonic()
                     status = app.wait(timeout=30)
                     log.flush()
                     report = (root / "_app.log").read_text(
                         encoding="utf-8", errors="replace"
                     )
+                    if args.reject_display == "transition" and (
+                            "AUTOPSY_TEST_DISPLAY bound-before-permanent-loss" not in report or
+                            not 1.8 <= time.monotonic()-started < 15):
+                        raise RuntimeError("Permanent monitor loss did not stop at its bounded placement boundary: " + report[-2000:])
                     if (
                         status != 197
                         or "AUTOPSY_TEST_WINDOW show" in report
@@ -1938,6 +1945,8 @@ def main():
                 app_output = (root / "_app.log").read_text(encoding="utf-8", errors="replace")
                 if args.case == "display-guard" and "AUTOPSY_TEST_DISPLAY rebound-stale-handle" not in app_output:
                     raise RuntimeError("The native display guard did not exercise stale-handle replacement.")
+                if args.case == "display-guard" and "AUTOPSY_TEST_DISPLAY waited-for-monitor" not in app_output:
+                    raise RuntimeError("The native display guard did not defer placement during a monitor transition.")
                 shows = re.findall(
                     r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
                     app_output,
@@ -1997,6 +2006,12 @@ def main():
     if args.reject_display or args.interrupt_cache:
         retain_behavior_result(root.parent)
         execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display))
+        if args.reject_display:
+            # The same negative journey also loses an already bound display;
+            # it must expire before the first Show rather than wait forever.
+            args.reject_display = "transition"
+            root = root.with_name(root.name + "_transition")
+            execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display))
         return
     def read_inputs():
         return native_test_inputs(args, executable, module, display)

@@ -460,7 +460,10 @@ Startup and display-change messages bind the selected device's Windows monitor
 handle. Each placement reads its current bounds in the window owner's DPI
 coordinate space and checks the device identity. An invalidated or retargeted
 handle is resolved again by the same device name before placement; a missing,
-forbidden or too-small target stops the private app. Geometry is never retained
+forbidden or too-small startup target stops the private app. If a previously
+bound device temporarily disappears during a driver mode change, placement waits
+up to two seconds for that same device, then stops if it is still missing.
+Other unsafe states stop immediately. Geometry is never retained
 as identity. Ordinary placements reuse the live handle. The guard never
 falls back to screen 1. Private test windows use wx's
 stay-on-top style so the host retains their exposure during activation; the
@@ -468,10 +471,12 @@ runner also checks the window under the target point before sending input.
 Its held mouse button is released even when the owned window disappears.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
+That negative case also removes an already bound device inside the scoped probe
+and requires timeout before the first window is exposed.
 `fork-display-guard` repeats native moves, resizing, hide/show and display-change
 messages under all five caller DPI contexts, without pointer or keyboard input.
-It injects an invalid monitor handle before every bounds query and requires a
-successful device-identity lookup before any window can be exposed.
+It injects stale handles, temporarily missing results and handles invalidated
+during enumeration, requiring a fresh device-identity lookup before exposure.
 The affected-test suite stops its probe immediately before and after each
 window effect, checking that cleanup restores the caller context and never acts
 on a recycled window handle.
