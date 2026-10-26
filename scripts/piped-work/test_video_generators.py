@@ -56,9 +56,9 @@ def expect_timeline_colours(client, root, ffmpeg, expected):
     rgb = run_process([ffmpeg, "-v", "error", "-i", str(path), "-vf", "scale=800:600",
         "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"], text=False, timeout=30)
     assert len(rgb) == 800 * 600 * 3
-    best = []
+    best: list[str] = []
     for y in range(600):
-        row = []
+        row: list[str] = []
         for x in range(800):
             r, g, b = rgb[(y * 800 + x) * 3:(y * 800 + x) * 3 + 3]
             colour = "red" if r > 180 and g < 60 and b < 60 else (
