@@ -354,6 +354,93 @@ def check_test_display_selection():
     )
 
 
+def check_owned_display_guard(client):
+    """Exercise the real module's placement hooks without pointer/key injection.
+
+    Each operation checks the current HWND's process, including after failures;
+    cleanup never touches a recycled handle. Caller DPI changes, repeated native
+    moves, visibility changes and topology messages all travel through Windows.
+    No actual display configuration is changed. The caller's DPI context and
+    the owned project's original placement are restored on every exit path.
+    """
+    from ctypes import wintypes as w
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetAncestor.argtypes = [w.HWND, w.UINT]
+    user.GetAncestor.restype = w.HWND
+    user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.IsWindow.argtypes = [w.HWND]
+    user.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int,
+                                  ctypes.c_int, ctypes.c_int, w.UINT]
+    user.ShowWindow.argtypes = [w.HWND, ctypes.c_int]
+    user.SetThreadDpiAwarenessContext.argtypes = [w.HANDLE]
+    user.SetThreadDpiAwarenessContext.restype = w.HANDLE
+    user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
+                                        w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    pane = client.data("GetVideoPreviewInfo")["videoTrackPanelHandle"]
+    window = user.GetAncestor(pane, 2)
+    owner = w.DWORD()
+    user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+    if not window or not owner.value:
+        raise RuntimeError("The display probe has no owned project window.")
+    original = w.RECT()
+    if not user.GetWindowRect(window, ctypes.byref(original)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    def is_owned():
+        current = w.DWORD()
+        return (user.IsWindow(window)
+                and user.GetWindowThreadProcessId(window, ctypes.byref(current))
+                and current.value == owner.value)
+
+    def check_window():
+        if not is_owned():
+            raise RuntimeError("The private display-probe window exited or changed owner.")
+        assert_owned_test_display(owner.value, include_window=window)
+
+    completed = 0
+    try:
+        for _ in range(2):
+            for context in (-1, -2, -3, -4, -5):
+                previous = user.SetThreadDpiAwarenessContext(w.HANDLE(context))
+                if not previous:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    target = select_test_display(connected_test_displays())
+                    left, top, right, bottom = target["work"]
+                    for width, height in ((700, 500), (right-left-32, bottom-top-32)):
+                        check_window()
+                        if not user.SetWindowPos(window, None, left+16, top+16,
+                                                 width, height, 0x14):
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        check_window()
+                        completed += 1
+                    check_window()
+                    reply = ctypes.c_size_t()
+                    if not user.SendMessageTimeoutW(window, 0x7E, 32,
+                            ((bottom-top) << 16) | (right-left), 2, 2000, ctypes.byref(reply)):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    check_window()
+                    user.ShowWindow(window, 0)
+                    check_window()
+                    user.ShowWindow(window, 4)
+                    check_window()
+                    completed += 3
+                finally:
+                    user.SetThreadDpiAwarenessContext(previous)
+    finally:
+        if is_owned():
+            user.ShowWindow(window, 4)
+            check_window()
+            if not user.SetWindowPos(window, None, original.left, original.top,
+                    original.right-original.left, original.bottom-original.top, 0x14):
+                raise ctypes.WinError(ctypes.get_last_error())
+            check_window()
+    print(json.dumps({"display_guard": "passed", "operations": completed,
+                      "caller_dpi_contexts": 5, "repetitions": 2}))
+
+
 def check_behavior_worker_lifecycle(work_root):
     """No GUI: repeat normal exit, bounded expiry and both app-failure boundaries."""
     import tempfile

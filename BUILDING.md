@@ -456,14 +456,22 @@ launching. That process-local adapter constrains each wx top-level window before
 Windows applies its placement, covering the loading splash, editor, welcome,
 About, and video preview. A missing or too-small target stops the test instead
 of falling back to screen 1. It changes no system display settings or user windows.
-Each placement resolves the selected device afresh in the callback's DPI
-coordinate space. The guard retains neither monitor handles nor geometry as an
-identity, and never falls back to screen 1. Private test windows use wx's
+Startup and display-change messages bind the selected device's Windows monitor
+handle. Each placement reads its current bounds in the window owner's DPI
+coordinate space and checks the device identity; missing or replaced handles
+stop the private app. Geometry is never retained as identity, and placements do
+not re-enumerate the desktop from inside window-move callbacks. The guard never
+falls back to screen 1. Private test windows use wx's
 stay-on-top style so the host retains their exposure during activation; the
 runner also checks the window under the target point before sending input.
 Its held mouse button is released even when the owned window disappears.
 `fork-display-policy` checks device selection without UI; `fork-display-rejection`
 checks that a disconnected target stops the child before showing a window.
+`fork-display-guard` repeats native moves, resizing, hide/show and display-change
+messages under all five caller DPI contexts, without pointer or keyboard input.
+The affected-test suite stops its probe immediately before and after each
+window effect, checking that cleanup restores the caller context and never acts
+on a recycled window handle.
 `fork-branding` also repeats hidden/visible placement requests toward the other
 screen, including oversized windows. GUI cases check the owned windows before
 commands, mouse input, and screenshots; pre-show observations stay in each case's

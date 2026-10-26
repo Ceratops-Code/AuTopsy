@@ -138,6 +138,7 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("display-guard",), ("modules/scripting/mod-script-pipe/ScripterCallback.cpp",)),
     (("clip-snapping",), ("src/tracks/ui/TimeShiftHandle.*", "src/clip-groups/EditClipPlacement.*")),
     (("video-fades", "preview-quality", "video-export-timing"), (
         "src/video/PlanVideoTransitions.*", "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*")),

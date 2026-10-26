@@ -23,6 +23,73 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_display_probe_repeats_and_stops_at_each_window_effect_boundary(self) -> None:
+        import ctypes
+        from ctypes import wintypes as w
+
+        import run_fork_test_harness as harness
+
+        # Exercise the probe's cleanup and recycled-HWND contract independently
+        # of Windows. The native display-guard case covers the actual module.
+        target = {"device": r"\\.\DISPLAY2", "primary": False, "work": [-1280, 113, 0, 913]}
+        def run_probe(boundary: str | None, index: int) -> None:
+            state = {"alive": True, "effect": 0, "foreign_effects": 0, "context": 24592}
+            rectangle = [-1200, 150, -300, 750]
+
+            def process_owner(_window: Any, pointer: Any) -> int:
+                ctypes.cast(pointer, ctypes.POINTER(w.DWORD)).contents.value = 7 if state["alive"] else 8
+                return 10
+
+            def read_rectangle(_window: Any, pointer: Any) -> bool:
+                output = ctypes.cast(pointer, ctypes.POINTER(w.RECT)).contents
+                output.left, output.top, output.right, output.bottom = rectangle
+                return True
+
+            def context(value: Any) -> int:
+                previous = state["context"]
+                state["context"] = value.value if hasattr(value, "value") else value
+                return previous
+
+            def effect(*_args: Any) -> int:
+                if not state["alive"]:
+                    state["foreign_effects"] += 1
+                    raise AssertionError("Window operation reached a recycled HWND")
+                state["effect"] += 1
+                if state["effect"] == index:
+                    state["alive"] = False
+                    if boundary == "before":
+                        raise InterruptedError("Private app stopped immediately before the effect")
+                return 1
+
+            user = SimpleNamespace(
+                GetAncestor=unittest.mock.Mock(return_value=42),
+                GetWindowThreadProcessId=unittest.mock.Mock(side_effect=process_owner),
+                GetWindowRect=unittest.mock.Mock(side_effect=read_rectangle),
+                IsWindow=unittest.mock.Mock(side_effect=lambda _window: state["alive"]),
+                SetThreadDpiAwarenessContext=unittest.mock.Mock(side_effect=context),
+                SetWindowPos=unittest.mock.Mock(side_effect=effect),
+                ShowWindow=unittest.mock.Mock(side_effect=effect),
+                SendMessageTimeoutW=unittest.mock.Mock(side_effect=effect),
+            )
+            client = unittest.mock.Mock()
+            client.data.return_value = {"videoTrackPanelHandle": 43}
+            with patch.object(harness.ctypes, "WinDLL", return_value=user, create=True), \
+                    patch.object(harness, "connected_test_displays", return_value=[target]), \
+                    patch.object(harness, "assert_owned_test_display"), redirect_stdout(io.StringIO()):
+                if boundary:
+                    with self.assertRaises((InterruptedError, RuntimeError)):
+                        harness.check_owned_display_guard(client)
+                else:
+                    harness.check_owned_display_guard(client)
+                    self.assertEqual(state["effect"], 52)
+                self.assertEqual(state["foreign_effects"], 0)
+                self.assertEqual(state["context"], 24592)
+
+        for boundary, index in [(None, 0), (None, 0),
+                *((boundary, index) for boundary in ("before", "after") for index in range(1, 53))]:
+            with self.subTest(boundary=boundary, index=index):
+                run_probe(boundary, index)
+
     def test_expected_fault_stop_keeps_streams_and_never_stops_an_unacknowledged_app(self) -> None:
         import threading
 

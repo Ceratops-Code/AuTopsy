@@ -35,6 +35,7 @@ namespace {
 // then constrain every placement before Windows applies it (including splash).
 class TestDisplayGuard final : public wxEventFilter {
    wxString mDevice;
+   HMONITOR mMonitor{};
    std::set<HWND> mWindows;
 
    [[noreturn]] static void Fail(const char *operation)
@@ -47,13 +48,14 @@ class TestDisplayGuard final : public wxEventFilter {
       std::_Exit(197);
    }
 
-   RECT WorkArea() const
+   void BindMonitor()
    {
-      // Resolve the requested device in the callback's current DPI context.
-      // Cached rectangles cannot identify a monitor after a DPI-context switch;
-      // selection by device remains stable without a primary-screen fallback.
+      // Resolve identity at startup and actual topology changes, outside the
+      // repeated window-placement path. HMONITOR survives DPI-context changes;
+      // rectangles do not, so WorkArea() always reads current bounds afresh.
       struct Displays {
          const wxString &device;
+         HMONITOR monitor{};
          RECT work{};
          unsigned count{}, matches{};
          DWORD queryError{};
@@ -71,6 +73,7 @@ class TestDisplayGuard final : public wxEventFilter {
             found.devices += wxString{info.szDevice} + ";";
             if (found.device == info.szDevice) {
                ++found.matches;
+               found.monitor = monitor;
                found.work = info.rcWork;
             }
             return TRUE;
@@ -92,7 +95,21 @@ class TestDisplayGuard final : public wxEventFilter {
             GetCurrentThreadId());
          Fail("the selected test display is missing, forbidden, or too small");
       }
-      return displays.work;
+      mMonitor = displays.monitor;
+   }
+
+   RECT WorkArea() const
+   {
+      MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+      // A missing/replaced handle or changed identity stops the private app;
+      // neither old coordinates nor the nearest/primary monitor are fallbacks.
+      if (!mMonitor || !GetMonitorInfoW(mMonitor, reinterpret_cast<MONITORINFO *>(&info)) ||
+         mDevice != info.szDevice ||
+         (GetSystemMetrics(SM_CMONITORS) > 1 && mDevice == L"\\\\.\\DISPLAY1") ||
+         info.rcWork.right - info.rcWork.left < 640 ||
+         info.rcWork.bottom - info.rcWork.top < 480)
+         Fail("the bound test display is missing, replaced, forbidden, or too small");
+      return info.rcWork;
    }
 
    void Constrain(HWND window, WINDOWPOS &position) const
@@ -136,7 +153,8 @@ class TestDisplayGuard final : public wxEventFilter {
          RemoveWindowSubclass(window, WindowProcedure, id);
       }
       if (message == WM_DISPLAYCHANGE) {
-         // Resolve the current monitor just as for any other placement.
+         // HMONITOR may be replaced when displays attach, detach or change mode.
+         guard.BindMonitor();
          guard.WorkArea();
       }
       if (message == WM_WINDOWPOSCHANGING) {
@@ -163,6 +181,7 @@ class TestDisplayGuard final : public wxEventFilter {
 public:
    explicit TestDisplayGuard(wxString device) : mDevice{std::move(device)}
    {
+      BindMonitor();
       WorkArea();
       wxEvtHandler::AddFilter(this);
    }

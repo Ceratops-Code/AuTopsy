@@ -41,6 +41,7 @@ from run_fork_test_harness import (
     capture_owned_project,
     check_behavior_worker_lifecycle,
     check_neutral_preview_fixture,
+    check_owned_display_guard,
     check_test_display_selection,
     check_video_interactions,
     connected_test_displays,
@@ -984,7 +985,9 @@ def check_branding(client, root):
 
 def worker(args, root):
     client = ScriptClient()
-    if args.case == "groups":
+    if args.case == "display-guard":
+        check_owned_display_guard(client)
+    elif args.case == "groups":
         check_groups(client, root)
     elif args.case == "tracks":
         check_tracks(client, root)
@@ -1432,6 +1435,7 @@ RECORDING_CASES = ("cursor-recording", "cursor-recording-save-before", "cursor-r
 MODULE_REGISTERED_NATIVE_CASES = ("track-groups",)
 NATIVE_CASES = (
     *BEGINNER_VIDEO_CASES,
+    "display-guard",
     "groups",
     "tracks",
     "history-view",
