@@ -23,6 +23,17 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_embedded_picture_regions_allow_blended_edges_without_accepting_other_colours(self) -> None:
+        from test_video_transport import preview_colours_match
+
+        counts = {"red": 2600, "blue": 270, "purple": 54, "white": 0, "green": 0}
+        for _ in range(2):
+            self.assertFalse(preview_colours_match(counts, {"red", "blue"}))
+            self.assertTrue(preview_colours_match(counts, {"red", "blue"}, {"purple"}))
+            self.assertFalse(preview_colours_match({**counts, "green": 10}, {"red", "blue"}, {"purple"}))
+            self.assertFalse(preview_colours_match({**counts, "blue": 0}, {"red", "blue"}, {"purple"}))
+
+
     def test_owned_display_waits_for_same_device_and_stops_before_effects(self) -> None:
         import ctypes
 
@@ -109,6 +120,8 @@ class SelectionTests(unittest.TestCase):
 
                 def launch(command: list[str], child: Any = child, **kwargs: Any) -> Any:
                     self.assertEqual(command[command.index("-p")+1], "719")
+                    self.assertNotIn("-g", command)  # Startup must apply the exception commands.
+                    self.assertIn('sxe -c "kv 30; g" eh', command[command.index("-c")+1])
                     kwargs["stdout"].write(b"x"*300000)
                     return child
 
@@ -536,10 +549,16 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(set(runner.select_installer_tests(["README.md"], catalogue)), baseline)
         self.assertIn("fork-video-audio-join-links", runner.select_installer_tests(
             ["src/clip-groups/LinkMediaClips.cpp"], catalogue))
+        for source in ("src/video/CreateVideoTrack.cpp", "src/video/PlanVideoTransitions.cpp",
+                       "src/clip-groups/GroupAudioClips.cpp", "src/video/ShowVideoCrop.cpp"):
+            selected = runner.select_installer_tests([source], catalogue)
+            self.assertIn("fork-video-embedding", selected)
+            self.assertIn("fork-video-embedding-controls", selected)
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
                                "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
                                "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
-                               "fork-video-recording-controls"}
+                               "fork-video-recording-controls", "fork-video-embedding", "fork-video-embedding-controls",
+                               "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),

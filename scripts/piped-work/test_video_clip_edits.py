@@ -1067,3 +1067,174 @@ def check_split_video_edges(client, root, linked):
         client.send("Redo")
         assert client.data("GetLinkedMediaClips") == original
     client.file("SaveProject2", root / "_split-video-edges.aup3")
+
+
+def check_video_embedding(client, root, ffmpeg, ffprobe, controls_only=False):
+    """Exercise parent identities, native controls, pixels and ordinary projects."""
+    from run_fork_test_harness import ready_video_preview
+    from test_clip_actions import with_native_dialog
+
+    for colour, rate, size, frequency in (("red", 30, "320x180", 440), ("blue", 24, "160x100", 660)):
+        run_process([ffmpeg, "-v", "error", "-nostdin", "-n", "-f", "lavfi", "-i",
+            f"color=c={colour}:s={size}:r={rate}:d=4", "-f", "lavfi", "-i",
+            f"sine=frequency={frequency}:sample_rate=48000:duration=4", "-c:v", "libx264",
+            "-preset", "ultrafast", "-crf", "0", "-c:a", "aac", str(root / f"_{colour}.mp4")], timeout=30)
+        client.file("ImportVideo", root / f"_{colour}.mp4")
+    rows = clip_rows(client)
+    parent = next(row for row in rows if Path(row["source"]).stem == "_red")
+    child = next(row for row in rows if Path(row["source"]).stem == "_blue")
+    pt, ct = parent["track"], child["track"]
+    client.send("FitInWindow")
+    client.send("FitV")
+
+    def state():
+        info = client.data("GetVideoClips")
+        return {"clips": info["clips"],
+                "tracks": [{k: v for k, v in row.items() if k != "selected"} for row in info["tracks"]],
+                "audio": client.data("GetInfo: Type=Clips Format=JSON")}
+
+    before = state()
+    request = f"SetVideoEmbedding: Track={ct} Parent={pt} X=0.6 Y=0.1 Width=0.3 Height=0.4"
+    client.send(request)
+    embedded = state()
+    config = next(row for row in embedded["tracks"] if row["index"] == ct)
+    parent_config = next(row for row in embedded["tracks"] if row["index"] == pt)
+    assert config["parentLayerId"] == parent_config["layerId"]
+    assert config["placement"] == {"x": .6, "y": .1, "width": .3, "height": .4}
+    assert embedded["clips"] == before["clips"] and embedded["audio"] == before["audio"]
+    for _ in range(2):
+        client.send(request)
+        client.send("Undo")
+        assert state() == before, "Repeated embedding created an extra history entry."
+        client.send("Redo")
+        assert state() == embedded
+        for invalid in (f"Track={ct} Parent={ct}", f"Track={pt} Parent={ct}",
+                        f"Track={ct} Parent=99999", f"Track={ct} Parent={pt} X=0.9 Width=0.5"):
+            client.send("SetVideoEmbedding: " + invalid, success=False)
+            assert state() == embedded
+
+    if controls_only:
+        def open_menu():
+            operate_owned_video_track(client, .5, track=ct, gesture="context",
+                                      menu_path=("Picture-in-Picture...",))
+
+        for _ in range(2):
+            with_native_dialog(open_menu, "Picture-in-Picture Parent",
+                lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")), menu_gesture=True)
+            assert state() == embedded
+        for accept in (False, True):
+            def place(windows, dialog, commit=accept):
+                windows.click(windows.button(dialog, "OK"))
+                placement = None
+                wait_for_native_state(lambda: bool(windows.dialog("Picture-in-Picture Placement")),
+                                      "Owned placement dialog did not open")
+                placement = windows.dialog("Picture-in-Picture Placement")
+                windows.activate(placement)
+                canvases = [h for h in windows.windows(placement) if windows.caption(h) == "Picture-in-picture handles"]
+                assert len(canvases) == 1, canvases
+                canvas = canvases[0]
+                left, top, right, bottom = windows.bounds(canvas)
+                scale = min((right-left-24)/16, (bottom-top-24)/9)
+                width, height = 16*scale, 9*scale
+                x = round((right-left-width)/2 + .75*width)
+                y = round((bottom-top-height)/2 + .3*height)
+                def pointer(kind, px, py, held=0):
+                    windows.message(canvas, kind, held, (int(py) << 16) | (int(px) & 0xFFFF))
+                pointer(0x201, x, y, 1)
+                pointer(0x200, x-round(width*.1), y+round(height*.1), 1)
+                pointer(0x202, x-round(width*.1), y+round(height*.1))
+                actual = float(windows.control_text(windows.field(placement, "Horizontal position (%)")))
+                assert abs(actual-50) < 1, actual
+                windows.text(windows.field(placement, "Horizontal position (%)"), "50")
+                windows.text(windows.field(placement, "Vertical position (%)"), "20")
+                windows.text(windows.field(placement, "Width (%)"), "40")
+                windows.text(windows.field(placement, "Height (%)"), "40")
+                windows.click(windows.button(placement, "OK" if commit else "Cancel"))
+                wait_for_native_state(lambda: not windows.visible(placement), "Placement dialog did not close")
+            with_native_dialog(open_menu, "Picture-in-Picture Parent", place, menu_gesture=True)
+            if accept:
+                changed = state()
+                c = next(row for row in changed["tracks"] if row["index"] == ct)
+                assert all(abs(c["placement"][key]-value) < 1e-9 for key, value in
+                           {"x": .5, "y": .2, "width": .4, "height": .4}.items()), c
+                assert changed["audio"] == embedded["audio"]
+                client.send("Undo")
+            assert state() == embedded
+        for _ in range(2):
+            client.send(f'MoveVideoClip: Track={ct} Id="{child["id"]}" Start=0.125')
+            moved = state()
+            assert all(abs(row["start"]-.125) < 1e-7 for row in moved["clips"]), moved
+            assert all(abs(row["start"]-.125) < 0.0001 for row in moved["audio"]), moved
+            client.send("Undo")
+            assert state() == embedded
+            client.send("Redo")
+            assert state() == moved
+            client.send("Undo")
+            operate_owned_video_track(client, .5, 1.5, track=ct, cancel=True)
+            assert state() == embedded
+        client.send(f"SetClipProperties: Track={pt} At=0.5 Locked=1")
+        locked = state()
+        client.send(f'MoveVideoClip: Track={ct} Id="{child["id"]}" Start=1', success=False)
+        assert state() == locked
+        client.send("Undo")
+        assert state() == embedded
+        save_reopen(client, root / "_embedding-controls.aup3")
+        assert state() == embedded
+        client.send("Save")
+        return
+
+    def frame(path, at=.5):
+        data = run_process([ffmpeg, "-v", "error", "-ss", str(at), "-i", str(path),
+            "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], timeout=30)
+        assert len(data) == 320*180*3, len(data)
+        return data
+
+    def pixel(data, x, y):
+        return data[(y*320+x)*3:(y*320+x)*3+3]
+
+    first = None
+    for _ in range(2):
+        output = root / "_embedding.mp4"
+        client.file("ExportVideoMix", output, 'Overwrite=1 Preset="h264" Width=320 Height=180 FrameRate=30 Quality=18')
+        info = json.loads(run_process([ffprobe, "-v", "error", "-show_streams", "-of", "json", str(output)], timeout=30))
+        picture = next(s for s in info["streams"] if s["codec_type"] == "video")
+        assert (picture["width"], picture["height"], int(picture["nb_frames"])) == (320, 180, 120), picture
+        assert all(abs(float(s.get("start_time", 0))) < .002 for s in info["streams"]), info
+        pixels = frame(output)
+        for x, y, colour in ((30, 50, "red"), (240, 55, "blue"), (210, 20, "red"), (300, 170, "red")):
+            r, g, b = pixel(pixels, x, y)
+            assert (r > 210 and g < 25 and b < 25) if colour == "red" else (b > 210 and r < 25 and g < 25), (x,y,colour,(r,g,b))
+        if first is not None:
+            assert pixels == first
+        first = pixels
+    client.send("SelectTime: Start=0.5 End=0.5")
+    wait_for_native_state(lambda: abs(ready_video_preview(client)["position"]-.5) < .06,
+                          "Embedded preview did not follow the audio cursor")
+    counts = expect_preview_crop_pixels(client, root, ffmpeg, {"red", "blue"}, edge_colours={"purple"})
+    assert 200 < counts["blue"] < 600 and counts["red"] > 2200 and counts["purple"] < 100, counts
+    for _ in range(2):
+        operate_owned_video_track(client, .5, track=pt, area="mute", gesture="click")
+        client.file("ExportVideoMix", root / "_muted-parent.mp4", 'Overwrite=1 Preset="h264" Width=320 Height=180 FrameRate=30')
+        assert max(frame(root / "_muted-parent.mp4")) < 20
+        client.send("Undo")
+        assert state() == embedded
+    select_clip_range(client, 1, 2, pt)
+    client.send("Delete")
+    client.file("ExportVideoMix", root / "_parent-gap.mp4", 'Preset="h264" Width=320 Height=180 FrameRate=30')
+    assert max(frame(root / "_parent-gap.mp4", 1.5)) < 20
+    client.send("Undo")
+    assert state() == embedded
+    save_reopen(client, root / "_embedding.aup3")
+    assert state() == embedded
+    client.file("ExportVideoMix", root / "_embedding-reopened.mp4", 'Preset="h264" Width=320 Height=180 FrameRate=30 Quality=18')
+    assert frame(root / "_embedding-reopened.mp4") == first
+    stock_state = read_audio_project_state(client.data)
+    select_audio_project_tracks(client.send, client.data)
+    client.send("SelectTime: Start=0 End=5")
+    client.file("Export2", root / "_embedding-mix.wav", "NumChannels=2")
+    client.send("Save")
+    shutil.copyfile(root / "_embedding.aup3", root / "_embedding-consumer.aup3")
+    (root / "_compatibility-expected.json").write_text(json.dumps([
+        {"project": "_embedding-consumer.aup3", "state": stock_state, "audio": "_embedding-mix.wav"}
+    ]), encoding="utf-8")
+    client.send("Save")

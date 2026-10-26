@@ -5,6 +5,7 @@
 #include "PrepareVideoPreview.h"
 #include "ChoosePreviewQuality.h"
 class AudacityProject;
+class AuTopsyVideoTrack;
 namespace VideoEditing {
 struct VideoEffectRenderSettings {
    int width{}, height{}, maximumHeight{};
@@ -18,7 +19,7 @@ struct PreparedVideoComposition {
 };
 std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    const std::vector<const VideoTimeline::Timeline*> &layers, double duration,
-   const VideoEffectRenderSettings &settings, wxWindow *parent);
+   const VideoEffectRenderSettings &settings, wxWindow *parent, bool force = false);
 std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoPreview(AudacityProject &project,
    VideoPreview::PreviewQuality quality, bool precise, wxWindow *parent, bool allowPreparation = true);
 std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoExport(AudacityProject &project,
@@ -29,7 +30,7 @@ bool IsPreparingVideoEffects(AudacityProject &project);
 // Called before a picture edit publishes live state, so cancellation cannot
 // leave a half-applied edit. Adoption retains every generated span's lease.
 std::shared_ptr<const PreparedVideoComposition> PrepareCandidateVideoEffects(AudacityProject &project,
-   const std::vector<const VideoTimeline::Timeline*> &layers, wxWindow *parent);
+   const AuTopsyVideoTrack &track, const VideoTimeline::Timeline &candidate, wxWindow *parent);
 void AdoptPreparedVideoEffects(AudacityProject &project,
    std::shared_ptr<const PreparedVideoComposition> prepared);
 std::shared_ptr<const VideoPreview::PreparedMedia> FindPreparedEffectMedia(

@@ -41,6 +41,9 @@ void LinkImportedMedia(AudacityProject &project, AuTopsyVideoTrack &picture,
 // Native Join applies to all selected media as one transaction, retaining links
 // when several old soundtrack pieces become one new native audio interval.
 bool JoinSelectedMediaClips(AudacityProject &project, double from, double to);
+// Movement-only families preserve parent/child timing without turning trimming,
+// deletion or manual audio links into a whole-track operation.
+std::map<const Track*, std::string> BoundVideoTrackMoveFamilies(const TrackList &tracks);
 bool MoveLinkedVideoClip(AudacityProject &project, AuTopsyVideoTrack &track,
    unsigned long long id, double start, bool recordHistory);
 bool ChangeLinkedVideoClipSpeed(AudacityProject &project, AuTopsyVideoTrack &track,

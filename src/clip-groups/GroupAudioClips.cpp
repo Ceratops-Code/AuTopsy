@@ -108,12 +108,23 @@ WaveClipPointers ExpandClipGroupMembers(
 
 bool ExpandMovingClipGroups(ClipMoveState &state, TrackList &trackList)
 {
-   (void)trackList;
    std::unordered_set<std::string> groups;
-   const auto groupsOf = [](const ChannelGroupInterval &interval) -> std::vector<std::string> {
-      if (const auto *audio = dynamic_cast<const WaveClip*>(&interval)) return {GetClipGroupId(*audio)};
-      if (const auto *media = dynamic_cast<const LinkedClipInterval*>(&interval)) return media->MediaGroupIds();
-      return {};
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+   const auto families = BoundVideoTrackMoveFamilies(trackList);
+#else
+   (void)trackList;
+#endif
+   const auto groupsOf = [&](const ChannelGroupInterval &interval, const Track *track) -> std::vector<std::string> {
+      std::vector<std::string> result;
+      if (const auto *audio = dynamic_cast<const WaveClip*>(&interval)) result = {GetClipGroupId(*audio)};
+      else if (const auto *media = dynamic_cast<const LinkedClipInterval*>(&interval)) result = media->MediaGroupIds();
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      const auto family = families.find(track);
+      if (family != families.end()) result.push_back(family->second);
+#else
+      (void)track;
+#endif
+      return result;
    };
    size_t before{};
    for (const auto &pair : state.shifters) for (const auto &interval : pair.second->MovingIntervals()) ++before;
@@ -123,11 +134,11 @@ bool ExpandMovingClipGroups(ClipMoveState &state, TrackList &trackList)
    do {
       expanded = false;
       for (const auto &pair : state.shifters) for (const auto &interval : pair.second->MovingIntervals())
-         for (const auto &group : groupsOf(*interval))
+         for (const auto &group : groupsOf(*interval, pair.first))
             if (!group.empty()) expanded |= groups.insert(group).second;
       for (auto &pair : state.shifters)
          pair.second->UnfixIntervals([&](const auto &interval) {
-            for (const auto &group : groupsOf(interval)) if (!group.empty() && groups.count(group)) return true;
+            for (const auto &group : groupsOf(interval, pair.first)) if (!group.empty() && groups.count(group)) return true;
             return false;
          });
    } while (expanded);

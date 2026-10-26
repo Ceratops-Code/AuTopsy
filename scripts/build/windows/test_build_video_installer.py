@@ -160,12 +160,13 @@ class InstallerBuildTests(unittest.TestCase):
                     source.mkdir()
                     package = build / "package"
                     package.mkdir(parents=True)
-                    installer = package / "autopsy-win-test-x64.exe"
+                    installer = package / "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
                     installer.write_bytes(b"accepted installer")
                     manifest = package / "_build-manifest.json"
                     builder.write_json(manifest, {
                         "schema": "autopsy-windows-installer.v1", "source_revision": revision,
                         "source_dirty": False, "signed": False, "filename": installer.name,
+                        "product_version": "3.7.10-autopsy.2",
                         "sha256": builder.sha256(installer),
                         "checks": [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}],
                     })
@@ -225,6 +226,9 @@ class InstallerBuildTests(unittest.TestCase):
                             builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
                         self.assertEqual(remote["effects"], effects)
                         remote["release"]["body"] = returned_body
+                        with self.assertRaisesRegex(RuntimeError, "embedded product version"):
+                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.3", notes)
+                        self.assertEqual(remote["effects"], effects)
                         remote["tag"] = "b" * 40
                         with self.assertRaisesRegex(RuntimeError, "different source revision"):
                             builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
@@ -321,6 +325,20 @@ class InstallerBuildTests(unittest.TestCase):
                 finally:
                     process.Close()
 
+    def test_product_version_rejects_malformed_metadata_before_build_effects(self):
+        with tempfile.TemporaryDirectory(prefix="_version-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            source = Path(temporary)
+            (source / "resources").mkdir()
+            metadata = source / "resources/autopsy-release.json"
+            for value in ("3.7.10-autopsy.13", "4.0.0"):
+                metadata.write_text(json.dumps({"version": value}))
+                self.assertEqual(builder.read_product_version(source), value)
+                self.assertEqual(builder.read_product_version(source), value)
+            for invalid in ("v3.7.10", "3.07.10", "3.7.10-autopsy.0", "3.7.10/../bad", None):
+                metadata.write_text(json.dumps({"version": invalid}))
+                with self.assertRaises(ValueError):
+                    builder.read_product_version(source)
+
     def test_repeat_and_interrupt_each_build_command(self):
         for boundary in range(1, 13):
             for after in (False, True):
@@ -329,6 +347,8 @@ class InstallerBuildTests(unittest.TestCase):
                     source, build = root / "source", root / "build"
                     source.mkdir()
                     (source / "CMakeLists.txt").write_text("project(test)")
+                    (source / "resources").mkdir()
+                    (source / "resources/autopsy-release.json").write_text('{"version":"3.7.10-autopsy.2"}')
                     inno = root / "ISCC.exe"
                     inno.write_bytes(b"test compiler")
                     calls = 0
@@ -344,7 +364,7 @@ class InstallerBuildTests(unittest.TestCase):
                         if "innosetup" in arguments:
                             package = build / "package"
                             package.mkdir(exist_ok=True)
-                            name = "autopsy-win-test-x64.exe"
+                            name = "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
                             target = package / name
                             if not target.exists():
                                 target.write_bytes(b"completed installer")
@@ -380,6 +400,8 @@ class InstallerBuildTests(unittest.TestCase):
             source, build = root / "source", root / "build"
             source.mkdir()
             (source / "CMakeLists.txt").write_text("project(test)")
+            (source / "resources").mkdir()
+            (source / "resources/autopsy-release.json").write_text('{"version":"3.7.10-autopsy.2"}')
             inno = root / "ISCC.exe"
             inno.write_bytes(b"test compiler")
             commands = []
@@ -406,6 +428,8 @@ class InstallerBuildTests(unittest.TestCase):
                 source, build = root / "source", root / "build"
                 source.mkdir()
                 (source / "CMakeLists.txt").write_text("project(test)")
+                (source / "resources").mkdir()
+                (source / "resources/autopsy-release.json").write_text('{"version":"3.7.10-autopsy.2"}')
                 inno = root / "ISCC.exe"
                 inno.write_bytes(b"compiler")
                 commands: list[list[str]] = []

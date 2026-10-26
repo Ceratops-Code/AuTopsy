@@ -42,7 +42,7 @@ COMMON_INPUTS = (
     "src/video/CMakeLists.txt", "sdlc/sdlc.yml",
     "scripts/pyproject.toml", "scripts/uv.lock", "tests/Catch2Main.cpp",
 )
-TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
+TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/RenderVideoComposition.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
     CheckGroup("media-collection", ("src/media/CollectMediaFiles.*", "src/media/TestMediaCollection.cpp"),
         "media-collection-test"),
@@ -65,7 +65,7 @@ GROUPS = (
     CheckGroup("video-composition", TIMELINE_INPUTS + (
         "src/video/PlanVideoEdits.*", "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*",
         "src/video/PlanVideoExport.*", "src/video/PlanVideoTransitions.*",
-        "src/video/TestVideoComposition.cpp"), "video-composition-test"),
+        "src/video/TestVideoComposition.cpp", "src/update/ChooseProductUpdate.h"), "video-composition-test"),
     CheckGroup("product-branding-core", (
         "libraries/lib-strings/ApplyProductBranding.*", "libraries/lib-strings/tests/TestProductBranding.cpp"),
         "product-branding-core-test"),
@@ -80,7 +80,8 @@ GROUPS = (
         "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
         "scripts/piped-work/test_fork_features.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
-        "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py", "scripts/piped-work/test_preview_controls.py")),
+        "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py", "scripts/piped-work/test_preview_controls.py",
+        "scripts/piped-work/test_video_generators.py", "scripts/piped-work/test_product_updates.py")) ,
     CheckGroup("fork-audacity-consumer-runtime", (
         "scripts/piped-work/run_audacity_consumer.py",
         "scripts/piped-work/test_run_audacity_consumer.py",
@@ -92,10 +93,13 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/update/CheckProductUpdates.*", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "resources/autopsy-release.json",
+    "scripts/piped-work/test_product_updates.py",
     "src/recording/RecordVideoInput.*", "scripts/piped-work/test_video_recording.py",
     "libraries/lib-project-file-io/ProjectFileIO.cpp",
     "src/recording/CreateCursorCapture.*",
-    "src/video/PrepareVideoEffects.*", "src/video/EditVideoFades.*",
+    "src/video/PrepareVideoEffects.*", "src/video/PrepareGeneratedVideo.*", "src/video/EditVideoFades.*",
+    "scripts/piped-work/test_video_generators.py",
     "src/media/CollectProjectMedia.*",
     "scripts/piped-work/test_beginner_edits.py",
     "src/tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp",
@@ -134,13 +138,28 @@ NATIVE_INPUTS = (
     "libraries/lib-project-history/*", "libraries/lib-project-file-io/*", "libraries/lib-viewport/*",
     "CMakeLists.txt", "CMakePresets.json",
 )
-OWNED_INPUTS = ("src/video/*", "src/media/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
+OWNED_INPUTS = ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*", "resources/autopsy-release.json", "src/video/*", "src/media/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
 DOCUMENT_SUFFIXES = {".md", ".rst"}
 
 # Native names are adapter contracts checked against CTest's structured catalogue.
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("product-updates",), ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*",
+        "resources/autopsy-release.json", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "src/menus/HelpMenus.cpp",
+        "scripts/piped-work/test_product_updates.py")),
+    (("video-reverse", "video-freeze", "video-repeat", "video-pictures"), (
+        "src/video/EditVideoContent.*", "src/video/EditVideoTimeline.*", "src/video/PrepareGeneratedVideo.*",
+        "src/video/PrepareVideoEffects.*", "src/video/PlanVideoTransitions.*", "src/video/CreateVideoTrack.*",
+        "src/video/EditVideoComposition.*", "src/video/ShowVideoTrack.*", "src/video/ShowVideoPreview.cpp",
+        "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*", "src/video/JoinVideoClips.*", "src/video/RelinkVideoMedia.*",
+        "scripts/piped-work/test_video_generators.py")),
+    (("video-embedding", "video-embedding-controls"), (
+        "src/video/EditVideoContent.*", "src/video/EditVideoTimeline.*", "src/video/CreateVideoTrack.*",
+        "src/video/PlanVideoTransitions.*", "src/video/PrepareVideoEffects.*", "src/video/EditVideoComposition.*",
+        "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*", "src/video/ShowVideoCrop.*",
+        "src/video/ShowVideoPreview.cpp", "src/video/ShowVideoTrack.*", "src/clip-groups/GroupAudioClips.*",
+        "src/clip-groups/LinkMediaClips.*", "scripts/piped-work/test_video_clip_edits.py")),
     (("video-recording", "video-recording-stop", "video-recording-failures", "video-recording-controls"), ("src/recording/*VideoRecording*", "src/recording/RecordVideoInput.*",
         "src/video/ExportVideoMix.*", "src/video/ShowVideoPreview.cpp", "src/clip-groups/LinkMediaClips.*",
         "scripts/piped-work/test_video_recording.py")),

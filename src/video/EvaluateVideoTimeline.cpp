@@ -9,7 +9,7 @@ void RequireRectangle(const VideoFrameRectangle &rect)
    for (const auto value : {rect.x, rect.y, rect.width, rect.height})
       if (!std::isfinite(value)) throw std::runtime_error("Video placement must be finite.");
    if (rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 ||
-       rect.x + rect.width > 1 || rect.y + rect.height > 1)
+       rect.x + rect.width > 1 + 1e-12 || rect.y + rect.height > 1 + 1e-12)
       throw std::runtime_error("The embedded video rectangle must fit inside its parent.");
 }
 VideoFrameRectangle PlaceWithin(const VideoFrameRectangle &parent, const VideoFrameRectangle &child)
@@ -72,7 +72,7 @@ VideoFramePlan EvaluateVideoTimeline(const VideoProjectSnapshot &project,
       const auto rectangle = PlaceWithin(item.parent, style.rectangle);
       result.layers.push_back({track.id, clip->id, sample.source,
          sample.sourceTime,
-         sample.crop, rectangle, sample.playbackRate, sample.opacity, sample.opacityRamps});
+         sample.crop, rectangle, sample.playbackRate, sample.opacity, sample.opacityRamps, sample.generated});
       // Lower roots are processed first. Children go above their own parent,
       // irrespective of where an upstream pane happens to display their rows.
       for (const auto child : children[item.index]) pending.push_back({child, rectangle});

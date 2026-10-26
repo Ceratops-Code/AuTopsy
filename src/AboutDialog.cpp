@@ -56,6 +56,9 @@ hold information about one contributor to Audacity.
 //#define REV_LONG "28864acb238cb3ca71dda190a2d93242591dd80e"
 //#define REV_TIME "Sun Apr 12 12:40:22 2015 +0100"
 #include "RevisionIdent.h"
+#if defined(AUTOPSY_HAS_VIDEO_PREVIEW)
+#include "update/CheckProductUpdates.h"
+#endif
 
 #ifndef REV_TIME
 #define REV_TIME "unknown date and time"
@@ -534,6 +537,9 @@ void AboutDialog::PopulateInformationPage( ShuttleGui & S )
    // Current date
    AddBuildinfoRow(&informationStr, XO("Program build date:"), __TDATE__);
    AddBuildinfoRow(&informationStr, XO("Commit Id:"), REV_IDENT );
+#if defined(AUTOPSY_HAS_VIDEO_PREVIEW)
+   AddBuildinfoRow(&informationStr, XO("AuTopsy release:"), wxString::FromUTF8(AuTopsy::Updates::CurrentProductVersion()));
+#endif
 
    auto buildType =
 #ifdef _DEBUG

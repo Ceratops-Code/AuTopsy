@@ -10,6 +10,18 @@
 #include <vector>
 
 namespace VideoEditing {
+// Canvas fractions retain framing across proxies, export sizes and relinking.
+struct VideoFrameRectangle {
+   double x{}, y{}, width{1}, height{1};
+   bool operator==(const VideoFrameRectangle &other) const {
+      return x == other.x && y == other.y && width == other.width && height == other.height;
+   }
+};
+struct VideoLayerPlacement {
+   std::string id, parentId; // Opaque owned identities; never pane positions.
+   VideoFrameRectangle rectangle;
+};
+void RequireUsableVideoPlacement(const VideoLayerPlacement &placement);
 // Fractions of the oriented picture removed from each edge. Content owns these
 // values so retained pieces keep their picture edits through joins and copies.
 struct VideoFrameCrop {
@@ -45,6 +57,7 @@ double VideoOpacityAt(const VideoOpacityEnvelope &envelope, double contentTime);
 }
 
 namespace VideoTimeline {
+struct Timeline;
 // Limits apply to one retained content tree, including its owning clip. The
 // native reader uses the same bounds; a track may contain many such trees.
 inline constexpr size_t MaximumVideoContentDepth = 16;
@@ -82,6 +95,16 @@ struct VideoClipContent {
    // Child placement is in content seconds. Missing intervals are transparent.
    // Children own resolved sources, so moving the parent to another track is safe.
    std::vector<Clip> parts;
+   // Generators retain their source tree. Cache files are derived and can be
+   // discarded without losing the edit; sequence remains the legacy default.
+   enum class Operation { Sequence, Reverse, Freeze, Image, Title };
+   Operation operation{Operation::Sequence};
+   double heldTime{};
+   // Picture-only generators keep soundtrack links on their original forward
+   // clock, independently of reversed or held pictures.
+   double audioContentOffset{};
+   std::string imagePath, title;
+   int width{1280}, height{720};
 };
 struct VideoContentSample {
    const Clip *leaf{};
@@ -91,6 +114,7 @@ struct VideoContentSample {
    VideoEditing::VideoFrameCrop crop;
    double opacity{1};
    std::vector<VideoEditing::VideoOpacityRamp> opacityRamps; // In root project coordinates.
+   std::shared_ptr<const VideoClipContent> generated;
    explicit operator bool() const { return leaf != nullptr; }
 };
 double VideoContentDuration(const Clip &clip, const MediaSource &fallback);
@@ -116,7 +140,8 @@ struct VideoLinkWindow {
    double playbackRate{1};
    bool wholeContent{}; // A manual link owned by a joined parent, not a source leaf.
 };
-// Empty windows retain a fully trimmed linked soundtrack piece for untrim.
+// Inputs own their leaf sources. Empty windows retain a fully trimmed linked
+// soundtrack piece for untrim; a missing source cannot produce a timing map.
 std::vector<VideoLinkWindow> VideoContentLinkWindows(const Clip &clip);
 void RemapVideoContentLinks(Clip &clip, const std::vector<std::pair<std::string, std::string>> &groups);
 bool SameVideoContent(const Clip &left, const Clip &right);
@@ -124,6 +149,16 @@ bool SameVideoContent(const Clip &left, const Clip &right);
 // snapshots untouched. The caller checks the complete candidate before publishing.
 bool ReplaceVideoContentSource(Clip &clip, const MediaSource &fallback,
    const std::string &oldPath, const MediaSource &replacement);
+bool HasGeneratedVideoContent(const Clip &clip);
+// Full retained windows, including handles, remain available after reverse.
+// These operations affect picture only; the native soundtrack stays editable.
+bool ReverseVideoClip(Timeline &timeline, uint64_t id);
+bool FreezeVideoClip(Timeline &timeline, uint64_t id, double at, double seconds);
+bool RepeatVideoClip(Timeline &timeline, uint64_t id, int copies);
+Clip MakeStillVideoClip(uint64_t id, double start, double seconds,
+   const std::string &path, int width, int height);
+Clip MakeTitleVideoClip(uint64_t id, double start, double seconds,
+   const std::string &text, int width, int height);
 }
 namespace VideoEditing {
 bool HasVideoOpacity(const VideoTimeline::Clip &clip);

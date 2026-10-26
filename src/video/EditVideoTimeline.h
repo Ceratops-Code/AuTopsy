@@ -18,6 +18,7 @@ struct Timeline {
    int sourceWidth{}, sourceHeight{};
    // Export snapshots also protect source files from hidden video tracks.
    std::vector<std::string> protectedSourcePaths;
+   VideoEditing::VideoLayerPlacement placement;
    double End() const { return clips.empty() ? 0.0 : clips.back().End(); }
 };
 
@@ -25,6 +26,10 @@ inline MediaSource SourceFor(const Timeline &timeline, const Clip &clip)
 {
    const Clip *leaf = &clip;
    for (size_t depth{}; leaf->content && depth < 17; ++depth) {
+      if (leaf->content->operation == VideoClipContent::Operation::Image ||
+          leaf->content->operation == VideoClipContent::Operation::Title)
+         return {leaf->content->imagePath, leaf->content->duration, leaf->content->frameRate,
+            leaf->content->width, leaf->content->height};
       if (leaf->content->parts.empty()) break;
       leaf = &leaf->content->parts.front();
    }
@@ -46,6 +51,7 @@ inline void RequireWellFormedTimeline(const Timeline &timeline,
    size_t maximumClips = MaximumVideoTrackClips)
 {
    constexpr double tolerance = 1e-7;
+   VideoEditing::RequireUsableVideoPlacement(timeline.placement);
    if (!timeline.sourcePath.empty())
       RequireUsableVideoSource({timeline.sourcePath, timeline.sourceDuration, timeline.frameRate,
          timeline.sourceWidth, timeline.sourceHeight});
@@ -383,13 +389,33 @@ struct VideoTimelineLayer {
 // other picture layers; mute overrides solo. Audio mixing is outside this model.
 inline std::vector<const Timeline*> VisibleVideoLayers(const std::vector<VideoTimelineLayer> &layers)
 {
-   const bool anySolo = std::any_of(layers.begin(), layers.end(),
-      [](const auto &layer) { return layer.visibility.solo; });
-   std::vector<const Timeline*> result;
-   for (const auto &layer : layers) {
-      if (!layer.timeline) throw std::runtime_error("A video layer requires a timeline.");
-      if (IsVideoLayerVisible(layer.visibility, anySolo)) result.push_back(layer.timeline);
+   // Resolve one bound family before filtering. A hidden/missing ancestor hides
+   // its descendants; soloing any member solos the family. No orphan overlay
+   // falls back to full-frame display when its parent is deleted or offline.
+   std::vector<size_t> roots(layers.size());
+   std::vector<bool> eligible(layers.size(), true), solo(layers.size());
+   for (size_t i{}; i < layers.size(); ++i) {
+      auto at = i;
+      std::unordered_set<size_t> seen;
+      while (true) {
+         if (!layers[at].timeline) throw std::runtime_error("A video layer requires a timeline.");
+         if (!seen.insert(at).second) throw std::runtime_error("Embedded video parent relationships contain a cycle.");
+         eligible[i] = eligible[i] && !layers[at].visibility.muted;
+         const auto &parent = layers[at].timeline->placement.parentId;
+         if (parent.empty()) break;
+         const auto found = std::find_if(layers.begin(), layers.end(), [&](const auto &item) {
+            return item.timeline && item.timeline->placement.id == parent;
+         });
+         if (found == layers.end()) { eligible[i] = false; break; }
+         at = static_cast<size_t>(found - layers.begin());
+      }
+      roots[i] = at;
+      if (layers[i].visibility.solo) solo[at] = true;
    }
+   const bool anySolo = std::any_of(solo.begin(), solo.end(), [](bool value) { return value; });
+   std::vector<const Timeline*> result;
+   for (size_t i{}; i < layers.size(); ++i)
+      if (eligible[i] && (!anySolo || solo[roots[i]])) result.push_back(layers[i].timeline);
    return result;
 }
 
@@ -400,6 +426,7 @@ struct EvaluatedVideoPicture {
    MediaSource source;
    double playbackRate{1};
    VideoEditing::VideoFrameCrop crop;
+   std::shared_ptr<const VideoClipContent> generated;
 };
 
 inline EvaluatedVideoPicture EvaluateVideoLayers(
@@ -411,7 +438,7 @@ inline EvaluatedVideoPicture EvaluateVideoLayers(
       if (const auto *clip = ClipAt(*layer, projectTime)) {
          const auto sample = SampleVideoContent(*clip, SourceFor(*layer, *clip),
             clip->ContentTimeAtProjectTime(projectTime));
-         if (sample) return {layer, clip, sample.sourceTime, sample.source, sample.playbackRate, sample.crop};
+         if (sample) return {layer, clip, sample.sourceTime, sample.source, sample.playbackRate, sample.crop, sample.generated};
       }
    return {};
 }
@@ -443,7 +470,7 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
           throw std::runtime_error("The video composition exceeds its segment budget.");
       Clip part{result.nextId++, edges[i-1],
           std::max(0.0, picture.sourceTime - (edges[i] - edges[i-1]) * picture.playbackRate / 2), edges[i] - edges[i-1]};
-      part.media = picture.source;
+      part.media = picture.source; part.content = picture.generated;
       part.playbackRate = picture.playbackRate;
       part.crop = picture.crop;
       if (result.sourcePath.empty()) {
@@ -473,7 +500,8 @@ inline VideoClipExportPlan PlanVideoClipExport(const Timeline& timeline, uint64_
    auto oneClip = timeline;
    oneClip.clips = {*found};
    const auto range = CopyVideoRange(oneClip, found->start, found->End());
-   VideoClipExportPlan result{ComposeVideoTracks({&range}), found->start, found->duration};
+   const auto needsRenderer = VideoEditing::HasVideoOpacity(*found) || HasGeneratedVideoContent(*found);
+   VideoClipExportPlan result{needsRenderer ? range : ComposeVideoTracks({&range}), found->start, found->duration};
    // Retain the envelope tree until the shared picture renderer has evaluated
    // it; flattening an opaque cut list would discard fades on joined content.
    if (VideoEditing::HasVideoOpacity(*found) && !found->muted) result.picture = range;

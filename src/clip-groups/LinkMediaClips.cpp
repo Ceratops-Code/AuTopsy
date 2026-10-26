@@ -556,12 +556,18 @@ bool ChangeLinkedMediaClipTiming(AudacityProject &project, Track &track,
    if (std::abs(timing.timeScale - 1) < 1e-12 && std::abs(timing.shift) < 1e-10) return false;
    const auto selectedStart = start, selectedEnd = start + anchor.duration * timing.timeScale;
    const auto choices = MediaChoices(project);
+   // Translation moves the bound layer family; changing source speed remains
+   // a clip/sound operation and must not silently retime unrelated overlays.
+   const auto families = std::abs(timing.timeScale - 1) < 1e-12
+      ? BoundVideoTrackMoveFamilies(TrackList::Get(project)) : std::map<const Track*, std::string>{};
    std::vector<bool> included(choices.size());
    std::vector<std::vector<std::string>> ownGroups;
    std::map<std::string, std::vector<size_t>> linked;
    std::vector<size_t> pending;
    for (size_t i{}; i < choices.size(); ++i) {
       ownGroups.push_back(ChoiceGroups(choices[i]));
+      const auto family = families.find(choices[i].video);
+      if (family != families.end()) ownGroups.back().push_back(family->second);
       for (const auto &group : ownGroups.back()) linked[group].push_back(i);
       if ((videoAnchor && choices[i].video == videoAnchor && choices[i].id == id) ||
           (audioAnchor && choices[i].audio == audioAnchor)) {
@@ -802,4 +808,36 @@ void CommitVideoClipTrim(AudacityProject &project, AuTopsyVideoTrack &track, Vid
    if (!changes.empty()) ApplyMediaBounds(project, changes, true);
 }
 
+}
+
+
+namespace ClipGroups {
+std::map<const Track*, std::string> BoundVideoTrackMoveFamilies(const TrackList &tracks)
+{
+   std::map<std::string, const AuTopsyVideoTrack*> identities;
+   for (const auto *track : tracks.Any<const Track>())
+      if (const auto *video = dynamic_cast<const AuTopsyVideoTrack*>(track))
+         if (!identities.emplace(video->Timeline().placement.id, video).second)
+            throw std::runtime_error("Video tracks contain ambiguous layer identities.");
+   std::map<const Track*, std::string> roots;
+   std::map<std::string, size_t> counts;
+   for (const auto &entry : identities) {
+      auto id = entry.first;
+      std::unordered_set<std::string> seen;
+      while (true) {
+         if (!seen.insert(id).second) throw std::runtime_error("Video parent relationships contain a cycle.");
+         const auto found = identities.find(id);
+         if (found == identities.end()) { id.clear(); break; }
+         const auto &parent = found->second->Timeline().placement.parentId;
+         if (parent.empty()) break;
+         id = parent;
+      }
+      if (!id.empty()) { roots[entry.second] = id; ++counts[id]; }
+   }
+   for (auto it = roots.begin(); it != roots.end();) {
+      if (counts[it->second] < 2) it = roots.erase(it);
+      else { it->second = "video-family:" + it->second; ++it; }
+   }
+   return roots;
+}
 }

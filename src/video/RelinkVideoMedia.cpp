@@ -2,6 +2,9 @@
 #include "CreateVideoTrack.h"
 #include "ExportVideoMix.h"
 #include "PrepareVideoPreview.h"
+#include "PrepareGeneratedVideo.h"
+#include "PrepareVideoEffects.h"
+#include "../clip-groups/GuardMediaDialogs.h"
 #include "Project.h"
 #include "ProjectAudioIO.h"
 #include "ProjectHistory.h"
@@ -62,6 +65,13 @@ VideoTimeline::MediaSource InspectReplacement(const wxString &path, wxWindow *pa
    VideoTimeline::RequireUsableVideoSource(result);
    return result;
 }
+bool UsesStillImage(const VideoTimeline::Clip &clip, const std::string &path)
+{
+   if (!clip.content) return false;
+   if (clip.content->operation == VideoTimeline::VideoClipContent::Operation::Image && clip.content->imagePath == path) return true;
+   return std::any_of(clip.content->parts.begin(), clip.content->parts.end(),
+      [&](const auto &part) { return UsesStillImage(part, path); });
+}
 class RelinkVideoMediaCommand final : public AudacityCommand {
    wxString mOldPath, mFileName;
 public:
@@ -92,25 +102,35 @@ public:
       if (choice.ShowModal() != wxID_OK) return false;
       mOldPath = paths[choice.GetSelection()];
       wxFileDialog file{&ProjectWindow::Get(project), _("Locate replacement video"), {}, {},
-         _("Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm|All files|*.*"), wxFD_OPEN | wxFD_FILE_MUST_EXIST};
+         _("Video and image files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.png;*.jpg;*.jpeg;*.bmp;*.webp;*.tif;*.tiff|All files|*.*"), wxFD_OPEN | wxFD_FILE_MUST_EXIST};
       if (file.ShowModal() != wxID_OK) return false;
       mFileName = file.GetPath(); return true;
    }
    bool Apply(const CommandContext &context) override {
       auto &project = context.project;
       try {
+         ClipActions::MediaDialogCommandGuard commands;
          if (ProjectAudioIO::Get(project).IsAudioActive())
             throw std::runtime_error("Stop playback or recording before relinking media.");
          if (mOldPath.empty() || mFileName.empty())
             throw std::runtime_error("Specify OldPath and the replacement Filename.");
          const auto tracks = VideoTimeline::ProjectVideoTracks(project);
-         bool pending{};
+         bool pending{}, image{};
+         VideoTimeline::MediaSource previous;
          for (const auto *track : tracks) for (const auto &clip : track->Timeline().clips)
             for (const auto &source : VideoTimeline::VideoContentSources(clip, VideoTimeline::SourceFor(track->Timeline(), clip)))
-               pending |= source.path == Utf8(mOldPath);
+               if (source.path == Utf8(mOldPath)) {
+                  pending = true; previous = source; image = image || UsesStillImage(clip, source.path);
+               }
          if (!pending) return true;
          if (!wxFileExists(mFileName)) throw std::runtime_error("The replacement video is unavailable.");
-         const auto source = InspectReplacement(mFileName, &ProjectWindow::Get(project));
+         auto source = previous;
+         if (image) {
+            const auto size = VideoExport::ReadVideoSourcePictureSize(mFileName, &ProjectWindow::Get(project));
+            if (!size) throw std::runtime_error("Relinking was cancelled.");
+            source.path = Utf8(mFileName); source.width = size->first; source.height = size->second;
+         }
+         else source = InspectReplacement(mFileName, &ProjectWindow::Get(project));
          struct Change { AuTopsyVideoTrack *track; VideoTimeline::Timeline old, replacement; };
          std::vector<Change> changes;
          for (auto *track : tracks) {
@@ -122,7 +142,13 @@ public:
          // relocated large source needs a proxy under its new cache identity.
          const bool lightweight = static_cast<double>(source.width) * source.height > 1280.0 * 720.0 ||
             source.frameRate > 60;
-         const auto prepared = VideoPreview::PrepareVideoMedia(
+         std::shared_ptr<const VideoPreview::PreparedMedia> prepared;
+         if (image) {
+            const auto still = VideoTimeline::MakeStillVideoClip(1, 0, 1, source.path, source.width, source.height);
+            prepared = VideoEditing::PrepareGeneratedVideo(*still.content, {0,0,540,30,false},
+               &ProjectWindow::Get(project), 0, 1.0 / 30).media;
+         }
+         else prepared = VideoPreview::PrepareVideoMedia(
             mFileName, source.duration, lightweight, &ProjectWindow::Get(project));
          if (!prepared) throw std::runtime_error("Relinking was cancelled.");
          try {

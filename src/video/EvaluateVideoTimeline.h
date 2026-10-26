@@ -4,7 +4,6 @@
 #include "PlanVideoEdits.h"
 
 namespace VideoEditing {
-struct VideoFrameRectangle { double x{}, y{}, width{1}, height{1}; };
 struct VideoLayerPresentation {
    std::string trackId;
    VideoFrameRectangle rectangle; // Fractions of parent rectangle, or canvas for roots.
@@ -25,6 +24,7 @@ struct VideoFrameSample {
    double playbackRate{1};
    double opacity{1};
    std::vector<VideoOpacityRamp> opacityRamps;
+   std::shared_ptr<const VideoTimeline::VideoClipContent> generated;
 };
 struct VideoFramePlan {
    int canvasWidth{}, canvasHeight{};

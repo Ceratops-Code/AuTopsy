@@ -12,6 +12,8 @@ VideoPixelRectangle CalculateVideoCropRectangle(const VideoFrameCrop &crop,
 // FFmpeg applies source display rotation before this filter. The expression
 // uses its actual oriented dimensions, including sources of different sizes.
 std::string VideoCropFilterExpression(const VideoFrameCrop &crop);
+VideoPixelRectangle CalculateVideoPlacementRectangle(const VideoFrameRectangle &rectangle,
+   int canvasWidth, int canvasHeight);
 enum VideoCropHandle : unsigned { CropLeft = 1, CropTop = 2, CropRight = 4, CropBottom = 8, CropMove = 16 };
 // Drag distances use oriented-picture fractions; the opposite edges never
 // cross. Moving the rectangle retains its dimensions and stays inside picture.

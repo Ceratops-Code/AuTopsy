@@ -1,4 +1,5 @@
 #include "PrepareVideoEffects.h"
+#include "PrepareGeneratedVideo.h"
 #include "PlanVideoTransitions.h"
 #include "RenderVideoComposition.h"
 #include "PlanVideoExport.h"
@@ -68,13 +69,39 @@ struct PreparingGuard {
 
 std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    const std::vector<const VideoTimeline::Timeline*> &layers, double duration,
-   const VideoEffectRenderSettings &settings, wxWindow *parent)
+   const VideoEffectRenderSettings &settings, wxWindow *parent, bool force)
 {
-   if (!HasVideoOpacity(layers)) return {};
+   if (!force && !RequiresVideoComposition(layers)) return {};
    const auto rate = settings.frameRate;
    auto spans = PlanVideoTransitions(layers, duration, rate);
+   std::vector<std::shared_ptr<const VideoPreview::PreparedMedia>> generated;
+   for (auto &span : spans) for (auto &layer : span.layers) if (layer.generated) {
+      const auto from = std::max(0.0, layer.sourceStart);
+      const auto to = std::min(layer.generated->duration, from + double(span.frameCount) / rate * layer.playbackRate);
+      using Operation = VideoTimeline::VideoClipContent::Operation;
+      const auto constant = layer.generated->operation == Operation::Freeze || layer.generated->operation == Operation::Image ||
+         layer.generated->operation == Operation::Title;
+      auto prepared = PrepareGeneratedVideo(*layer.generated, settings, parent,
+         constant ? 0 : from, constant ? std::min(layer.generated->duration, 1 / layer.generated->frameRate) : to);
+      if (constant) { layer.sourceStart = 0; layer.playbackRate = 1; span.requiresBlend = true; }
+      else layer.sourceStart -= prepared.contentStart;
+      layer.source = {Utf8(prepared.media->playbackPath), prepared.media->duration, prepared.frameRate, prepared.width, prepared.height};
+      layer.generated.reset(); generated.push_back(std::move(prepared.media));
+   }
    const VideoBlendLayer *reference{};
-   for (const auto &span : spans) if (!span.layers.empty()) { reference = &span.layers.back(); break; }
+   for (const auto &span : spans) {
+      for (const auto &layer : span.layers) if (layer.rectangle == VideoFrameRectangle{}) { reference = &layer; break; }
+      if (reference) break;
+   }
+   VideoBlendLayer fallback;
+   if (!reference) for (const auto *layer : layers) if (!layer->clips.empty()) {
+      const auto &clip = layer->clips.front();
+      fallback.source = VideoTimeline::SourceFor(*layer, clip); fallback.crop = clip.crop;
+      if (clip.content && clip.content->operation != VideoTimeline::VideoClipContent::Operation::Sequence) {
+         fallback.source.width = clip.content->width; fallback.source.height = clip.content->height;
+      }
+      reference = &fallback; if (layer->placement.parentId.empty()) break;
+   }
    if (!reference) return {};
    int width = settings.width, height = settings.height;
    const bool automaticCanvas = !settings.width;
@@ -98,6 +125,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    if (width < 2 || height < 2 || width > 16384 || height > 16384 || width % 2 || height % 2)
       throw std::runtime_error("Picture transitions require usable even canvas dimensions.");
    auto result = std::make_shared<PreparedVideoComposition>(); result->settings = settings;
+   result->media = std::move(generated);
    auto &timeline = result->timeline;
    timeline.sourcePath = reference->source.path; timeline.sourceDuration = reference->source.duration;
    timeline.frameRate = rate; timeline.sourceWidth = width; timeline.sourceHeight = height;
@@ -120,7 +148,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
          // The source that chose the automatic canvas fills it exactly, even
          // when mod-2 encoder rounding slightly changes its aspect ratio.
          for (auto &layer : span.layers)
-            layer.fillsCanvas = automaticCanvas && layer.source.path == canvasSource && layer.crop == canvasCrop;
+            layer.fillsCanvas = automaticCanvas && layer.rectangle == VideoFrameRectangle{} && layer.source.path == canvasSource && layer.crop == canvasCrop;
          const auto graph = VideoTransitionFilterGraph(span, width, height, rate);
          std::vector<std::string> sources;
          std::string group = "picture-transition";
@@ -128,20 +156,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
          const auto recipe = graph + (settings.originalQuality ? "lossless" : "preview");
          auto media = VideoPreview::PrepareRenderedVideoMedia(group, recipe, sources, seconds,
             [&](const wxString &output) {
-               std::vector<wxString> arguments{"-v", "error", "-nostdin", "-n", "-copyts", "-start_at_zero",
-                  "-filter_complex_threads", "1"};
-               for (const auto &layer : span.layers) {
-                  const auto seek = std::max(0.0, layer.sourceStart - 2.0 / layer.source.frameRate);
-                  arguments.insert(arguments.end(), {"-ss", wxString::FromUTF8(Number(seek)),
-                     "-threads", "2", "-i", wxString::FromUTF8(layer.source.path)});
-               }
-               arguments.insert(arguments.end(), {"-filter_complex", wxString::FromUTF8(graph), "-map", "[vout]",
-                  "-an", "-sn", "-dn", "-map_metadata", "-1", "-frames:v", wxString::Format("%lld", span.frameCount),
-                  "-c:v", "libx264", "-preset", "veryfast", "-crf", settings.originalQuality ? "0" : "20",
-                  "-g", "15", "-bf", "0", "-threads", "2", "-pix_fmt", "yuv420p", output});
-               if (!VideoExport::RunBundledVideoTool(arguments, parent, _("Prepare Picture Transitions"),
-                     _("Preparing smooth fades. Original video and audio stay unchanged...")))
-                  throw VideoPreview::PreviewPreparationCancelled{};
+               RenderVideoBlendSpan(span, width, height, rate, settings.originalQuality, parent, output, graph);
             });
          clip.media = {Utf8(media->playbackPath), seconds, rate, width, height};
          result->media.push_back(std::move(media));
@@ -162,7 +177,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoPreview(Audac
    if (state.key == key) { state.quality = quality; return state.current; }
    // Keep the last completed picture during a gesture or while hidden. This
    // policy gates expensive work only; ordinary decoder seeking stays live.
-   if (!allowPreparation && HasVideoOpacity(layers)) return state.current;
+   if (!allowPreparation && RequiresVideoComposition(layers)) return state.current;
    PreparingGuard preparing(state.preparing);
    ClipActions::MediaDialogCommandGuard commands;
    // Snapshot owned values before any progress dialog yields native events.
@@ -186,11 +201,15 @@ std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoExport(Audaci
 }
 bool IsPreparingVideoEffects(AudacityProject &project) { return Effects(project).preparing; }
 std::shared_ptr<const PreparedVideoComposition> PrepareCandidateVideoEffects(AudacityProject &project,
-   const std::vector<const VideoTimeline::Timeline*> &layers, wxWindow *parent)
+   const AuTopsyVideoTrack &track, const VideoTimeline::Timeline &candidate, wxWindow *parent)
 {
    auto &state = Effects(project); PreparingGuard preparing(state.preparing);
    ClipActions::MediaDialogCommandGuard commands;
-   return PrepareVideoComposition(layers, VideoTimeline::GetProjectVideoDuration(project),
+   std::vector<VideoTimeline::VideoTimelineLayer> input;
+   for (const auto *item : VideoTimeline::ProjectVideoTracks(project))
+      input.push_back({item == &track ? &candidate : &item->Timeline(), {!item->VideoVisible(), item->VideoSolo()}});
+   const auto layers = VideoTimeline::VisibleVideoLayers(input);
+   return PrepareVideoComposition(layers, std::max(VideoTimeline::GetProjectVideoDuration(project), candidate.End()),
       PreviewSettings(layers, state.quality, false), parent);
 }
 void AdoptPreparedVideoEffects(AudacityProject &project, std::shared_ptr<const PreparedVideoComposition> prepared) {

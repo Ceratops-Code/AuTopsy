@@ -51,7 +51,13 @@ def crop_pixel_counts(rgb):
     return counts
 
 
-def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=None):
+def preview_colours_match(counts, expected, edge_colours=()):
+    """Require primary regions, allowing only explicitly named blended edges."""
+    bad = sum(count for colour, count in counts.items() if colour not in expected and colour not in edge_colours)
+    return all(counts[colour] > 20 for colour in expected) and bad < 5
+
+
+def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=None, edge_colours=()):
     """Read only the owned preview surface on its required display.
 
     The bundled FFmpeg GDI input reads the decoder's GPU output without adding
@@ -108,8 +114,7 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=N
             ], timeout=15)
             assert len(rgb) == 64 * 64 * 3, len(rgb)
             counts = crop_pixel_counts(rgb)
-            bad = sum(count for colour, count in counts.items() if colour not in expected)
-            if all(counts[colour] > 20 for colour in expected) and bad < 5:
+            if preview_colours_match(counts, expected, edge_colours):
                 return counts
             if time.monotonic() >= deadline:
                 evidence = root / "_crop-preview.ppm"

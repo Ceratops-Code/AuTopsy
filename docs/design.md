@@ -146,7 +146,7 @@ interface cannot promise immunity to every future product requirement.
 | Owned editing kernel, native adapters | Target. Upstream pointers, track classes, XML hooks and commands stay at boundaries. | Reusing native audio clips as fake picture containers couples video to sample storage and audio-only transformations. |
 | Content separate from placement | Implemented for joins and affine retiming: immutable retained content and an independent visible window. | A single media tuple cannot represent an editable multi-source join or preserve deleted interior gaps. |
 | One edit plan and one native history transaction | Target. All linked members are checked before any visible change. | Separate per-track commands expose half-edited picture/sound on failure. |
-| One evaluation policy for preview/export | Simple and joined clips share source sampling, internal picture boundaries and flat-track Mute/Solo selection. Retained picture crops reach native preview/export; embedded layers still await native adoption. | Two visibility implementations drift when mute, solo and compounds are added. |
+| One evaluation policy for preview/export | Simple and joined clips share source sampling, internal picture boundaries and flat-track Mute/Solo selection. Retained picture crops, generated pictures and embedded rectangles reach the same native preview/export plan. | Two visibility implementations drift when mute, solo and compounds are added. |
 | In-process kernel, isolated media workers | Selected. Transactions and the native audio clock stay synchronous; expensive media work can be replaced separately. | Network microservices increase deployment and partial-failure work without improving local editing. |
 | Existing mpv and FFmpeg | Retained. They already decode/render the supported media. | Writing a decoder or compositor duplicates mature libraries and increases maintenance. |
 | OpenTimelineIO | Assessed, not selected as the internal engine. Useful later for interchange. | Its editorial schemas do not supply native edit transactions, source-bound enforcement, preview or rendering; adopting the whole model now adds another adapter and format lifecycle. |
@@ -187,7 +187,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | Location | Current ownership | Intended responsibility |
 | --- | --- | --- |
 | `src/video/EditVideoTimeline.h` | Host-free timeline placement, range edits and layered source selection | Preserve native editing contracts for simple and joined clips |
-| `src/video/EditVideoContent.h/.cpp` | Immutable retained content, leaf sampling, sources and link windows | Keep source identity independent of native tracks and decoders |
+| `src/video/EditVideoContent.h/.cpp` | Immutable retained sequences, reverse/freeze/image/title generators, sources and independent audio link clocks | Keep source identity independent of native tracks and decoders |
 | `src/video/JoinVideoClips.h/.cpp` | Heal, editable Join and Separate | Atomic structural changes without rendering samples or video |
 | `src/video/PlanVideoEdits.h/.cpp` | Host-free batch planner and one-swap snapshot application | Native coordinator consumes complete plans in one history transaction |
 | `src/video/EvaluateVideoTimeline.h/.cpp` | Host-free ordered layers, crop, mute/solo and embedded rectangles | Native preview/export consume the same composition semantics |
@@ -199,12 +199,14 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/ShowVideoTrack.h/.cpp` | Pane painting and mouse edits | View and semantic gesture requests only |
 | `src/video/ShowVideoPreview.cpp` | Window and audio-clock following | View adapter using shared sampling and transport facade |
 | `src/video/PlayVideoMedia.h/.cpp` | Owned decoder/window boundary | mpv loading, playback and picture crop; no native project objects |
-| `src/video/EditVideoComposition.h/.cpp` | Native picture crop controls and history | Numeric margins, reset and one native history transaction |
+| `src/video/EditVideoComposition.h/.cpp` | Native crop, embedding and picture-action boundaries | Private drafts, prepared output and one native history transaction |
 | `src/video/RenderVideoComposition.h/.cpp` | Host-free source geometry and encoder expressions | Oriented crop projection and FFmpeg crop translation |
 | `src/video/PlanVideoExport.h/.cpp` | Host-free export frame clock and automatic canvas | Global frame windows, source sampling phase and cropped source dimensions |
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
 | `src/video/PlanVideoTransitions.h/.cpp` | Host-free opacity layers and shared frame intervals | Fades and overlaps on the same project clock as ordinary cuts |
 | `src/video/PrepareVideoEffects.h/.cpp` | Derived transition spans and project-scoped leases | Cancellable FFmpeg work shared by preview and original-quality export |
+| `src/video/PrepareGeneratedVideo.h/.cpp` | Derived frame windows for reverse, freeze, images and title cards | Bounded reverse buffers and leased cache entries, shared by preview/export/crop |
+| `src/update/ChooseProductUpdate.h` and `CheckProductUpdates.h/.cpp` | Host-free release policy and Windows request/UI boundary | Numeric release ordering, explicit network opt-in, fixed repository links and no installer execution |
 | `src/video/EditVideoFades.h/.cpp` | Fade/crossfade dialog, commands and history | Candidate preparation before publishing an edit |
 | `src/video/ShowVideoCrop.h/.cpp` | Visual crop handles and numeric fields | A private draft until Apply, with no temporary screenshot file |
 | `src/clip-groups/PlanClipPlacement.h` and `EditClipPlacement.h/.cpp` | Precise timing, collision rules, timing locks and Close Gap | Owned value policy with native linked-media adapters |
@@ -651,6 +653,66 @@ before adopting that format; do not silently lose feature data on ordinary Save.
 Saving a copy in stock Audacity intentionally drops unknown video/link/group/flag
 metadata. Keep the original AuTopsy file for a later full-feature round trip.
 
+### Embedded layers and generated pictures
+
+Each native video track owns a stable layer ID and optional parent ID plus a
+fractional rectangle. The shared evaluator resolves parent-relative geometry
+and rejects cycles, missing parents and invalid bounds. Parent gaps or hidden
+ancestors hide descendants; solo operates on the family. Native track indices
+are only command/UI boundary inputs, never saved parent identities. Movement
+closure includes bound video layers and linked soundtrack members before the
+existing drag engine applies its common legal displacement.
+
+Picture generators are immutable content, separate from the outer editable
+window. Reverse retains its input sequence and maps picture time backwards;
+freeze retains a chosen input frame; image/title nodes own a still source or
+text/dimensions. An independent forward audio-content offset preserves original
+soundtrack linkage when picture direction or duration changes. Reverse and
+freeze do not silently reverse or stretch audio. Repeat is explicitly
+picture-only and creates unlinked copies only after checking the whole requested
+placement; occupied space rejects all copies. Repeating an identical operation
+adds no duplicate history or content.
+
+The media worker prepares only the requested frame window. Reverse snaps that
+window to the saved picture grid, composes/scales before reversing, and bounds
+each decoded buffer to about 64 MiB and two seconds. Freeze/images/titles need
+one prepared frame, padded by ordinary composition for the visible duration.
+The existing cache owner leases every output; recipe identities name saved
+content, requested windows, quality and original source identities, never
+disposable intermediate paths. Scratch PNG/concat files stay inside a leased
+entry, are removed on exit, and abandoned entries use existing owner cleanup.
+No new mutable store, sidecar, persistent execution log or media format is added.
+
+UI drafts and all required media preparation finish before native publication.
+Cancellation, an invalid parent, missing source, render failure or collision
+retains the prior tracks and history. Split, trim, crop and save preserve opaque
+generator content; Separate refuses a generator root rather than discarding its
+effect. Still relinking probes an image instead of treating it as a movie and
+keeps the declared duration. Title cards are white text on black; richer
+formatting and transparent subtitle overlays are separate future capabilities.
+
+### Product release checking
+
+`resources/autopsy-release.json` owns the product release identity consumed by
+the application and installer. Public preview tags must equal that packaged
+identity. The upstream numeric PE engine version remains separate.
+
+The owned policy compares numeric core and preview components, filters drafts,
+wrong-architecture/missing assets and foreign links, and cannot offer an older
+public release over a newer local build. The Windows adapter uses async WinHTTP
+against the fixed repository's public releases API: bounded pages, response bytes
+and request time, system TLS and no credentials. Automatic checks default off,
+run daily/weekly only after opt-in, and report each new tag once through a passive
+notice. Last attempt also bounds failed automatic requests. Manual checks remain
+available; shutdown cancels and joins the request. Errors remain errors, never an
+unfounded up-to-date result.
+
+The checker creates no files or download cache. Version notes and installer
+links open only on a user click in the browser; no installer is executed and no
+editing process is stopped. Test fixtures are admitted only inside the private
+native harness's marked owner root. Their receipt scope is distinct from a real
+GitHub request, so fixture success cannot stand in for transport evidence.
+
 Implemented structural semantics:
 
 - **Heal Split** requires touching windows of continuous compatible content.
@@ -1091,7 +1153,7 @@ These are proposed thresholds, not measured release guarantees.
 | Ten seconds ordinary 30-fps playback, prepared low-resolution proxy, supported test host | Preview follows native clock smoothly | At least 98% displayed frames, drift at most two project frames; timestamp/drop counters on synthetic footage |
 | Several sources/FPS, gaps, mute/solo and compounds | Preview/export choose identical content at sampled project times | Same source occurrence/frame and background; evaluator plus rendered fixture checks |
 | All picture muted with sound still present | Export retains declared canvas/duration and audio | Black frames for full declared duration; probe and decoded-frame/audio checks |
-| Crop/PiP, source/proxy resolution changes and nested parents | Composition retains original framing and resolves parent-relative placement | Exact fractional geometry and source time; model cases pass, rendered/native round-trip still required |
+| Crop/PiP, source/proxy resolution changes and nested parents | Composition retains original framing and resolves parent-relative placement | Exact fractional geometry/source time, native controls, decoded pixels and save/reopen in the dedicated embedding cases |
 | Any audio/video edit followed by Undo/Redo at fixed zoom, horizontally and vertically scrolled | Native history retains viewport or clamps only to document bounds | No zoom change or gratuitous jump; `fork-history-view` passed twelve transitions on the corrected build |
 | Seek/edit/cancel during background preparation | Preview ignores obsolete work, cache protects live readers | No stale publication, bounded retained files; worker cancellation and lease cases |
 | Failure then matching success; expiry/cancellation; interruption at diagnostic write/delete | Owning flow removes obsolete payloads without repeating accepted work | Zero superseded diagnostics or staging after successful cleanup; active files and original acceptance IDs survive; focused owner cases required |
@@ -1149,6 +1211,22 @@ movement, invalid parent graphs, retained trims and flags. Dedicated
 `TestVideoComposition.cpp` cases cover ordered sources/gaps, spatial crop, nested
 parent geometry, mute/solo, all-black duration and owned results. These suites
 compile with standard C++ and Catch2 without native editor or media SDKs.
+
+`fork-video-embedding` and `fork-video-embedding-controls` cover public commands,
+parent IDs, invalid graphs, rendered pixels, visual draft cancellation, bound
+movement and saved projects. `fork-video-reverse`, `fork-video-freeze`,
+`fork-video-repeat` and `fork-video-pictures` exercise decoded frame order/counts,
+repeat and Undo/Redo, invalid requests, crop cancellation, original audio,
+relinking and reopen. Picture projects also pass through the stock-consumer
+audio compatibility journey. Owned composition cases cover source-window bounds
+and forward soundtrack linkage independently of GUI/decoder behavior.
+
+`fork-product-updates` covers version filtering and the native preferences dialog
+with bounded fixtures; a separately scoped live mode checks the real WinHTTP
+request without opening a browser or downloading anything. Installer-owner tests
+cover repeated/interrupted builds/publication and prevent a release-tag mismatch
+before any GitHub mutation. Final candidate acceptance still comes from the
+recorded SDLC results, not from this inventory.
 
 `fork-video-transport` uses actual preview-button HWNDs in the owned test process,
 checks native clock pause/resume and video-only playback, and checks foreign-project
