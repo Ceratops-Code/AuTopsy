@@ -1264,6 +1264,44 @@ def native_test_inputs(args, executable, module, display):
     return inputs
 
 
+def require_unlocked_desktop(kernel=None, sessions=None):
+    """Reject fresh GUI work on a locked/disconnected or unreadable session.
+
+    WTSSessionInfoEx has an eight-byte-aligned union; only its documented level-1
+    prefix is read. This is an environmental precondition, not an app failure.
+    Existing accepted results need no desktop. A later lock is still caught by
+    the input target guards, since Windows can change state after this query.
+    """
+    class SessionPrefix(ctypes.Structure):
+        _fields_ = [("level", ctypes.c_uint32), ("padding", ctypes.c_uint32),
+                    ("session", ctypes.c_uint32), ("state", ctypes.c_uint32),
+                    ("flags", ctypes.c_int32)]
+
+    kernel = kernel or ctypes.WinDLL("kernel32", use_last_error=True)
+    sessions = sessions or ctypes.WinDLL("wtsapi32", use_last_error=True)
+    kernel.ProcessIdToSessionId.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    session = ctypes.c_uint32()
+    if not kernel.ProcessIdToSessionId(kernel.GetCurrentProcessId(), ctypes.byref(session)):
+        raise RuntimeError(f"Cannot read the GUI test session: Windows error {ctypes.get_last_error()}.")
+    sessions.WTSQuerySessionInformationW.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+        ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint32)]
+    sessions.WTSFreeMemory.argtypes = [ctypes.c_void_p]
+    sessions.WTSFreeMemory.restype = None
+    pointer, size = ctypes.c_void_p(), ctypes.c_uint32()
+    if not sessions.WTSQuerySessionInformationW(None, session.value, 25,
+            ctypes.byref(pointer), ctypes.byref(size)):
+        raise RuntimeError(f"Cannot read GUI session {session.value}: Windows error {ctypes.get_last_error()}.")
+    try:
+        if not pointer.value or size.value < ctypes.sizeof(SessionPrefix):
+            raise RuntimeError("Windows returned incomplete GUI session information.")
+        info = SessionPrefix.from_buffer_copy(ctypes.string_at(pointer, ctypes.sizeof(SessionPrefix)))
+        if info.level != 1 or info.session != session.value or info.state != 0 or info.flags != 1:
+            raise RuntimeError(f"GUI session {session.value} is locked, disconnected or unknown "
+                f"(level={info.level}, state={info.state}, flags={info.flags}); unlock Windows before fresh desktop checks.")
+    finally:
+        sessions.WTSFreeMemory(pointer)
+
+
 def write_behavior_record(target, payload):
     """Publish one immutable result or attempt intent while the runner owns the mutex."""
     if target.exists():
@@ -1570,6 +1608,7 @@ def main():
         raise RuntimeError("An AuTopsy scripting session is already active.")
     root.parent.mkdir(parents=True, exist_ok=True)
     def execute(run_id, identities):
+        require_unlocked_desktop()
         marker = root / "_owner"
         signature = "AuTopsy behavior tests 1"
         shared_cache = root.parent / "_preview_media"

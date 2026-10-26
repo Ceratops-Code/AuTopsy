@@ -23,6 +23,51 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_gui_session_preflight_repeats_and_releases_its_query_buffer(self) -> None:
+        import ctypes
+        import struct
+
+        for level, session, state, flags, size in ((1, 7, 0, 1, 24), (1, 7, 0, 0, 24),
+                (1, 7, 0, -1, 24), (1, 7, 4, 1, 24), (2, 7, 0, 1, 24),
+                (1, 8, 0, 1, 24), (1, 7, 0, 1, 8)):
+            with self.subTest(level=level, session=session, state=state, flags=flags, size=size):
+                kernel, sessions = Mock(), Mock()
+                buffer = ctypes.create_string_buffer(struct.pack("<IIIIiI", level, 0, session, state, flags, 0))
+
+                def identify(pid: int, result: Any) -> bool:
+                    result._obj.value = 7
+                    return True
+
+                def query(server: Any, sid: int, kind: int, pointer: Any, length: Any,
+                          buffer: Any = buffer, size: int = size) -> bool:
+                    self.assertEqual((sid, kind), (7, 25))
+                    pointer._obj.value, length._obj.value = ctypes.addressof(buffer), size
+                    return True
+
+                kernel.ProcessIdToSessionId.side_effect = identify
+                sessions.WTSQuerySessionInformationW.side_effect = query
+                for _ in range(2):
+                    if (level, session, state, flags, size) == (1, 7, 0, 1, 24):
+                        native.require_unlocked_desktop(kernel, sessions)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "unlock Windows|incomplete"):
+                            native.require_unlocked_desktop(kernel, sessions)
+                self.assertEqual(sessions.WTSFreeMemory.call_count, 2)
+
+    def test_gui_session_query_failure_stops_without_freeing_an_unowned_buffer(self) -> None:
+        import ctypes
+
+        for identify in (False, True):
+            kernel, sessions = Mock(), Mock()
+            kernel.ProcessIdToSessionId.return_value = identify
+            sessions.WTSQuerySessionInformationW.return_value = False
+            for _ in range(2):
+                with patch.object(ctypes, "get_last_error", return_value=5, create=True), \
+                        self.assertRaisesRegex(RuntimeError, "Windows error 5"):
+                    native.require_unlocked_desktop(kernel, sessions)
+            sessions.WTSFreeMemory.assert_not_called()
+            self.assertEqual(sessions.WTSQuerySessionInformationW.call_count, 2 if identify else 0)
+
     def test_native_crash_trace_owns_only_its_app_and_bounded_log(self) -> None:
         import run_fork_test_harness as harness
 

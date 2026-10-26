@@ -755,6 +755,10 @@ existing Microsoft `cdb.exe`. The harness attaches only to that case's exact PID
 records crash stacks in its bounded `_native-debugger.log`, and removes the log
 after normal app exit. Debugger-assisted checks have a separate execution scope;
 they cannot supply an ordinary candidate's desktop acceptance.
+Fresh desktop cases require Windows to report an active, unlocked session before
+creating their private media/profile or starting the app. Cached acceptance can
+still be reused while the desktop is locked; an unreadable session blocks fresh
+GUI work with the original Windows error.
 An explicitly scoped native session runs only its selected compiled host cases;
 it never records portable passes against core binaries that session did not build.
 
