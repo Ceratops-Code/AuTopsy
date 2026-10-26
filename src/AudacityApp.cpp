@@ -15,6 +15,7 @@ It handles initialization and termination by subclassing wxApp.
 
 *//*******************************************************************/
 #include "AudacityApp.h"
+#include <cstdio>
 
 #if 0
 // This may be used to debug memory leaks.
@@ -117,6 +118,9 @@ It handles initialization and termination by subclassing wxApp.
 
 #if defined(HAVE_UPDATES_CHECK)
 #  include "update/UpdateManager.h"
+#endif
+#if defined(AUTOPSY_HAS_VIDEO_PREVIEW)
+#  include "update/CheckProductUpdates.h"
 #endif
 
 #ifdef HAS_WHATS_NEW
@@ -1234,6 +1238,12 @@ bool AudacityApp::OnExceptionInMainLoop()
       // Don't quit the program
       return true;
    }
+   catch ( const std::exception &error ) {
+      // Preserve the concrete cause when wx falls back to its generic dialog.
+      // This adds no files, recovery state or change to exception handling.
+      std::fprintf(stderr, "AuTopsy main-loop exception: %s\n", error.what());
+      return wxApp::OnExceptionInMainLoop();
+   }
    catch ( ... ) {
       // There was some other type of exception we don't know.
       // Let the inherited function do throw; again and whatever else it does.
@@ -1691,7 +1701,9 @@ bool AudacityApp::InitPart2()
    bool splashFadeOut = !playingJournal;
    HideSplashScreen(splashFadeOut);
 
-#if defined(HAVE_UPDATES_CHECK)
+#if defined(AUTOPSY_HAS_VIDEO_PREVIEW)
+   AuTopsy::Updates::StartProductUpdateChecks();
+#elif defined(HAVE_UPDATES_CHECK)
    UpdateManager::Start(playingJournal);
 #endif
 
@@ -2542,6 +2554,9 @@ void AudacityApp::OnEndSession(wxCloseEvent & event)
 
 int AudacityApp::OnExit()
 {
+#if defined(AUTOPSY_HAS_VIDEO_PREVIEW)
+   AuTopsy::Updates::StopProductUpdateChecks();
+#endif
    gIsQuitting = true;
    while(Pending())
    {

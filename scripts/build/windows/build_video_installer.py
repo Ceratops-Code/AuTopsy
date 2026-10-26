@@ -347,6 +347,14 @@ def reuse_or_compile_runtime(source: Path, build: Path, configure: list[str], de
     return completed
 
 
+def read_product_version(source: Path) -> str:
+    """One product identity is embedded in the app, installer and public tag."""
+    version = json.loads((source / "resources/autopsy-release.json").read_text(encoding="utf-8")).get("version", "")
+    if not isinstance(version, str) or not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-autopsy\.[1-9][0-9]*)?", version):
+        raise ValueError("The AuTopsy product release version is missing or malformed.")
+    return version
+
+
 def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None) -> dict:
     """A normal rerun derives all remaining work from current source and outputs."""
     source, build, inno = source.resolve(), build.resolve(), inno.resolve()
@@ -361,6 +369,7 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
     for pending in (build / "__build_command_failure.json.pending",
                     build / "package/__build-manifest.json.pending"):
         pending.unlink(missing_ok=True)
+    product_version = read_product_version(source)
     revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
     dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
     source_changes = run_command(["git", "diff", "--binary", "HEAD", "--"], source, diagnostics)
@@ -376,6 +385,7 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
             completed = build / "package" / accepted["filename"]
             if (accepted.get("schema") == "autopsy-windows-installer.v1"
                     and accepted.get("source_revision") == revision
+                    and accepted.get("product_version") == product_version
                     and accepted.get("source_dirty") is False
                     and accepted.get("dependency_inputs") == dependency_inputs
                     and accepted.get("checks") == checks
@@ -433,6 +443,8 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
     installer = build / "package" / descriptor["filename"]
     if installer.parent.resolve() != (build / "package").resolve() or not installer.is_file():
         raise RuntimeError("The packager did not produce its declared installer.")
+    if not installer.name.startswith("autopsy-win-" + product_version + "-"):
+        raise RuntimeError("The installer filename differs from the embedded product version.")
     if sha256(installer) != descriptor["sha256"]:
         raise RuntimeError("The packaged installer differs from its declared identity.")
     final_revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
@@ -442,6 +454,7 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         raise RuntimeError("Installer source changed during the build; no accepted manifest was written.")
     result = {
         "schema": "autopsy-windows-installer.v1", "source_revision": revision, "source_dirty": dirty,
+        "product_version": product_version,
         "filename": descriptor["filename"], "sha256": descriptor["sha256"], "signed": False,
         "dependency_inputs": dependency_inputs, "checks": checks, "prepackage": report,
         "compiled_source_revision": compiled["source_revision"] if compiled else revision,
@@ -552,6 +565,9 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
                 or not any(item == {"name": "fork-fixtures", "result": "passed", "source_revision": revision}
                            for item in accepted.get("checks", []))):
             raise RuntimeError("Preview publication requires a clean accepted installer and matching media-check receipt.")
+
+        if tag != "v" + str(accepted.get("product_version", "")):
+            raise RuntimeError("The release tag differs from this installer's embedded product version.")
 
         def execute(arguments, *, missing=False):
             return run_command(arguments, source, diagnostics,

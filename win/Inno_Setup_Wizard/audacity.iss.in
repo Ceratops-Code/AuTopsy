@@ -14,7 +14,7 @@
 #define AppRev ""
 #define AppBuild ""
 #define FullVersion GetVersionComponents(AppExe, AppMajor, AppMinor, AppRev, AppBuild)
-#define AppVersion Str(AppMajor) + "." + Str(AppMinor) + "." + Str(AppRev)
+#define AppVersion "@AUTOPSY_PRODUCT_VERSION@"
 #define AppName GetStringFileInfo(AppExe, PRODUCT_NAME)
 
 [Setup]
@@ -45,7 +45,7 @@ ChangesAssociations=yes
 DefaultDirName={commonpf}\AuTopsy
 
 VersionInfoProductName={#AppName}
-VersionInfoProductTextVersion={#GetFileProductVersion(AppExe)}
+VersionInfoProductTextVersion={#AppVersion}
 VersionInfoDescription={#AppName + " " + AppVersion + " Setup"}
 VersionInfoVersion={#GetVersionNumbersString(AppExe)}
 VersionInfoCopyright={#GetFileCopyright(AppExe)}

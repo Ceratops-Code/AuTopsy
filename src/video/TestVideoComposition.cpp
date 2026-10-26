@@ -3,6 +3,7 @@
 #include "RenderVideoComposition.h"
 #include "PlanVideoExport.h"
 #include "PlanVideoTransitions.h"
+#include "../update/ChooseProductUpdate.h"
 #include "JoinVideoClips.h"
 #include <catch2/catch.hpp>
 #include <limits>
@@ -487,4 +488,254 @@ TEST_CASE("Automatic export retains positive source rates below one frame per se
          REQUIRE(plan[0].sourceEnd == 10);
       }
    }
+}
+
+
+TEST_CASE("Embedded render plans resolve nested rectangles and suppress children in parent gaps", "[video-composition][video-embedding]")
+{
+   auto parent = VideoTimeline::CreateVideoTimeline("parent.mp4", 6, 30, 640, 360);
+   auto child = VideoTimeline::CreateVideoTimeline("child.mp4", 6, 24, 160, 100);
+   auto nested = VideoTimeline::CreateVideoTimeline("nested.mp4", 6, 25, 320, 180);
+   parent.placement.id = "parent";
+   child.placement = {"child", "parent", {.5, .1, .4, .5}};
+   nested.placement = {"nested", "child", {.25, .25, .5, .5}};
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto plan = PlanVideoTransitions({&child, &parent, &nested}, 6, 30);
+      REQUIRE(plan.size() == 1); REQUIRE(plan[0].requiresBlend);
+      REQUIRE(plan[0].layers.size() == 3);
+      REQUIRE(plan[0].layers[0].source.path == "parent.mp4");
+      REQUIRE(plan[0].layers[1].source.path == "child.mp4");
+      const auto &rect = plan[0].layers[2].rectangle;
+      REQUIRE(rect.x == Approx(.6)); REQUIRE(rect.y == Approx(.225));
+      REQUIRE(rect.width == Approx(.2)); REQUIRE(rect.height == Approx(.25));
+      const auto pixels = CalculateVideoPlacementRectangle(plan[0].layers[1].rectangle, 640, 360);
+      REQUIRE(pixels.x == 320); REQUIRE(pixels.y == 36);
+      REQUIRE(pixels.width == 256); REQUIRE(pixels.height == 180);
+   }
+   VideoTimeline::EraseVideoRange(parent, 2, 4, false);
+   const auto plan = PlanVideoTransitions({&nested, &child, &parent}, 6, 30);
+   REQUIRE(plan.size() == 3);
+   REQUIRE(plan[1].layers.empty()); // Children cannot become orphan overlays.
+   REQUIRE(plan[0].layers.size() == 3); REQUIRE(plan[2].layers.size() == 3);
+   child.placement.parentId = "nested";
+   REQUIRE_THROWS(PlanVideoTransitions({&nested, &child, &parent}, 6, 30));
+}
+
+TEST_CASE("Embedded family visibility uses stable identities and one shared solo scope", "[video-composition][video-embedding]")
+{
+   auto root = VideoTimeline::CreateVideoTimeline("base.mp4", 4, 30, 640, 360);
+   auto child = root, other = root;
+   root.placement.id = "root"; child.placement = {"child", "root", {.5, .5, .5, .5}};
+   other.placement.id = "other";
+   using VideoTimeline::VideoTimelineLayer;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto family = VideoTimeline::VisibleVideoLayers({
+         {&child, {false, true}}, {&other, {}}, {&root, {}}});
+      REQUIRE(family == std::vector<const VideoTimeline::Timeline*>{&child, &root});
+      REQUIRE(VideoTimeline::VisibleVideoLayers({{&root, {true, false}}, {&child, {false, true}}}).empty());
+      REQUIRE(VideoTimeline::VisibleVideoLayers({{&child, {}}, {&other, {}}}) ==
+         std::vector<const VideoTimeline::Timeline*>{&other});
+   }
+   root.placement.parentId = "child";
+   REQUIRE_THROWS(VideoTimeline::VisibleVideoLayers({{&root, {}}, {&child, {}}}));
+}
+
+TEST_CASE("Embedding placement rejects invalid state and stale edit publication", "[video-composition][video-embedding]")
+{
+   for (const auto rectangle : {VideoFrameRectangle{-1,0,1,1}, {0,0,0,1}, {.8,0,.3,1},
+         {0,0,std::numeric_limits<double>::quiet_NaN(),1}}) {
+      REQUIRE_THROWS(RequireUsableVideoPlacement({"child", "parent", rectangle}));
+      REQUIRE_THROWS(CalculateVideoPlacementRectangle(rectangle, 640, 360));
+   }
+   REQUIRE_THROWS(RequireUsableVideoPlacement({"same", "same", {}}));
+   REQUIRE_THROWS(RequireUsableVideoPlacement({"", "parent", {}}));
+   const auto tiny = CalculateVideoPlacementRectangle({.999, .999, .001, .001}, 160, 90);
+   REQUIRE(tiny.x + tiny.width <= 160); REQUIRE(tiny.y + tiny.height <= 90);
+   REQUIRE(tiny.width == 2); REQUIRE(tiny.height == 2);
+   auto project = Project();
+   const auto plan = PlanVideoEdits(project, {{VideoEditKind::SplitClip, "front", 0, 5}});
+   project.tracks[0].timeline.placement.rectangle = {.5, .5, .5, .5};
+   const auto before = project;
+   REQUIRE_THROWS(ApplyVideoEditPlan(project, plan));
+   REQUIRE(SameVideoProject(project, before));
+}
+
+TEST_CASE("Picture generators retain handles and reject invalid edits atomically", "[video-composition][video-generators]")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("source.mp4", 8, 30, 640, 360);
+   timeline.clips.front().sourceStart = 1; timeline.clips.front().duration = 3;
+   const auto original = timeline;
+   REQUIRE(VideoTimeline::ReverseVideoClip(timeline, 1));
+   REQUIRE(timeline.clips.front().sourceStart == 4);
+   REQUIRE(VideoTimeline::VideoContentDuration(timeline.clips.front(), {}) == 8);
+   REQUIRE(VideoTimeline::HasGeneratedVideoContent(timeline.clips.front()));
+   REQUIRE_FALSE(VideoTimeline::ReverseVideoClip(timeline, 1));
+   REQUIRE(VideoTimeline::TrimVideoClip(timeline, 1, 1, 3));
+   REQUIRE(VideoTimeline::TrimVideoClip(timeline, 1, 0, 3));
+   REQUIRE(timeline.clips.front().sourceStart == 4);
+   const auto sample = VideoTimeline::SampleVideoContent(timeline.clips.front(), {}, 4.5);
+   REQUIRE(sample.generated); REQUIRE(sample.sourceTime == 4.5);
+   REQUIRE(sample.generated->parts.front().media.path == "source.mp4");
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto frozen = original;
+      REQUIRE(VideoTimeline::FreezeVideoClip(frozen, 1, 1.5, 2));
+      REQUIRE(frozen.clips.front().content->heldTime == 2.5);
+      REQUIRE(frozen.clips.front().duration == 2);
+      REQUIRE_FALSE(VideoTimeline::FreezeVideoClip(frozen, 1, 1, 2));
+      REQUIRE_THROWS(VideoTimeline::FreezeVideoClip(frozen, 1, 2, 3));
+      REQUIRE(frozen.clips.front().duration == 2);
+      auto collision = original; collision.clips.push_back({2, 4, 4, 2}); collision.nextId = 3;
+      REQUIRE_THROWS(VideoTimeline::FreezeVideoClip(collision, 1, 1, 5));
+      REQUIRE(collision.clips.front().duration == 3);
+   }
+}
+
+TEST_CASE("Still pictures and titles use bounded saved content rather than cache paths", "[video-composition][video-generators]")
+{
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto title = VideoTimeline::MakeTitleVideoClip(1, 2, 4, "A neutral title", 640, 360);
+      auto image = VideoTimeline::MakeStillVideoClip(2, 6, 3, "picture.png", 320, 180);
+      REQUIRE(VideoTimeline::VideoContentSources(title, {}).empty());
+      REQUIRE(VideoTimeline::VideoContentSources(image, {}).front().path == "picture.png");
+      REQUIRE(VideoTimeline::ReplaceVideoContentSource(image, {}, "picture.png", {"moved.png", 3, 30, 640, 360}));
+      REQUIRE(VideoTimeline::VideoContentSources(image, {}).front().path == "moved.png");
+      const auto before = title;
+      auto changed = std::make_shared<VideoTimeline::VideoClipContent>(*title.content); changed->title = "Another title";
+      title.content = changed; REQUIRE_FALSE(VideoTimeline::SameVideoContent(before, title));
+      REQUIRE_THROWS(VideoTimeline::MakeTitleVideoClip(1, 0, 4, "", 640, 360));
+      REQUIRE_THROWS(VideoTimeline::MakeStillVideoClip(1, 0, 4, "", 640, 360));
+      REQUIRE_THROWS(VideoTimeline::MakeTitleVideoClip(1, 0, 4, "title", 99999, 360));
+      changed->operation = static_cast<VideoTimeline::VideoClipContent::Operation>(999);
+      REQUIRE_THROWS(VideoTimeline::RequireUsableVideoContent(title, {}));
+   }
+}
+
+TEST_CASE("Picture generators preserve the separate soundtrack source clock", "[video-composition][video-generators]")
+{
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto original = VideoTimeline::CreateVideoTimeline("source.mp4", 8, 30, 640, 360);
+      auto &clip = original.clips.front(); clip.sourceStart = 1; clip.duration = 1; clip.playbackRate = 2;
+      clip.linkGroup = std::string(32, 'a');
+      REQUIRE_THROWS(VideoTimeline::VideoContentLinkWindows(clip));
+      clip.media = VideoTimeline::SourceFor(original, clip);
+      const auto before = VideoTimeline::VideoContentLinkWindows(clip).front();
+      for (const bool freeze : {false, true}) {
+         auto timeline = original;
+         if (freeze) VideoTimeline::FreezeVideoClip(timeline, 1, .25, 1);
+         else VideoTimeline::ReverseVideoClip(timeline, 1);
+         auto linked = VideoTimeline::VideoContentLinkWindows(timeline.clips.front()).front();
+         REQUIRE(linked.sourceOrigin == before.sourceOrigin); REQUIRE(linked.sourceEnd == before.sourceEnd);
+         REQUIRE(linked.playbackRate == before.playbackRate); REQUIRE(linked.group == before.group);
+         REQUIRE(VideoTimeline::MoveClipTo(timeline, 1, 2));
+         linked = VideoTimeline::VideoContentLinkWindows(timeline.clips.front()).front();
+         REQUIRE(linked.sourceOrigin == before.sourceOrigin + 2);
+      }
+   }
+}
+
+TEST_CASE("Generated picture windows never expand a short edit to its hidden movie handles", "[video-composition][video-generators]")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("long.mp4", 7200, 30, 640, 360);
+   timeline.clips.front().sourceStart = 600; timeline.clips.front().duration = 2;
+   VideoTimeline::ReverseVideoClip(timeline, 1);
+   const auto &clip = timeline.clips.front();
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto window = PlanVideoGeneratorWindow(*clip.content, clip.sourceStart, clip.sourceStart + clip.duration);
+      REQUIRE(window.duration == 2); REQUIRE(window.frameCount == 60);
+      REQUIRE(window.inputStart == 600); REQUIRE(window.inputEnd == 602);
+      const auto frame = PlanVideoGeneratorWindow(*clip.content, clip.sourceStart + .5, clip.sourceStart + .5 + 1.0 / 30);
+      REQUIRE(frame.frameCount == 1);
+      REQUIRE_THROWS(PlanVideoGeneratorWindow(*clip.content, -1, 1));
+      REQUIRE_THROWS(PlanVideoGeneratorWindow(*clip.content, 0, 8000));
+   }
+   auto cropped = VideoTimeline::CreateVideoTimeline("source.mp4", 8, 30, 640, 360);
+   cropped.clips.front().crop = {.1,.2,.1,0}; cropped.clips.front().muted = true;
+   VideoTimeline::ReverseVideoClip(cropped, 1);
+   REQUIRE(cropped.clips.front().crop == VideoFrameCrop{.1,.2,.1,0});
+   REQUIRE(cropped.clips.front().muted);
+   REQUIRE_FALSE(cropped.clips.front().content->parts.front().muted);
+   REQUIRE(cropped.clips.front().content->parts.front().crop == VideoFrameCrop{});
+   REQUIRE(cropped.clips.front().content->width == 640); REQUIRE(cropped.clips.front().content->height == 360);
+}
+
+TEST_CASE("Repeat picture fills only missing matching slots and preserves collision boundaries", "[video-composition][video-generators]")
+{
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto timeline = VideoTimeline::CreateVideoTimeline("source.mp4", 2, 30, 640, 360);
+      timeline.clips.front().linkGroup = std::string(32, 'a');
+      REQUIRE(VideoTimeline::RepeatVideoClip(timeline, 1, 3));
+      REQUIRE(timeline.clips.size() == 4); REQUIRE(timeline.End() == 8);
+      REQUIRE(timeline.clips[1].linkGroup.empty());
+      const auto next = timeline.nextId;
+      REQUIRE_FALSE(VideoTimeline::RepeatVideoClip(timeline, 1, 3)); REQUIRE(timeline.nextId == next);
+      REQUIRE_THROWS(VideoTimeline::RepeatVideoClip(timeline, 1, 101)); REQUIRE(timeline.End() == 8);
+      auto occupied = VideoTimeline::CreateVideoTimeline("source.mp4", 8, 30, 640, 360);
+      occupied.clips.front().duration = 2; occupied.clips.push_back({2, 3, 0, 1}); occupied.nextId = 3;
+      REQUIRE_THROWS(VideoTimeline::RepeatVideoClip(occupied, 1, 3));
+      REQUIRE(occupied.clips.size() == 2); REQUIRE(occupied.nextId == 3);
+   }
+}
+
+TEST_CASE("AuTopsy release identities order numeric previews and stable versions", "[product-updates]")
+{
+   using namespace AuTopsy::Updates;
+   REQUIRE(*ParseReleaseVersion("v3.7.10-autopsy.9") < *ParseReleaseVersion("3.7.10-autopsy.10"));
+   REQUIRE(*ParseReleaseVersion("v3.7.10-autopsy.99") < *ParseReleaseVersion("v3.7.10"));
+   REQUIRE(*ParseReleaseVersion("v3.7.10") < *ParseReleaseVersion("v3.8.0-autopsy.1"));
+   for (const auto *bad : {"", "v3.7", "v3.07.10", "v3.7.10-autopsy.0", "v3.7.10-autopsy.01",
+         "v3.7.10-autopsy.1/extra", "v9999999999999999999.7.10", "v3.7.10-other.1"})
+      REQUIRE_FALSE(ParseReleaseVersion(bad));
+}
+
+TEST_CASE("AuTopsy update selection excludes drafts foreign installers and older local builds", "[product-updates]")
+{
+   using namespace AuTopsy::Updates;
+   const auto offer = [](const std::string &tag) {
+      return ReleaseOffer{tag, "Release notes", "https://github.com/Ceratops-Code/AuTopsy/releases/tag/" + tag,
+         "https://github.com/Ceratops-Code/AuTopsy/releases/download/" + tag + "/autopsy-win-3.7.10-test-x64.exe", false, true};
+   };
+   const auto current = *ParseReleaseVersion("v3.7.10-autopsy.13");
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto wanted = offer("v3.7.10-autopsy.14"), draft = offer("v4.0.0-autopsy.1"); draft.draft = true;
+      auto foreign = offer("v3.9.0-autopsy.1"); foreign.download = "https://example.org/installer.exe";
+      auto arm = offer("v3.9.1-autopsy.1"); arm.download.replace(arm.download.size()-7, 7, "arm.exe");
+      const std::vector<ReleaseOffer> choices{offer("v3.7.10-autopsy.12"), foreign, draft, arm, wanted};
+      REQUIRE(ChooseProductUpdate(choices, current, true)->tag == wanted.tag);
+      REQUIRE_FALSE(ChooseProductUpdate(choices, current, false));
+      REQUIRE_FALSE(ChooseProductUpdate(choices, *ParseReleaseVersion("v3.7.10-autopsy.15"), true));
+      wanted.page += "/../../outside"; REQUIRE_FALSE(ChooseProductUpdate({wanted}, current, true));
+      wanted = offer("v3.7.10-autopsy.14"); wanted.download += "?redirect=elsewhere";
+      REQUIRE_FALSE(ChooseProductUpdate({wanted}, current, true));
+      REQUIRE_FALSE(ShouldCheckProductUpdates(false, 999999, 0, 86400, false));
+      REQUIRE_FALSE(ShouldCheckProductUpdates(true, 999999, 0, 86400, true));
+      REQUIRE_FALSE(ShouldCheckProductUpdates(true, 100, 90, 86400, false));
+      REQUIRE(ShouldCheckProductUpdates(true, 86400, 0, 86400, false));
+      REQUIRE(ShouldCheckProductUpdates(true, 86500, 100, 86400, false));
+      REQUIRE(ShouldCheckProductUpdates(true, 90, 100, 86400, false));
+   }
+}
+
+TEST_CASE("Timeline thumbnails resolve reverse freeze and nested picture clocks without rendering", "[video-composition][video-generators]")
+{
+   auto timeline = VideoTimeline::CreateVideoTimeline("movie.mp4", 5, 30, 320, 180);
+   REQUIRE(VideoTimeline::ReverseVideoClip(timeline, 1));
+   const auto &clip = timeline.clips.front();
+   for (const double at : {0.0, .25, 2.75, 4.99}) {
+      const auto sample = VideoTimeline::SampleVideoThumbnail(clip, {}, at);
+      REQUIRE(sample);
+      REQUIRE_FALSE(sample.generated);
+      REQUIRE(sample.source.path == "movie.mp4");
+      REQUIRE(sample.source.duration == 5);
+      REQUIRE(sample.sourceTime == Approx((149 - std::floor(at * 30 + 1e-8)) / 30));
+   }
+   auto frozen = VideoTimeline::CreateVideoTimeline("movie.mp4", 5, 30, 320, 180);
+   REQUIRE(VideoTimeline::FreezeVideoClip(frozen, 1, 1.25, 2));
+   for (const double at : {0.0, .25, 1.99}) {
+      const auto sample = VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, at);
+      REQUIRE(sample);
+      REQUIRE(sample.source.duration == 5);
+      REQUIRE(sample.sourceTime == Approx(37.0 / 30));
+   }
+   REQUIRE(VideoTimeline::ReverseVideoClip(frozen, 1));
+   REQUIRE(VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, .25).sourceTime == Approx(37.0 / 30));
 }

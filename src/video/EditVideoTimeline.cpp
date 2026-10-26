@@ -2,6 +2,10 @@
 // Picture files remain external references; project XML owns only clip metadata.
 #include "EditVideoTimeline.h"
 #include "EditVideoComposition.h"
+#include "ExportVideoMix.h"
+#include <wx/filedlg.h>
+#include <wx/textdlg.h>
+#include <wx/filename.h>
 #include "CreateVideoTrack.h"
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
@@ -27,6 +31,7 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <memory>
+#include <limits>
 
 namespace {
 using VideoTimeline::Timeline;
@@ -407,6 +412,151 @@ public:
 const ComponentInterfaceSymbol SetVideoClipMuteCommand::Symbol{XO("SetVideoClipMute")};
 BuiltinCommandsModule::Registration<SetVideoClipMuteCommand> sSetVideoClipMute;
 
+class SetVideoEmbeddingCommand final : public AudacityCommand {
+   int mTrack{-1}, mParent{-1};
+   double mX{.65}, mY{.05}, mWidth{.3}, mHeight{.3};
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override { return XO("Embed a video track using stable saved parent and placement properties."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
+      visitor.Define(mTrack, wxT("Track"), -1, -1, 100000);
+      visitor.Define(mParent, wxT("Parent"), -1, -1, 100000);
+      visitor.Define(mX, wxT("X"), .65, 0., 1.); visitor.Define(mY, wxT("Y"), .05, 0., 1.);
+      visitor.Define(mWidth, wxT("Width"), .3, .000001, 1.); visitor.Define(mHeight, wxT("Height"), .3, .000001, 1.);
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         auto &track = FindClipTrack(context.project, 0, mTrack);
+         auto placement = track.Timeline().placement;
+         placement.parentId = mParent < 0 ? std::string{} : FindClipTrack(context.project, 0, mParent).Timeline().placement.id;
+         placement.rectangle = mParent < 0 ? VideoEditing::VideoFrameRectangle{} : VideoEditing::VideoFrameRectangle{mX,mY,mWidth,mHeight};
+         VideoEditing::ChangeProjectVideoTrackPlacement(context.project, track, placement);
+         RefreshPreviewLater(context.project); return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+const ComponentInterfaceSymbol SetVideoEmbeddingCommand::Symbol{XO("SetVideoEmbedding")};
+BuiltinCommandsModule::Registration<SetVideoEmbeddingCommand> sSetVideoEmbedding;
+
+class ChangeVideoPictureCommand : public AudacityCommand {
+   wxString mId;
+   int mTrack{-1}, mCopies{1};
+   double mAt{-1}, mSeconds{5};
+protected:
+   virtual VideoEditing::VideoClipPictureAction Action() const = 0;
+public:
+   TranslatableString GetDescription() const override { return XO("Edit a video clip's picture without changing project audio."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &v) {
+      v.Define(mId, wxT("Id"), wxString{}); v.Define(mTrack, wxT("Track"), -1, -1, 1000000);
+      v.Define(mAt, wxT("At"), -1.0, -1.0, 100000000.0);
+      // Report invalid scripted values through Apply, without the host opening
+      // a modal parameter-error dialog on the scripting thread.
+      v.Define(mSeconds, wxT("Seconds"), 5.0, std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max());
+      v.Define(mCopies, wxT("Copies"), 1, std::numeric_limits<int>::lowest(), std::numeric_limits<int>::max());
+      return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool Apply(const CommandContext &context) override {
+      try {
+         unsigned long long id{};
+         if (!mId.ToULongLong(&id) || !id) throw std::runtime_error("Supply a video clip Id from GetVideoClips.");
+         auto &track = FindClipTrack(context.project, id, mTrack);
+         VideoEditing::ApplyProjectVideoPictureAction(context.project, track, id, Action(),
+            mAt < 0 ? ViewInfo::Get(context.project).selectedRegion.t0() : mAt, mSeconds, mCopies);
+         RefreshPreviewLater(context.project); return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+#define VIDEO_PICTURE_COMMAND(Type, Name, Kind) \
+class Type final : public ChangeVideoPictureCommand { \
+   VideoEditing::VideoClipPictureAction Action() const override { return VideoEditing::VideoClipPictureAction::Kind; } \
+public: static const ComponentInterfaceSymbol Symbol; \
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; } \
+}; \
+const ComponentInterfaceSymbol Type::Symbol{XO(Name)}; \
+BuiltinCommandsModule::Registration<Type> s##Type;
+VIDEO_PICTURE_COMMAND(ReverseVideoPictureCommand, "ReverseVideoPicture", Reverse)
+VIDEO_PICTURE_COMMAND(FreezeVideoFrameCommand, "FreezeVideoFrame", Freeze)
+VIDEO_PICTURE_COMMAND(RepeatVideoPictureCommand, "RepeatVideoPicture", Repeat)
+#undef VIDEO_PICTURE_COMMAND
+
+class AddVideoPictureCommand : public AudacityCommand {
+   wxString mFilename, mText;
+   double mAt{-1}, mSeconds{5};
+   int mWidth{}, mHeight{};
+protected:
+   virtual bool IsTitle() const = 0;
+public:
+   TranslatableString GetDescription() const override { return XO("Add a still image or title card on its own video track."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &v) {
+      v.Define(mFilename, wxT("Filename"), wxString{}); v.Define(mText, wxT("Text"), wxString{});
+      v.Define(mAt, wxT("At"), -1.0, -1.0, 100000000.0);
+      v.Define(mSeconds, wxT("Seconds"), 5.0, std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max());
+      v.Define(mWidth, wxT("Width"), 0, 0, 8192); v.Define(mHeight, wxT("Height"), 0, 0, 8192); return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool PromptUser(AudacityProject &project) override {
+      auto *parent = &ProjectWindow::Get(project);
+      if (IsTitle()) {
+         wxTextEntryDialog text{parent, _("Title text (white on a black title card):"), _("Add Title Card"),
+            mText, wxOK | wxCANCEL | wxCENTRE | wxTE_MULTILINE};
+         if (text.ShowModal() != wxID_OK) return false; mText = text.GetValue();
+      }
+      else {
+         wxFileDialog image{parent, _("Add Still Image"), {}, {},
+            _("Images (*.png;*.jpg;*.jpeg;*.bmp;*.webp;*.tif;*.tiff)|*.png;*.jpg;*.jpeg;*.bmp;*.webp;*.tif;*.tiff"), wxFD_OPEN | wxFD_FILE_MUST_EXIST};
+         if (image.ShowModal() != wxID_OK) return false; mFilename = image.GetPath();
+      }
+      wxTextEntryDialog length{parent, _("Picture length in seconds:"), _("Picture Duration"), wxString::Format("%.8g", mSeconds)};
+      if (length.ShowModal() != wxID_OK) return false;
+      if (!length.GetValue().ToDouble(&mSeconds)) { wxMessageBox(_("Enter a numeric duration."), _("Add Video Picture"), wxOK | wxICON_ERROR, parent); return false; }
+      return true;
+   }
+   bool Apply(const CommandContext &context) override {
+      try {
+         const auto at = mAt < 0 ? ViewInfo::Get(context.project).selectedRegion.t0() : mAt;
+         int width = mWidth, height = mHeight;
+         if (IsTitle()) {
+            const auto timeline = VideoTimeline::GetProjectTimeline(context.project);
+            if (!width) width = timeline.sourceWidth > 0 ? timeline.sourceWidth : 1280;
+            if (!height) height = timeline.sourceHeight > 0 ? timeline.sourceHeight : 720;
+            VideoEditing::AddProjectVideoPicture(context.project, VideoTimeline::MakeTitleVideoClip(1, at, mSeconds,
+               std::string(mText.ToUTF8()), width, height), _("Title Card"));
+         }
+         else {
+            const auto size = VideoExport::ReadVideoSourcePictureSize(mFilename, &ProjectWindow::Get(context.project));
+            if (!size) return false;
+            VideoEditing::AddProjectVideoPicture(context.project, VideoTimeline::MakeStillVideoClip(1, at, mSeconds,
+               std::string(mFilename.ToUTF8()), size->first, size->second), wxFileName(mFilename).GetName());
+         }
+         RefreshPreviewLater(context.project); return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+class AddVideoTitleCommand final : public AddVideoPictureCommand {
+   bool IsTitle() const override { return true; }
+public: static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+class ImportStillImageCommand final : public AddVideoPictureCommand {
+   bool IsTitle() const override { return false; }
+public: static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+const ComponentInterfaceSymbol AddVideoTitleCommand::Symbol{XO("AddVideoTitle")};
+const ComponentInterfaceSymbol ImportStillImageCommand::Symbol{XO("ImportStillImage")};
+BuiltinCommandsModule::Registration<AddVideoTitleCommand> sAddVideoTitle;
+BuiltinCommandsModule::Registration<ImportStillImageCommand> sImportStillImage;
+
 class GetVideoClipsCommand final : public AudacityCommand {
 public:
    static const ComponentInterfaceSymbol Symbol;
@@ -432,6 +582,13 @@ public:
             out.Key("visible"); out.Bool(video->VideoVisible());
             out.Key("muted"); out.Bool(!video->VideoVisible());
             out.Key("solo"); out.Bool(video->VideoSolo());
+            const auto &placement = video->Timeline().placement;
+            out.Key("layerId"); out.String(placement.id.c_str());
+            out.Key("parentLayerId"); out.String(placement.parentId.c_str());
+            out.Key("placement"); out.StartObject();
+            out.Key("x"); out.Double(placement.rectangle.x); out.Key("y"); out.Double(placement.rectangle.y);
+            out.Key("width"); out.Double(placement.rectangle.width); out.Key("height"); out.Double(placement.rectangle.height);
+            out.EndObject();
             out.Key("end"); out.Double(video->Timeline().End()); out.EndObject();
          }
          ++index;
@@ -457,7 +614,9 @@ public:
                out.Key("right"); out.Double(clip.crop.right); out.Key("bottom"); out.Double(clip.crop.bottom);
                out.EndObject();
                out.Key("source"); out.String(source.path.c_str()); out.Key("fps"); out.Double(VideoTimeline::VideoContentFrameRate(clip, source));
-               out.Key("joined"); out.Bool(bool(clip.content));
+               out.Key("joined"); out.Bool(clip.content && clip.content->operation == VideoTimeline::VideoClipContent::Operation::Sequence);
+               const char *operations[]{"none", "reverse", "freeze", "image", "title"};
+               out.Key("pictureEffect"); out.String(clip.content ? operations[static_cast<int>(clip.content->operation)] : "none");
                out.Key("pieces"); out.Uint64(clip.content ? clip.content->parts.size() : 1);
                out.EndObject();
             }
@@ -568,6 +727,14 @@ AttachedItem sAddVideoTrack{
          AudioIONotBusyFlag() | TracksExistFlag())),
    wxT("Tracks/Add/Add")
 };
+AttachedItem sImportStillImageMenu{
+   Command("ImportStillImage", XXO("Still &Image..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+   Placement{wxT("File/Import-Export/Import"), {OrderingHint::After, "ImportVideo"}}
+};
+AttachedItem sAddVideoTitleMenu{
+   Command("AddVideoTitle", XXO("&Title Card..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+   Placement{wxT("File/Import-Export/Import"), {OrderingHint::After, "ImportStillImage"}}
+};
 AttachedItem sVideoStructureMenu{
    Section("VideoStructure",
       Command("HealVideoSplit", XXO("Heal Video Split"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
@@ -576,9 +743,13 @@ AttachedItem sVideoStructureMenu{
 };
 AttachedItem sVideoClipScripting{
    Items("",
+      Command("ReverseVideoPicture", XXO("Reverse Video Picture"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+      Command("FreezeVideoFrame", XXO("Freeze Video Frame..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+      Command("RepeatVideoPicture", XXO("Repeat Video Picture..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("JoinVideoClips", XXO("Join Video Clips"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("SplitVideo", XXO("Split Video at Cursor"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("GetVideoClips", XXO("Get Video Clips"), CommandDispatch::OnAudacityCommand, AlwaysEnabledFlag),
+      Command("SetVideoEmbedding", XXO("Set Picture-in-Picture..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("SetVideoClipCrop", XXO("Set Video Clip Crop..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("SetVideoClipMute", XXO("Set Video Clip Mute..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("MoveVideoClip", XXO("Move Video Clip..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
@@ -590,7 +761,18 @@ AttachedItem sVideoClipScripting{
 VideoTimeline::Timeline VideoTimeline::GetProjectTimeline(const AudacityProject &project)
 {
    const auto tracks = ProjectVideoTracks(const_cast<AudacityProject&>(project));
-   auto result = ComposeVideoTracks(GetProjectVisibleVideoLayers(project));
+   const auto visibleLayers = GetProjectVisibleVideoLayers(project);
+   auto result = ComposeVideoTracks(visibleLayers);
+   // An embedded source cannot choose the parent's canvas or default rate.
+   if (std::any_of(visibleLayers.begin(), visibleLayers.end(), [](const auto *layer) {
+         return !layer->placement.parentId.empty();
+      })) for (const auto *layer : visibleLayers) {
+      if (!layer->placement.parentId.empty() || layer->clips.empty()) continue;
+      const auto source = SourceFor(*layer, layer->clips.front());
+      result.sourcePath = source.path; result.sourceDuration = source.duration;
+      result.frameRate = source.frameRate; result.sourceWidth = source.width; result.sourceHeight = source.height;
+      break;
+   }
    // A fully hidden composition still has a canvas and media identity. Export
    // renders black for the separately captured project duration, without opening
    // hidden sources or changing any native audio mute/solo state.
@@ -604,6 +786,12 @@ VideoTimeline::Timeline VideoTimeline::GetProjectTimeline(const AudacityProject 
    for (const auto *track : tracks) for (const auto &clip : track->Timeline().clips)
       for (const auto &source : VideoContentSources(clip, SourceFor(track->Timeline(), clip)))
          result.protectedSourcePaths.push_back(source.path);
+   // A generator's content clock is not the duration of its original movie.
+   // Keep its render metadata, but bootstrap preview with derived media rather
+   // than pretending that this virtual composition is a source file.
+   if (std::any_of(tracks.begin(), tracks.end(), [](const auto *track) {
+         return std::any_of(track->Timeline().clips.begin(), track->Timeline().clips.end(), HasGeneratedVideoContent);
+      })) result.sourcePath.clear();
    return result;
 }
 
@@ -615,7 +803,7 @@ bool VideoTimeline::EditSelectedVideoStructure(AudacityProject &project, VideoEd
    VideoEditing::VideoProjectSnapshot snapshot;
    std::vector<AuTopsyVideoTrack*> targets;
    for (auto *track : ProjectVideoTracks(project)) if (track->GetSelected()) {
-      const auto id = std::to_string(targets.size());
+      const auto id = track->Timeline().placement.id;
       targets.push_back(track); snapshot.tracks.push_back({id, 0, track->Timeline()});
    }
    if (targets.empty()) return false;

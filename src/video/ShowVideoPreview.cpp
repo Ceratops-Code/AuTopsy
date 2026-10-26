@@ -12,6 +12,8 @@
 **********************************************************************/
 
 #include "SyncVideoPlayback.h"
+#include "../clip-groups/GuardMediaDialogs.h"
+#include "PlanVideoTransitions.h"
 #include "ChoosePreviewQuality.h"
 #include "ExportVideoMix.h"
 #include "EditVideoTimeline.h"
@@ -454,6 +456,11 @@ class VideoPreviewFrame final : public wxFrame {
           // while ordinary source decoding and transport keep their behavior.
           const bool canPrepare = !TrackPanel::Get(*project).IsMouseCaptured() && (IsShown() || ownsPlayback);
           mEffects = VideoEditing::PrepareProjectVideoPreview(*project, mQuality, mPreciseFrames, this, canPrepare);
+          // A hidden newly reopened generator has no decoder file yet. Keep its
+          // bootstrap frame until preparation is allowed, instead of opening a
+          // virtual content clock as if it were an ordinary source movie.
+          if (!mEffects && !canPrepare && VideoEditing::RequiresVideoComposition(
+                VideoTimeline::GetProjectVisibleVideoLayers(*project))) return;
           if (mEffects) {
              picturePosition = {};
              if (const auto *clip = VideoTimeline::ClipAt(mEffects->timeline, transport.position)) {
@@ -692,7 +699,7 @@ public:
          mPreviousMedia.push_back(mMedia);
          if (mPreviousMedia.size() > 3) mPreviousMedia.pop_front();
       }
-       mDurationChecked = false; mPath = path; mUsingOriginalFrames = false;
+       mDurationChecked = bool(rendered); mPath = path; mUsingOriginalFrames = false;
        mEffectsPreparationDeferred = false;
       SetTitle(_("Video Preview") + " - " + (rendered ? _("Composed Picture") : wxFileName{ path }.GetFullName()));
       Layout();
@@ -802,6 +809,7 @@ class ProjectVideoPreview final : public ClientData::Base {
 public:
    ProjectVideoPreview() { VideoExport::CleanAbandonedWorkspace(); VideoPreview::CleanPreviewCache(); }
    wxWeakRef<VideoPreviewFrame> frame;
+   bool opening{}, raisePending{};
 
    ~ProjectVideoPreview() override
    {
@@ -1152,14 +1160,14 @@ public:
    bool PromptUser(AudacityProject &project) override
    {
        const auto &timeline = VideoTimeline::GetProjectTimeline(project);
-       if (timeline.sourcePath.empty()) {
+       if (VideoTimeline::GetProjectVideoDuration(project) <= 0) {
          wxMessageBox(_("Import a video first."), _("Export Video with Audio Mix"),
             wxOK | wxICON_INFORMATION, &ProjectWindow::Get(project));
          return false;
       }
        const wxFileName source{ wxString::FromUTF8(timeline.sourcePath) };
       wxFileDialog dialog{ &ProjectWindow::Get(project), _("Export Video with Audio Mix"),
-         source.GetPath(), source.GetName() + "-mix.mp4",
+         source.GetPath(), (source.GetName().empty() ? wxString{"video"} : source.GetName()) + "-mix.mp4",
          _("MP4 video (*.mp4)|*.mp4|Matroska video (*.mkv)|*.mkv"),
          wxFD_SAVE | wxFD_OVERWRITE_PROMPT };
       if (dialog.ShowModal() != wxID_OK) return false;
@@ -1176,7 +1184,7 @@ public:
    bool Apply(const CommandContext &context) override
    {
        const auto timeline = VideoTimeline::GetProjectTimeline(context.project);
-       if (timeline.sourcePath.empty()) {
+       if (VideoTimeline::GetProjectVideoDuration(context.project) <= 0) {
          context.Error(_("Import a video first."));
          return false;
       }
@@ -1208,7 +1216,7 @@ BuiltinCommandsModule::Registration<ExportVideoMixCommand> sExportVideoCommand;
 
 void OnShowVideo(const CommandContext &context)
 {
-   if (VideoTimeline::GetProjectTimeline(context.project).sourcePath.empty())
+   if (VideoTimeline::GetProjectVideoDuration(context.project) <= 0)
       wxMessageBox(_("Use File > Import > Video to choose a video."),
          _("Video Preview"), wxOK | wxICON_INFORMATION,
          &ProjectWindow::Get(context.project));
@@ -1252,23 +1260,52 @@ void VideoTimeline::ShowProjectVideoPreview(AudacityProject &project, bool raise
 {
    auto &preview = PreviewFor(project);
    if (ProjectWindow::Get(project).IsBeingDeleted()) return;
+   preview.raisePending = preview.raisePending || raise;
+   if (preview.opening) return;
+   // Media preparation yields native events. Coalesce history refreshes while
+   // this owner still holds an incomplete cache entry's exclusive lease.
+   struct OpeningGuard {
+      ProjectVideoPreview &state;
+      explicit OpeningGuard(ProjectVideoPreview &value) : state(value) { state.opening = true; }
+      ~OpeningGuard() { state.opening = false; state.raisePending = false; }
+   } opening{preview};
+   ClipActions::MediaDialogCommandGuard commands;
+   try {
    const auto timeline = GetProjectTimeline(project);
    ShowProjectVideoTrack(project);
-   if (timeline.sourcePath.empty()) {
+   if (GetProjectVideoDuration(project) <= 0) {
       if (preview.frame && !preview.frame->IsBeingDeleted()) preview.frame->Destroy();
       preview.frame = nullptr;
       return;
    }
-   const auto path = wxString::FromUTF8(timeline.sourcePath);
+   std::shared_ptr<const VideoPreview::PreparedMedia> baseline;
+   auto path = wxString::FromUTF8(timeline.sourcePath);
+   if (path.empty()) {
+      // Generated-only projects have no original movie to bootstrap mpv.
+      // A tiny owned black frame opens the normal player; the shared picture
+      // evaluator replaces it with the composed frame on the next update.
+      baseline = VideoPreview::PrepareRenderedVideoMedia("blank-preview", "black-320x180-1frame", {}, 1,
+         [&](const wxString &output) {
+            if (!VideoExport::RunBundledVideoTool({"-v", "error", "-nostdin", "-n", "-f", "lavfi", "-i",
+                  "color=black:s=320x180:r=1:d=1", "-frames:v", "1", "-an", "-c:v", "libx264", "-threads", "1", output},
+                  &ProjectWindow::Get(project), _("Video Preview"), _("Opening the preview...")))
+               throw VideoPreview::PreviewPreparationCancelled{};
+         });
+      path = baseline->playbackPath;
+   }
+   const bool wasShown = preview.frame && !preview.frame->IsBeingDeleted() && preview.frame->IsShown();
    if (!preview.frame || preview.frame->IsBeingDeleted() || preview.frame->GetVideoPath() != path) {
       const auto destroy = [](VideoPreviewFrame *frame) { frame->Destroy(); };
       std::unique_ptr<VideoPreviewFrame, decltype(destroy)> candidate(new VideoPreviewFrame(project), destroy);
       if (preview.frame && !preview.frame->IsBeingDeleted()) candidate->AdoptQuality(*preview.frame);
       try {
-         if (!candidate->Load(path, &timeline)) return;
+         if (!candidate->Load(path, &timeline, baseline)) return;
          ShowProjectVideoTrack(project);
          if (preview.frame && !preview.frame->IsBeingDeleted()) preview.frame->Destroy();
          candidate->StartPreview();
+         // Rebuilding the decoder changes its source, not the user's window
+         // choice. Preserve exposure without stealing focus from the editor.
+         if (wasShown) candidate->ShowWithoutActivating();
          preview.frame = candidate.release();
       }
       catch (const std::exception &error) {
@@ -1278,7 +1315,14 @@ void VideoTimeline::ShowProjectVideoPreview(AudacityProject &project, bool raise
          return;
       }
    }
-   if (raise) { preview.frame->Show(); preview.frame->Raise(); }
+   if (preview.raisePending && preview.frame) { preview.frame->Show(); preview.frame->Raise(); }
+   }
+   catch (const VideoPreview::PreviewPreparationCancelled &) {}
+   catch (const std::exception &error) {
+      std::fprintf(stderr, "AuTopsy preview opening: %s\n", error.what());
+      wxMessageBox(wxString::FromUTF8(error.what()), _("Video Preview"),
+         wxOK | wxICON_ERROR, &ProjectWindow::Get(project));
+   }
 }
 
 void VideoTimeline::ReloadProjectVideoPreview(AudacityProject &project)

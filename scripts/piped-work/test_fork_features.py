@@ -76,6 +76,7 @@ from test_preview_controls import (
     check_preview_quality,
     check_video_cursor,
 )
+from test_product_updates import check_product_updates
 from test_track_groups import check_track_groups
 from test_video_clip_edits import (
     check_audio_join_links,
@@ -85,10 +86,12 @@ from test_video_clip_edits import (
     check_video_clip_structure,
     check_video_compound_render,
     check_video_crop,
+    check_video_embedding,
     check_video_speed,
     check_video_visibility,
 )
 from test_video_export_timing import check_video_export_timing
+from test_video_generators import GENERATOR_CASES, check_video_generator
 from test_video_recording import (
     VIDEO_RECORDING_CASES,
     check_video_recording,
@@ -1014,6 +1017,8 @@ def worker(args, root):
         check_preview_quality(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "video-cursor":
         check_video_cursor(client, root)
+    elif args.case == "product-updates":
+        check_product_updates(client, root)
     elif args.case == "track-groups":
         check_track_groups(client, root)
     elif args.case == "clip-actions":
@@ -1046,6 +1051,10 @@ def worker(args, root):
         check_collect_media(client, root)
     elif args.case == "video-fades":
         check_video_fades(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case in GENERATOR_CASES:
+        check_video_generator(client, root, args.ffmpeg, args.ffprobe, args.case)
+    elif args.case in ("video-embedding", "video-embedding-controls"):
+        check_video_embedding(client, root, args.ffmpeg, args.ffprobe, controls_only=args.case == "video-embedding-controls")
     elif args.case == "video-clip-export":
         check_video_clip_export(client, root, args.ffmpeg, args.ffprobe)
     elif args.case == "edit-cursor-line":
@@ -1226,13 +1235,20 @@ def native_test_inputs(args, executable, module, display):
     if args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
-                     "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
+                     "video-clip-storage", "video-parent-links", "video-embedding", "video-embedding-controls", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line", *RECORDING_CASES):
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "track-groups":
         inputs["track_groups_sha256"] = sha(here / "test_track_groups.py")
+    if args.case == "product-updates":
+        inputs["product_updates_sha256"] = sha(here / "test_product_updates.py")
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
+        inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
+    if args.case in GENERATOR_CASES:
+        inputs["video_generators_sha256"] = sha(here / "test_video_generators.py")
+        inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
     if args.case in VIDEO_RECORDING_CASES:
         inputs["video_recording_sha256"] = sha(here / "test_video_recording.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
@@ -1256,6 +1272,11 @@ def native_test_inputs(args, executable, module, display):
         from test_preview_controls import preview_soak_seconds
         inputs["execution_scope"]["soak_seconds"] = preview_soak_seconds()
         inputs["execution_scope"]["preview_metric_contract"] = "bounded-sample-window.v1"
+    if args.case == "product-updates":
+        source = os.environ.get("AUTOPSY_TEST_UPDATES_SOURCE", "fixture")
+        if source not in ("fixture", "github"):
+            raise RuntimeError("Choose fixture or github for the update test's request source.")
+        inputs["execution_scope"]["updates_source"] = source
     if args.case in RECORDING_CASES:
         from test_clip_actions import require_recording_device
         inputs["execution_scope"]["recording_device"] = require_recording_device()
@@ -1507,6 +1528,8 @@ RECORDING_CASES = ("cursor-recording", "cursor-recording-save-before", "cursor-r
 # normal CLI operations but must not also enter video's generated CTest list.
 MODULE_REGISTERED_NATIVE_CASES = ("track-groups",)
 NATIVE_CASES = (
+    "product-updates",
+    *GENERATOR_CASES,
     *VIDEO_RECORDING_CASES,
     "video-audio-parity",
     "video-audio-join-links",
@@ -1524,7 +1547,7 @@ NATIVE_CASES = (
     "video",
     "video-selection", "video-edges", "video-linked-edges", "video-clipboard", "video-track-menu",
     "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render",
-    "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-crop", "video-crop-controls", "video-export-timing", "video-vfr-export", "video-encoder-boundaries",
+    "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "video-embedding", "video-embedding-controls", "video-crop", "video-crop-controls", "video-export-timing", "video-vfr-export", "video-encoder-boundaries",
     "media",
     "preview",
     "branding",
@@ -1757,6 +1780,10 @@ def main():
             if args.reject_display is not True
             else "missing-test-display",
         )
+        if args.case == "product-updates":
+            environment.pop("AUTOPSY_TEST_UPDATES_JSON", None)
+            if os.environ.get("AUTOPSY_TEST_UPDATES_SOURCE", "fixture") == "fixture":
+                environment["AUTOPSY_TEST_UPDATES_JSON"] = str(root / "_updates.json")
         initial_preferences = (profile / "autopsy.cfg").read_text(encoding="utf-8")
         environment.pop("AUTOPSY_TEST_STALE_MONITOR", None)
         if args.case == "display-guard":
@@ -1779,6 +1806,8 @@ def main():
             )
             debugger = None
             try:
+                if not args.reject_display:
+                    debugger = NativeCrashDebugger(app, root)
                 if args.reject_display:
                     started = time.monotonic()
                     status = app.wait(timeout=30)
@@ -1812,7 +1841,8 @@ def main():
                 while not kernel.WaitNamedPipeW(pipe, 100):
                     if app.poll() is not None or time.monotonic() > deadline:
                         raise RuntimeError(
-                            "The owned test app did not expose its scripting pipe."
+                            f"The owned test app did not expose its scripting pipe; exit={app.poll()}; "
+                            + startup_window_messages(app.pid)
                         )
                     time.sleep(0.05)
                 if app.poll() is not None:
@@ -1914,7 +1944,6 @@ def main():
                         restart_recording_app, lambda: remove_private_capture_audio(root, process_stopped=True))
                     result = None  # Fault journeys checked each real child result.
                 else:
-                    debugger = NativeCrashDebugger(app, root)
                     result = run_behavior_worker(worker_command, environment, app, root,
                         timeout_seconds=285 if args.case == "preview-soak" else 240)
                 if result is not None and result.returncode:
@@ -1977,7 +2006,7 @@ def main():
                     "input": source_identity,
                     **identities,
                 }
-                if args.case in ("project-compatibility", "track-groups", "video-clip-mute", "collect-media", "video-fades"):
+                if args.case in ("project-compatibility", "track-groups", "video-clip-mute", "collect-media", "video-fades", "video-embedding", "video-pictures"):
                     record["compatibility_fixtures"] = read_compatibility_fixture_inputs(root)
                 observations = root / "_playback.json"
                 if observations.is_file():
@@ -2016,7 +2045,7 @@ def main():
     def read_inputs():
         return native_test_inputs(args, executable, module, display)
 
-    if args.case in ("project-compatibility", "track-groups", "video-clip-mute", "collect-media", "video-fades"):
+    if args.case in ("project-compatibility", "track-groups", "video-clip-mute", "collect-media", "video-fades", "video-embedding", "video-pictures"):
         result = run_project_compatibility_checks(
             root.parent, args.case, read_inputs, execute, root, display, args.ffmpeg)
     else:

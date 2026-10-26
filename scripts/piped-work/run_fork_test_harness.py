@@ -39,8 +39,8 @@ class NativeCrashDebugger:
         if executable.name.casefold() != "cdb.exe" or app.poll() is not None:
             raise RuntimeError("Native crash tracing requires CDB and a live private test app.")
         action = ".ecxr; kv 40; .detach; q"
-        commands = "; ".join(f'sxe -c "{action}" {kind}' for kind in ("av", "sov", "ii", "dz")) + "; g"
-        command = [str(executable), "-p", str(app.pid), "-g", "-G", "-lines", "-c", commands]
+        commands = "kv 40; " + "; ".join(f'sxe -c "{action}" {kind}' for kind in ("av", "sov", "ii", "dz")) + '; sxe -c "kv 30; g" eh; g'
+        command = [str(executable), "-p", str(app.pid), "-G", "-lines", "-c", commands]
         self.stream = self.path.open("wb")
         try:
             self.process = subprocess.Popen(command, stdout=self.stream, stderr=subprocess.STDOUT,

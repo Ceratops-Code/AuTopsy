@@ -1,6 +1,7 @@
 // Native TrackPanel adapters. The host owns scrolling, sizing, focus, track
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
+#include <wx/log.h>
 #include "PrepareVideoPreview.h"
 #include "CreateVideoTrack.h"
 #include "EditVideoFades.h"
@@ -148,7 +149,8 @@ public:
       for (auto &interval : mMoving) Data(interval).clip.start += offset;
    }
    bool MayMigrateTo(Track &other) override
-   { return dynamic_cast<AuTopsyVideoTrack*>(&other) != nullptr; }
+   { return dynamic_cast<AuTopsyVideoTrack*>(&other) != nullptr &&
+      !ClipGroups::BoundVideoTrackMoveFamilies(TrackList::Get(mProject)).count(mTrack.get()); }
    Intervals Detach() override {
       auto changed = mTrack->Timeline();
       for (const auto &interval : mMoving) RemoveClip(changed, Data(interval).clip.id);
@@ -357,18 +359,32 @@ class VideoTrackView final : public CommonChannelView {
    };
    std::map<std::string, Thumbnails> mSources;
    uint64_t mUse{};
+   bool mGeneratedThumbnails{};
    std::weak_ptr<VideoClipHandle> mClipHandle;
    std::weak_ptr<VideoAffordanceHandle> mAffordanceHandle;
    std::weak_ptr<VideoSelectionHandle> mVideoSelectionHandle;
    std::optional<Timeline> mGhost;
    wxRect mLastRect;
    static constexpr int FrameWidth = 112, FrameHeight = 63;
-   Thumbnails &Frames(const MediaSource &source, wxWindow *parent) {
-      auto found = mSources.find(source.path);
+   Thumbnails &Frames(const MediaSource &source, wxWindow *parent, bool still = false) {
+      const auto key = (still ? "image:" : "video:") + source.path;
+      auto found = mSources.find(key);
       if (found == mSources.end()) {
          Thumbnails data;
+         if (still) {
+            // Painting never starts a media worker or an offline-file dialog.
+            wxLogNull quiet;
+            wxImage image;
+            if (image.LoadFile(wxString::FromUTF8(source.path))) {
+               const auto scale = std::min(double(FrameWidth) / image.GetWidth(), double(FrameHeight) / image.GetHeight());
+               const int width = std::max(1, int(std::lround(image.GetWidth() * scale)));
+               const int height = std::max(1, int(std::lround(image.GetHeight() * scale)));
+               data.frames.emplace_back(image.Scale(width, height, wxIMAGE_QUALITY_NORMAL).Size(
+                  wxSize{FrameWidth, FrameHeight}, wxPoint{(FrameWidth-width)/2, (FrameHeight-height)/2}, 0, 0, 0));
+            }
+         }
          try {
-         data.media = VideoPreview::FindPreparedVideoThumbnails(wxString::FromUTF8(source.path),
+         if (!still) data.media = VideoPreview::FindPreparedVideoThumbnails(wxString::FromUTF8(source.path),
             source.duration, parent);
          }
          catch (const std::exception &) {
@@ -390,7 +406,7 @@ class VideoTrackView final : public CommonChannelView {
                [](const auto &a,const auto &b) { return a.second.used < b.second.used; });
             mSources.erase(oldest);
          }
-         found = mSources.emplace(source.path,std::move(data)).first;
+         found = mSources.emplace(key,std::move(data)).first;
       }
       found->second.used = ++mUse; return found->second;
    }
@@ -402,7 +418,7 @@ public:
          if (it->second.frames.empty()) it = mSources.erase(it); else ++it;
    }
    bool HasThumbnails() const {
-      return std::any_of(mSources.begin(),mSources.end(),
+      return mGeneratedThumbnails || std::any_of(mSources.begin(),mSources.end(),
          [](const auto &source) { return !source.second.frames.empty(); });
    }
    void SetGhost(std::optional<Timeline> value) { mGhost = std::move(value); }
@@ -464,7 +480,7 @@ public:
    }
    void Draw(TrackPanelDrawingContext &context,const wxRect &rect,unsigned pass) override {
       if (pass != TrackArtist::PassTracks) { CommonChannelView::Draw(context,rect,pass); return; }
-      mLastRect = rect;
+      mLastRect = rect; mGeneratedThumbnails = false;
       const auto track = std::dynamic_pointer_cast<AuTopsyVideoTrack>(FindTrack());
       if (!track) return;
       const auto owner = track->GetOwner();
@@ -498,13 +514,27 @@ public:
             for (; cell < right; cell += FrameWidth) {
                const auto time = std::clamp(view.PositionToTime(cell+FrameWidth/2,rect.x),
                   clip.start, std::nextafter(clip.End(), clip.start));
-               const auto sample = SampleVideoContent(thumbnailClip, source, clip.ContentTimeAtProjectTime(time));
+               const auto sample = SampleVideoThumbnail(thumbnailClip, source, clip.ContentTimeAtProjectTime(time));
                if (sample) {
-                  auto &frames = Frames(sample.source,&ProjectWindow::Get(*project)).frames;
-                  if (!frames.empty()) {
-                     const auto index = std::clamp(int(sample.sourceTime/sample.source.duration*frames.size()),
-                        0,int(frames.size())-1);
-                     dc.DrawBitmap(frames[index],cell,rect.y+25);
+                  const bool titleCard = sample.generated &&
+                     sample.generated->operation == VideoClipContent::Operation::Title;
+                  if (titleCard) {
+                     mGeneratedThumbnails = true;
+                     wxDCClipper card{dc, wxRect{cell, rect.y+25, FrameWidth, pictureHeight}};
+                     dc.SetBrush(*wxBLACK_BRUSH); dc.DrawRectangle(cell, rect.y+25, FrameWidth, pictureHeight);
+                     dc.SetTextForeground(*wxWHITE);
+                     dc.DrawLabel(wxString::FromUTF8(sample.generated->title),
+                        wxRect{cell+3, rect.y+25, FrameWidth-6, pictureHeight}, wxALIGN_CENTER);
+                  }
+                  const bool still = sample.generated &&
+                     sample.generated->operation == VideoClipContent::Operation::Image;
+                  if (!titleCard) {
+                     auto &frames = Frames(sample.source,&ProjectWindow::Get(*project), still).frames;
+                     if (!frames.empty()) {
+                        const auto index = std::clamp(int(sample.sourceTime/sample.source.duration*frames.size()),
+                           0,int(frames.size())-1);
+                        dc.DrawBitmap(frames[index],cell,rect.y+25);
+                     }
                   }
                }
                dc.SetPen(wxPen(wxColour(22,23,26))); dc.DrawLine(cell,rect.y+25,cell,rect.y+25+pictureHeight);
@@ -520,7 +550,15 @@ public:
          dc.SetTextForeground(*wxWHITE);
          auto title = clip.content ? wxString::Format(_("Joined video (%zu pieces)"), clip.content->parts.size())
              : wxFileName(wxString::FromUTF8(source.path)).GetFullName();
+         if (clip.content) switch (clip.content->operation) {
+            case VideoClipContent::Operation::Reverse: title = _("Reversed picture"); break;
+            case VideoClipContent::Operation::Freeze: title = _("Freeze frame"); break;
+            case VideoClipContent::Operation::Image: title = wxFileName(wxString::FromUTF8(clip.content->imagePath)).GetFullName(); break;
+            case VideoClipContent::Operation::Title: title = _("Title: ") + wxString::FromUTF8(clip.content->title); break;
+            default: break;
+         }
          if (clip.playbackRate != 1) title = wxString::Format("%.8g%%  ", clip.playbackRate * 100) + title;
+         if (!track->Timeline().placement.parentId.empty()) title = _("[Embedded] ") + title;
          if (clip.muted) title = _("[Muted] ") + title;
          if (clip.timingLocked) title = _("[Locked] ") + title;
          dc.DrawText(title,left+5,rect.y+5);
@@ -637,6 +675,12 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(9,_("Separate Joined Clip"));
          menu.AppendSeparator(); menu.Append(10,_("Change Clip Speed...")); menu.Enable(10, clipId != 0);
          menu.Append(11, _("Crop Picture...")); menu.Enable(11, clipId != 0);
+         menu.Append(21, _("Reverse Picture")); menu.Enable(21, clipId != 0);
+         menu.Append(22, _("Freeze Frame...")); menu.Enable(22, clipId != 0);
+         menu.Append(23, _("Repeat Picture...")); menu.Enable(23, clipId != 0);
+         menu.Append(19, _("Picture-in-Picture..."));
+         menu.Append(20, _("Detach Embedded Video"));
+         menu.Enable(20, !track->Timeline().placement.parentId.empty());
          menu.Append(16, _("Fade Picture...")); menu.Enable(16, clipId != 0);
          menu.Append(17, _("Crossfade from Video Below...")); menu.Enable(17, clipId != 0);
          menu.Append(14, _("Clip Properties...")); menu.Enable(14, clipId != 0);
@@ -679,6 +723,17 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          }
          else if (choice == 12)
             ClipActions::ShowVideoClipExport(*project, *track, clipId, parent);
+         else if (choice >= 21 && choice <= 23) {
+            const VideoEditing::VideoClipPictureAction actions[]{VideoEditing::VideoClipPictureAction::Reverse,
+               VideoEditing::VideoClipPictureAction::Freeze, VideoEditing::VideoClipPictureAction::Repeat};
+            VideoEditing::ShowVideoClipPictureAction(*project, *track, clipId, actions[choice - 21], parent, clickTime);
+         }
+         else if (choice == 19)
+            VideoEditing::ShowVideoTrackEmbeddingDialog(*project, *track, parent);
+         else if (choice == 20) {
+            auto placement = track->Timeline().placement; placement.parentId.clear(); placement.rectangle = {};
+            VideoEditing::ChangeProjectVideoTrackPlacement(*project, *track, placement);
+         }
          else if (choice == 11)
             VideoEditing::ShowVideoClipCropDialog(*project, *track, clipId, parent);
          else if (choice == 10) {
@@ -735,11 +790,28 @@ class VideoTrackMenu final : public PopupMenuTable {
       SetProjectVideoTrackVisibility(mData->project, track, track.VideoVisible(), !track.VideoSolo());
       mData->result = RefreshCode::RefreshAll;
    }
+   void PlacePicture(wxCommandEvent &) {
+      VideoEditing::ShowVideoTrackEmbeddingDialog(mData->project,
+         static_cast<AuTopsyVideoTrack&>(mData->track), &ProjectWindow::Get(mData->project));
+      mData->result = RefreshCode::RefreshAll;
+   }
+   void DetachPicture(wxCommandEvent &) {
+      auto &track = static_cast<AuTopsyVideoTrack&>(mData->track);
+      auto placement = track.Timeline().placement; placement.parentId.clear(); placement.rectangle = {};
+      VideoEditing::ChangeProjectVideoTrackPlacement(mData->project, track, placement);
+      mData->result = RefreshCode::RefreshAll;
+   }
 public:
    static VideoTrackMenu &Instance() { static VideoTrackMenu menu; return menu; }
    void InitUserData(void *data) override { mData = static_cast<CommonTrackControls::InitMenuData*>(data); }
 };
 BEGIN_POPUP_MENU(VideoTrackMenu)
+   AppendItem("PlaceVideoLayer", 32003, XXO("Picture-in-Picture..."), POPUP_MENU_FN(PlacePicture));
+   AppendItem("DetachVideoLayer", 32004, XXO("Detach Embedded Video"), POPUP_MENU_FN(DetachPicture),
+      [](PopupMenuHandler &handler, wxMenu &menu, int id) {
+         const auto &track = static_cast<AuTopsyVideoTrack&>(static_cast<VideoTrackMenu&>(handler).mData->track);
+         menu.Enable(id, !track.Timeline().placement.parentId.empty());
+      });
    AppendCheckItem("ToggleVideoMute",32001,XXO("Mute Video"),POPUP_MENU_FN(ToggleMute),
       [](PopupMenuHandler &handler, wxMenu &menu, int id) {
          const auto &track = static_cast<AuTopsyVideoTrack&>(static_cast<VideoTrackMenu&>(handler).mData->track);

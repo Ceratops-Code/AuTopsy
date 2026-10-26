@@ -121,6 +121,8 @@ static bool SeparateOneLevel(Timeline &timeline, double from, double to)
       if (!clip.content || std::find(selected.begin(), selected.end(), i) == selected.end()) {
          changed.clips.push_back(clip); continue;
       }
+      if (clip.content->operation != VideoClipContent::Operation::Sequence)
+         throw std::runtime_error("This clip contains a picture effect, not a joined sequence. Use Undo to remove the effect.");
       any = true;
       const auto windowEnd = clip.ContentTimeAtProjectTime(clip.End());
       if (std::none_of(clip.content->parts.begin(), clip.content->parts.end(), [&](const auto &part) {

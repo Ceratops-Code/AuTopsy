@@ -64,9 +64,7 @@ bool ChangeVideoClipFades(AudacityProject &project, AuTopsyVideoTrack &track,
    if (fadeIn == 0 && fadeOut == 0) clip.opacityModifiers.clear();
    if (clip.opacity == FindClip(track, clipId).opacity && clip.opacityModifiers == FindClip(track, clipId).opacityModifiers) return false;
    VideoTimeline::RequireWellFormedTimeline(candidate);
-   auto layers = VideoTimeline::GetProjectVisibleVideoLayers(project);
-   for (auto &layer : layers) if (layer == &track.Timeline()) layer = &candidate;
-   auto prepared = PrepareCandidateVideoEffects(project, layers, &ProjectWindow::Get(project));
+   auto prepared = PrepareCandidateVideoEffects(project, track, candidate, &ProjectWindow::Get(project));
    track.SetTimeline(std::move(candidate));
    try { ProjectHistory::Get(project).PushState(XO("Changed picture fades"), XO("Picture Fades")); }
    catch (...) { track.SetTimeline(original); throw; }

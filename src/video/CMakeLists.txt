@@ -1,6 +1,6 @@
 # One source owner for standalone checks and the host's native test targets.
-set(autopsy_video_playback_test_sources EditVideoContent.cpp JoinVideoClips.cpp TestVideoPlayback.cpp)
-set(autopsy_video_edits_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp)
+set(autopsy_video_playback_test_sources EditVideoContent.cpp RenderVideoComposition.cpp JoinVideoClips.cpp TestVideoPlayback.cpp)
+set(autopsy_video_edits_test_sources EditVideoContent.cpp RenderVideoComposition.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp)
 set(autopsy_video_composition_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp
    EvaluateVideoTimeline.cpp RenderVideoComposition.cpp PlanVideoExport.cpp PlanVideoTransitions.cpp TestVideoComposition.cpp)
 
@@ -149,6 +149,8 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    RenderVideoComposition.cpp RenderVideoComposition.h EditVideoComposition.cpp EditVideoComposition.h
    ShowVideoCrop.cpp ShowVideoCrop.h
    PrepareVideoEffects.cpp PrepareVideoEffects.h
+   PrepareGeneratedVideo.cpp PrepareGeneratedVideo.h
+   ../update/CheckProductUpdates.cpp ../update/CheckProductUpdates.h ../update/ChooseProductUpdate.h
    EditVideoFades.cpp EditVideoFades.h
    PlanVideoExport.cpp PlanVideoExport.h
    PlanVideoTransitions.cpp PlanVideoTransitions.h
@@ -157,13 +159,23 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    ../clip-groups/LinkMediaClips.cpp ../clip-groups/LinkMediaClips.h
    ../clip-groups/EditClipMarkers.cpp ../clip-groups/EditClipMarkers.h)
 target_include_directories(Audacity PRIVATE "${audacity_video_mpv_include}")
-target_link_libraries(Audacity PRIVATE bcrypt)
+target_link_libraries(Audacity PRIVATE bcrypt winhttp)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/autopsy-release.json" _autopsy_release_metadata)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+   "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/autopsy-release.json")
+string(JSON _autopsy_product_version GET "${_autopsy_release_metadata}" version)
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../update/CheckProductUpdates.cpp"
+   TARGET_DIRECTORY Audacity APPEND PROPERTY COMPILE_DEFINITIONS
+   "AUTOPSY_PRODUCT_VERSION=\"${_autopsy_product_version}\"")
 # Only the enabled video build changes the numeric-runtime requirement. Keep
 # this definition on the owning translation unit rather than every app source.
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../prefs/GUISettings.cpp"
    TARGET_DIRECTORY Audacity APPEND PROPERTY COMPILE_DEFINITIONS
    AUTOPSY_HAS_VIDEO_PREVIEW=1)
 set_property(SOURCE
+   "${CMAKE_CURRENT_SOURCE_DIR}/../AudacityApp.cpp"
+   "${CMAKE_CURRENT_SOURCE_DIR}/../menus/HelpMenus.cpp"
+   "${CMAKE_CURRENT_SOURCE_DIR}/../AboutDialog.cpp"
    "${CMAKE_CURRENT_SOURCE_DIR}/../menus/EditMenus.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/GroupAudioClips.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/SelectMediaClips.cpp"

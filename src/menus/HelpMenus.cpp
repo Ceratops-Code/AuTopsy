@@ -29,7 +29,7 @@
 
 #include "FrameStatisticsDialog.h"
 
-#if defined(HAVE_UPDATES_CHECK)
+#if defined(HAVE_UPDATES_CHECK) && !defined(AUTOPSY_HAS_VIDEO_PREVIEW)
 #include "update/UpdateManager.h"
 #endif
 
@@ -370,7 +370,7 @@ void OnFrameStatistics(const CommandContext&)
    FrameStatisticsDialog::Show(true);
 }
 
-#if defined(HAVE_UPDATES_CHECK)
+#if defined(HAVE_UPDATES_CHECK) && !defined(AUTOPSY_HAS_VIDEO_PREVIEW)
 void OnCheckForUpdates(const CommandContext &WXUNUSED(context))
 {
     UpdateManager::GetInstance().GetUpdates(false, false);
@@ -469,7 +469,7 @@ auto HelpMenu()
       ),
 
       Section( "Extra",
-   #if defined(HAVE_UPDATES_CHECK)
+   #if defined(HAVE_UPDATES_CHECK) && !defined(AUTOPSY_HAS_VIDEO_PREVIEW)
          Command( wxT("Updates"), XXO("&Check for Updates..."),
             OnCheckForUpdates,
             AlwaysEnabledFlag ),

@@ -609,8 +609,11 @@ extractor/compiler children when their worker exits, including abrupt exits.
 
 The packager publishes `package/_installer-x64.json` atomically, naming the
 exact installer and its SHA-256. The builder consumes that descriptor and writes
-one current `package/_build-manifest.json` with the source revision, unsigned
-status, installer hash and pinned dependency identities. Failure replaces
+one current `package/_build-manifest.json` with the source revision, product
+version, unsigned status, installer hash and pinned dependency identities.
+`resources/autopsy-release.json` supplies the app and installer version; installer
+filenames contain that full identity, and publication refuses a different tag.
+Failure replaces
 `_build_command_failure.json` with the exact invocation, exit and both output
 streams; success removes it. Pending record files are removed on the next call.
 The existing per-architecture installer retention remains current plus two
@@ -764,6 +767,15 @@ linked partners outside the range and on unselected tracks, and repeats those
 edits through Undo/Redo and save/reopen. Capture-model cases keep inactive
 virtual cameras in the camera choices while excluding known audio inputs.
 Native adapter inputs are reported separately, without implying desktop acceptance.
+`fork-video-embedding` and `fork-video-embedding-controls` check saved parent
+identities, visual placement, movement and decoded composition pixels.
+`fork-video-reverse`, `fork-video-freeze`, `fork-video-repeat` and
+`fork-video-pictures` own the generated-picture journeys; their fixtures use
+colours, tones, a still image and neutral text. The picture case includes the
+stock-Audacity audio consumer. `fork-product-updates` uses a private owner-scoped
+release fixture by default. Set `AUTOPSY_TEST_UPDATES_SOURCE=github` only for a
+separate live public-API transport check; its acceptance scope is distinct and
+it never downloads or executes an installer.
 For a failed private-process case, `AUTOPSY_TEST_NATIVE_DEBUGGER` can name an
 existing Microsoft `cdb.exe`. The harness attaches only to that case's exact PID,
 records crash stacks in its bounded `_native-debugger.log`, and removes the log

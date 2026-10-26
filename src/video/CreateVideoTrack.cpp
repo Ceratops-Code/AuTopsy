@@ -9,6 +9,7 @@
 #include "ProjectAudioIO.h"
 #include "TrackFocus.h"
 #include "Viewport.h"
+#include "Uuid.h"
 #include "ViewInfo.h"
 #include "SelectUtilities.h"
 #include "XMLTagHandler.h"
@@ -99,7 +100,10 @@ public:
 };
 }
 
-AuTopsyVideoTrack::AuTopsyVideoTrack() { SetName(_("Video Track")); }
+AuTopsyVideoTrack::AuTopsyVideoTrack() {
+   mTimeline.placement.id = audacity::Uuid::Generate().ToHexString();
+   SetName(_("Video Track"));
+}
 AuTopsyVideoTrack::AuTopsyVideoTrack(const AuTopsyVideoTrack &other, ProtectedCreationArg &&arg)
    : UniqueChannelTrack<>(other, std::move(arg)), mTimeline(other.mTimeline),
      mClipboardDuration(other.mClipboardDuration), mVisible(other.mVisible), mSolo(other.mSolo) {}
@@ -122,6 +126,9 @@ uint64_t AuTopsyVideoTrack::NextPictureRevision()
 }
 void AuTopsyVideoTrack::SetTimeline(VideoTimeline::Timeline timeline)
 {
+   // Range-only copies have no layer identity. Preserve this native layer's
+   // owned presentation rather than giving a copied clip a second parent.
+   if (timeline.placement.id.empty()) timeline.placement = mTimeline.placement;
    VideoTimeline::RequireWellFormedTimeline(timeline);
    mTimeline = std::move(timeline); mPictureRevision = NextPictureRevision(); Notify(false);
 }
@@ -139,7 +146,9 @@ Track::Holder AuTopsyVideoTrack::Copy(double from, double to, bool) const
 {
    auto result = std::make_shared<AuTopsyVideoTrack>();
    result->Init(*this); result->mVisible = mVisible; result->mSolo = mSolo;
+   const auto identity = result->mTimeline.placement.id;
    result->mTimeline = VideoTimeline::CopyVideoRange(mTimeline, from, to);
+   result->mTimeline.placement.id = identity;
    result->mClipboardDuration = to - from;
    return result;
 }
@@ -182,6 +191,17 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       if (mReadError) return false;
       if (tag == "videotrack") {
          mTimeline = {}; mReadingClips.clear(); mReadingCount = 0; mReadError = false;
+         mTimeline.placement.id = audacity::Uuid::Generate().ToHexString();
+         std::string_view identity, parent;
+         if (!ReadOptionalAttribute(attributes, "videoLayerId", identity) ||
+             !ReadOptionalAttribute(attributes, "videoParentId", parent) ||
+             !ReadOptionalAttribute(attributes, "videoX", mTimeline.placement.rectangle.x) ||
+             !ReadOptionalAttribute(attributes, "videoY", mTimeline.placement.rectangle.y) ||
+             !ReadOptionalAttribute(attributes, "videoScaleX", mTimeline.placement.rectangle.width) ||
+             !ReadOptionalAttribute(attributes, "videoScaleY", mTimeline.placement.rectangle.height)) return false;
+         if (!identity.empty()) mTimeline.placement.id = identity;
+         mTimeline.placement.parentId = parent;
+         VideoEditing::RequireUsableVideoPlacement(mTimeline.placement);
          int schema{};
          if (!ReadOptionalAttribute(attributes, "videoSchema", schema) || schema < 0 || schema > 1) return false;
          int visible = 1;
@@ -257,6 +277,22 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
          reading.content = std::make_shared<VideoTimeline::VideoClipContent>();
          if (!ReadAttribute(attributes, "contentDuration", reading.content->duration) ||
              !ReadAttribute(attributes, "contentFps", reading.content->frameRate)) return false;
+         int operation{}; std::string_view image, localImage, title;
+         if (!ReadOptionalAttribute(attributes, "contentOperation", operation) || operation < 0 || operation > 4 ||
+             !ReadOptionalAttribute(attributes, "contentHeldTime", reading.content->heldTime) ||
+             !ReadOptionalAttribute(attributes, "contentAudioOffset", reading.content->audioContentOffset) ||
+             !ReadOptionalAttribute(attributes, "contentImage", image) ||
+             !ReadOptionalAttribute(attributes, "contentLocalImage", localImage) ||
+             !ReadOptionalAttribute(attributes, "contentTitle", title) ||
+             !ReadOptionalAttribute(attributes, "contentWidth", reading.content->width) ||
+             !ReadOptionalAttribute(attributes, "contentHeight", reading.content->height)) return false;
+         reading.content->operation = static_cast<VideoTimeline::VideoClipContent::Operation>(operation);
+         reading.content->title = title;
+         if (!image.empty()) {
+            const auto owner = GetOwner();
+            reading.content->imagePath = ProjectMedia::OpenVideoSourcePath(owner ? owner->GetOwner() : nullptr,
+               std::string(image), std::string(localImage));
+         }
       }
       if (!mReadingClips.empty() && !mReadingClips.back().content) return false;
       mReadingClips.push_back(std::move(reading)); return true;
@@ -295,6 +331,15 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
    VideoTimeline::RequireWellFormedTimeline(mTimeline);
    writer.StartTag("videotrack"); WriteCommonXMLAttributes(writer);
    writer.WriteAttr("videoSchema", 1);
+   writer.WriteAttr("videoLayerId", wxString::FromUTF8(mTimeline.placement.id));
+   if (!mTimeline.placement.parentId.empty())
+      writer.WriteAttr("videoParentId", wxString::FromUTF8(mTimeline.placement.parentId));
+   if (!(mTimeline.placement.rectangle == VideoEditing::VideoFrameRectangle{})) {
+      writer.WriteAttr("videoX", mTimeline.placement.rectangle.x, 17);
+      writer.WriteAttr("videoY", mTimeline.placement.rectangle.y, 17);
+      writer.WriteAttr("videoScaleX", mTimeline.placement.rectangle.width, 17);
+      writer.WriteAttr("videoScaleY", mTimeline.placement.rectangle.height, 17);
+   }
    writer.WriteAttr("videoVisible", mVisible ? 1 : 0);
    writer.WriteAttr("videoSolo", mSolo ? 1 : 0);
    writer.WriteAttr("videoNextId", static_cast<long long>(mTimeline.nextId));
@@ -340,6 +385,18 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
          writer.WriteAttr("contentVersion", 1);
          writer.WriteAttr("contentDuration", clip.content->duration, 17);
          writer.WriteAttr("contentFps", clip.content->frameRate, 17);
+         if (clip.content->operation != VideoTimeline::VideoClipContent::Operation::Sequence) {
+            writer.WriteAttr("contentOperation", static_cast<int>(clip.content->operation));
+            writer.WriteAttr("contentHeldTime", clip.content->heldTime, 17);
+            writer.WriteAttr("contentAudioOffset", clip.content->audioContentOffset, 17);
+            writer.WriteAttr("contentWidth", clip.content->width); writer.WriteAttr("contentHeight", clip.content->height);
+            if (!clip.content->title.empty()) writer.WriteAttr("contentTitle", wxString::FromUTF8(clip.content->title));
+            if (!clip.content->imagePath.empty()) {
+               writer.WriteAttr("contentImage", wxString::FromUTF8(ProjectMedia::StoreVideoSourcePath(project, clip.content->imagePath)));
+               const auto localImage = ProjectMedia::StoreLocalVideoSourcePath(project, clip.content->imagePath);
+               if (!localImage.empty()) writer.WriteAttr("contentLocalImage", wxString::FromUTF8(localImage));
+            }
+         }
          for (const auto &part : clip.content->parts) self(self, part);
       }
       writer.EndTag("videoclip");
@@ -437,7 +494,11 @@ bool MoveVideoClipBetweenTracks(AudacityProject &project, AuTopsyVideoTrack &sou
       throw std::runtime_error("Stop playback before moving video clips.");
    const auto &members = source.Timeline().clips;
    const auto linked = std::find_if(members.begin(), members.end(), [id](const auto &clip) { return clip.id == id; });
-   if (linked != members.end() && !VideoContentLinkGroups(*linked).empty()) {
+   const auto boundFamilies = ClipGroups::BoundVideoTrackMoveFamilies(TrackList::Get(project));
+   const bool bound = boundFamilies.count(&source) != 0;
+   if (bound && &source != &destination)
+      throw std::runtime_error("Detach this embedded video track before moving its clips to another track.");
+   if (linked != members.end() && (!VideoContentLinkGroups(*linked).empty() || bound)) {
       const auto rate = VideoContentFrameRate(*linked, SourceFor(source.Timeline(), *linked));
       const auto target = std::round(start * rate) / rate;
       if (std::abs(target - linked->start) > 1e-10) {

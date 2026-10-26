@@ -84,6 +84,14 @@ set(_pending_installer "${_build_root}/package/_autopsy-installer-${INSTALLER_SU
 file(REMOVE "${_pending_installer}")
 file(REMOVE "${_build_root}/package/_installer-${INSTALLER_SUFFIX}.json.pending")
 
+# Product release metadata owns the public identity; numeric PE fields remain
+# the upstream audio engine version required by Windows version resources.
+file(READ "${SOURCE_DIR}/resources/autopsy-release.json" _release_metadata)
+string(JSON AUTOPSY_PRODUCT_VERSION GET "${_release_metadata}" version)
+if(NOT AUTOPSY_PRODUCT_VERSION MATCHES "^[0-9]+[.][0-9]+[.][0-9]+(-autopsy[.][0-9]+)?$")
+    message(FATAL_ERROR "Malformed AuTopsy product release version")
+endif()
+
 file(COPY "${SOURCE_DIR}/win/Inno_Setup_Wizard/" DESTINATION "${OUTPUT_DIR}")
 configure_file("${OUTPUT_DIR}/audacity.iss.in" "${OUTPUT_DIR}/audacity.iss")
 configure_file("${OUTPUT_DIR}/audacity_InnoWizard_InfoBefore.rtf.in" "${OUTPUT_DIR}/audacity_InnoWizard_InfoBefore.rtf")

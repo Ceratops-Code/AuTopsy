@@ -10,7 +10,9 @@ bool SameTimeline(const VideoTimeline::Timeline &a, const VideoTimeline::Timelin
    if (a.sourcePath != b.sourcePath || a.sourceDuration != b.sourceDuration ||
        a.frameRate != b.frameRate || a.nextId != b.nextId ||
        a.sourceWidth != b.sourceWidth || a.sourceHeight != b.sourceHeight ||
-       a.protectedSourcePaths != b.protectedSourcePaths || a.clips.size() != b.clips.size())
+       a.protectedSourcePaths != b.protectedSourcePaths || a.clips.size() != b.clips.size() ||
+       a.placement.id != b.placement.id || a.placement.parentId != b.placement.parentId ||
+       !(a.placement.rectangle == b.placement.rectangle))
       return false;
    for (size_t i = 0; i < a.clips.size(); ++i) {
       const auto &x = a.clips[i], &y = b.clips[i];

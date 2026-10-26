@@ -270,6 +270,23 @@ independent fork and is not an official Audacity release. Upstream names in
 credits, license notices, compatibility identifiers, and technical references
 identify their original projects.
 
+## AuTopsy updates
+
+**Help > Check for AuTopsy Updates...** checks the public
+[Ceratops-Code/AuTopsy releases](https://github.com/Ceratops-Code/AuTopsy/releases).
+It shows the current release, release notes and a Windows x64 installer link.
+Automatic checks are off initially; opt in to daily or weekly checks and choose
+whether previews are included. Preview numbers are compared numerically, so an
+older public release is never offered over a newer local build. Drafts, releases
+without an uploaded installer and foreign download links are ignored.
+
+Checks send no project, media or account data. Offline, malformed and rate-limit
+responses report a failed check without claiming the app is current. Automatic
+checks use a passive notice once per new version. Downloads open in your browser;
+AuTopsy never executes an installer or closes an editing session. Preview installers
+remain unsigned under the code-signing policy above. App, installer and release
+tag share the product identity in `resources/autopsy-release.json`.
+
 ## Video tracks (Windows fork)
 
 This fork follows upstream's audacity3 branch and adds native video tracks in
@@ -316,6 +333,31 @@ pipes, so it can run alongside an installed copy of Audacity.
    Export starts at zero and ends at the last video clip; short audio is padded
    with silence and later audio is excluded. The current selection does not
    limit this export. Audio is stereo AAC at 48 kHz, 256 kbit/s.
+
+Right-click a video clip and choose **Picture-in-Picture...** to select a parent
+video track and place the child inside its picture. Drag the rectangle to move it,
+drag a corner to resize it, or enter percentages. The child stays on its own track,
+marked **[Embedded]**. Bound picture/sound families move together; detach through
+the same menu for independent movement. Parent links use saved identities and
+survive track reordering and project reopen. Parent gaps or mute hide descendants;
+soloing a member includes its family. Invalid parents and cycles are rejected
+before the current picture changes.
+
+The clip menu also offers **Reverse Picture**, **Freeze Frame...** and
+**Repeat Picture...**. Reverse changes picture order and preserves the forward
+soundtrack. Timeline thumbnails follow the reversed order and held frame.
+Freeze holds the right-clicked frame for a chosen length. Repeat adds
+picture-only copies in free space; it does not repeat audio. All retain original
+media, support Undo/Redo and save/reopen, and remain editable by trim, crop and
+ordinary placement tools. Separate Joined Clip applies to joined sequences,
+not to removing a picture effect; use Undo to cancel an effect.
+
+**File > Import > Still Image...** adds a picture clip with an explicit duration;
+**File > Import > Title Card...** adds white text on a black card. Both use normal
+video tracks and can be cropped, placed inside another picture and exported with
+the audible project mix. Title cards support line breaks; rich text, transparent
+caption overlays and subtitle interchange remain backlog items. Media relinking
+also accepts still images while retaining their timing and edits.
 
 Each video track has visible **Mute** and **Solo** buttons, also available in
 its track menu. They affect picture in both preview and export; the separate

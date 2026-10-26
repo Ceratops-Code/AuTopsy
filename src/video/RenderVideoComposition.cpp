@@ -63,3 +63,17 @@ std::string VideoCropFilterExpression(const VideoFrameCrop &crop)
    return text.str();
 }
 }
+
+namespace VideoEditing {
+VideoPixelRectangle CalculateVideoPlacementRectangle(const VideoFrameRectangle &rectangle, int width, int height)
+{
+   RequireUsableVideoPlacement({{}, {}, rectangle});
+   if (width < 2 || height < 2 || width > 65536 || height > 65536 || width % 2 || height % 2)
+      throw std::runtime_error("Video placement needs an even usable canvas.");
+   const auto even = [](double value) { return static_cast<int>(std::llround(value / 2)) * 2; };
+   const auto x = std::clamp(even(rectangle.x * width), 0, width - 2);
+   const auto y = std::clamp(even(rectangle.y * height), 0, height - 2);
+   return {x, y, std::clamp(even(rectangle.width * width), 2, width - x),
+      std::clamp(even(rectangle.height * height), 2, height - y)};
+}
+}
