@@ -1262,6 +1262,8 @@ def native_test_inputs(args, executable, module, display):
     if args.case == "video-encoder-boundaries":
         from test_video_export_timing import video_hardware_scope
         inputs["execution_scope"]["video_hardware"] = video_hardware_scope()
+    if args.case == "display-guard":
+        inputs["execution_scope"]["display_handle_probe"] = "invalid-handle-on-every-query.v1"
     if debugger := os.environ.get("AUTOPSY_TEST_NATIVE_DEBUGGER"):
         inputs["execution_scope"]["native_debugger_sha256"] = sha(Path(debugger).resolve(strict=True))
     return inputs
@@ -1756,6 +1758,9 @@ def main():
             else "missing-test-display",
         )
         initial_preferences = (profile / "autopsy.cfg").read_text(encoding="utf-8")
+        environment.pop("AUTOPSY_TEST_STALE_MONITOR", None)
+        if args.case == "display-guard":
+            environment["AUTOPSY_TEST_STALE_MONITOR"] = "1"
         if args.case in RECORDING_CASES[1:]:
             environment["AUTOPSY_TEST_SAVE_ROOT"] = str(audio.resolve())
         if args.case in VIDEO_RECORDING_CASES:
@@ -1930,9 +1935,12 @@ def main():
                         f"App output:\n{(root / '_app.log').read_text(encoding='utf-8', errors='replace')[-8000:]}\n"
                         f"Native crash trace: {trace if trace.is_file() else '<absent>'}")
                 log.flush()
+                app_output = (root / "_app.log").read_text(encoding="utf-8", errors="replace")
+                if args.case == "display-guard" and "AUTOPSY_TEST_DISPLAY rebound-stale-handle" not in app_output:
+                    raise RuntimeError("The native display guard did not exercise stale-handle replacement.")
                 shows = re.findall(
                     r"^AUTOPSY_TEST_WINDOW show (\d+) (-?\d+) (-?\d+) (\d+) (\d+)$",
-                    (root / "_app.log").read_text(encoding="utf-8", errors="replace"),
+                    app_output,
                     re.MULTILINE,
                 )
                 assert shows, "No pre-show placement observations were recorded."

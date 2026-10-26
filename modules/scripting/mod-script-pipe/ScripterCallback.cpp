@@ -36,6 +36,7 @@ namespace {
 class TestDisplayGuard final : public wxEventFilter {
    wxString mDevice;
    HMONITOR mMonitor{};
+   bool mProbeStaleMonitor{}, mReportedProbe{};
    std::set<HWND> mWindows;
 
    [[noreturn]] static void Fail(const char *operation)
@@ -50,9 +51,9 @@ class TestDisplayGuard final : public wxEventFilter {
 
    void BindMonitor()
    {
-      // Resolve identity at startup and actual topology changes, outside the
-      // repeated window-placement path. HMONITOR survives DPI-context changes;
-      // rectangles do not, so WorkArea() always reads current bounds afresh.
+      // The device name is the identity. Windows can replace HMONITOR before
+      // delivering WM_DISPLAYCHANGE, so a stale cache must resolve this exact
+      // device again before any placement; no nearest-monitor fallback exists.
       struct Displays {
          const wxString &device;
          HMONITOR monitor{};
@@ -98,21 +99,33 @@ class TestDisplayGuard final : public wxEventFilter {
       mMonitor = displays.monitor;
    }
 
-   RECT WorkArea() const
+   RECT WorkArea()
    {
       MONITORINFOEXW info{}; info.cbSize = sizeof(info);
-      // A missing/replaced handle or changed identity stops the private app;
-      // neither old coordinates nor the nearest/primary monitor are fallbacks.
-      if (!mMonitor || !GetMonitorInfoW(mMonitor, reinterpret_cast<MONITORINFO *>(&info)) ||
-         mDevice != info.szDevice ||
+      if (mProbeStaleMonitor) mMonitor = reinterpret_cast<HMONITOR>(static_cast<INT_PTR>(-1));
+      if (!mMonitor) Fail("the test display has no binding");
+      const auto located = GetMonitorInfoW(mMonitor, reinterpret_cast<MONITORINFO *>(&info));
+      if (!located && GetLastError() != ERROR_INVALID_MONITOR_HANDLE)
+         Fail("read the bound test display");
+      if (!located || mDevice != info.szDevice) {
+         BindMonitor();
+         if (!GetMonitorInfoW(mMonitor, reinterpret_cast<MONITORINFO *>(&info)))
+            Fail("read the refreshed test display");
+         if (mProbeStaleMonitor && !mReportedProbe) {
+            std::fprintf(stderr, "AUTOPSY_TEST_DISPLAY rebound-stale-handle\n");
+            std::fflush(stderr);
+            mReportedProbe = true;
+         }
+      }
+      if (mDevice != info.szDevice ||
          (GetSystemMetrics(SM_CMONITORS) > 1 && mDevice == L"\\\\.\\DISPLAY1") ||
          info.rcWork.right - info.rcWork.left < 640 ||
          info.rcWork.bottom - info.rcWork.top < 480)
-         Fail("the bound test display is missing, replaced, forbidden, or too small");
+         Fail("the bound test display is missing, forbidden, or too small");
       return info.rcWork;
    }
 
-   void Constrain(HWND window, WINDOWPOS &position) const
+   void Constrain(HWND window, WINDOWPOS &position)
    {
       const auto work = WorkArea();
       RECT current{};
@@ -181,6 +194,8 @@ class TestDisplayGuard final : public wxEventFilter {
 public:
    explicit TestDisplayGuard(wxString device) : mDevice{std::move(device)}
    {
+      wxString probe;
+      mProbeStaleMonitor = wxGetEnv("AUTOPSY_TEST_STALE_MONITOR", &probe) && probe == "1";
       BindMonitor();
       WorkArea();
       wxEvtHandler::AddFilter(this);
