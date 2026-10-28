@@ -82,6 +82,7 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=N
         ("SetWindowPos", [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.UINT], w.BOOL),
         ("SetThreadDpiAwarenessContext", [ctypes.c_void_p], ctypes.c_void_p),
         ("WindowFromPoint", [w.POINT], w.HWND),
+        ("GetClassNameW", [w.HWND, w.LPWSTR, ctypes.c_int], ctypes.c_int),
     ):
         operation = getattr(user, name)
         operation.argtypes, operation.restype = arguments, result
@@ -100,11 +101,26 @@ def expect_preview_crop_pixels(client, root, ffmpeg, expected, *, preview_info=N
             bounds = (rectangle.left, rectangle.top, rectangle.right, rectangle.bottom)
             assert 0 < rectangle.right - rectangle.left < 6000
             assert 0 < rectangle.bottom - rectangle.top < 4000
+            blocked = []
             for x, y in ((rectangle.left + 4, rectangle.top + 4),
                          (rectangle.right - 4, rectangle.bottom - 4),
                          ((rectangle.left + rectangle.right) // 2,
                           (rectangle.top + rectangle.bottom) // 2)):
-                assert user.GetAncestor(user.WindowFromPoint(w.POINT(x, y)), 2) == window, "Owned preview capture is obstructed."
+                observed = user.GetAncestor(user.WindowFromPoint(w.POINT(x, y)), 2)
+                if observed != window:
+                    kind = ctypes.create_unicode_buffer(128)
+                    user.GetClassNameW(observed, kind, len(kind))
+                    blocked.append({"point": [x, y], "handle": int(observed or 0),
+                                    "pid": native.owner(observed), "class": kind.value})
+            if blocked:
+                # Showing/resizing the preview can leave its last rectangle
+                # briefly outside the current window. Ownership is a capture
+                # precondition: wait without reading foreign pixels or moving
+                # foreign windows, and report persistent blockers precisely.
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f"Owned preview capture remains obstructed: {blocked}; expected {int(window)}")
+                time.sleep(0.025)
+                continue
             rgb = run_process([
                 ffmpeg, "-v", "error", "-nostdin", "-f", "gdigrab", "-draw_mouse", "0",
                 "-framerate", "30", "-offset_x", str(bounds[0]), "-offset_y", str(bounds[1]),
