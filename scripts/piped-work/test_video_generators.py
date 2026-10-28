@@ -255,9 +255,9 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     client.send("Undo"); assert rows() == added
     # Split/join and nested picture effects must retain alpha in their private
     # intermediates. Checking only the direct PNG would miss black-box regressions.
-    select_clip_range(client, 2, 2, text_track); client.send("SplitVideo")
+    select_clip_range(client, 2, 2, text_track); client.send("Split")
     split = rows()
-    assert [(row["start"], row["end"]) for row in split if row["track"] == text_track] == [(1, 2), (2, 3)]
+    assert [(row["start"], row["end"]) for row in split if row["track"] == text_track] == [(1, 2), (2, 3)], split
     select_clip_range(client, 1, 3, text_track); client.send("JoinVideoClips")
     joined = rows(); joined_caption = next(row for row in joined if row["track"] == text_track)
     nested_id = joined_caption["id"]
