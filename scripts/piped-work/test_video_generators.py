@@ -187,7 +187,8 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     # Rejected input is the pre-publication boundary: no row, samples or history
     # effect may escape, including a failure while preparing the requested font.
     for invalid in ('Text=""', 'Text="Too late" At=6', 'Text="Outside" X=90 Width=80',
-                    'Text="Missing" Font="AuTopsy Missing Fixture Font"', 'Text="Huge" Size=91'):
+                    'Text="Missing" Font="AuTopsy Missing Fixture Font"',
+                    'Text="Too long for this tiny box" Size=90 Width=10 Height=10'):
         client.send(f'AddVideoText: Track={track} {invalid}', success=False)
         assert rows() == baseline
     parameters = 'Text="CAPTION" Font="Arial" At=1 Seconds=2 Size=55 X=10 Y=30 Width=80 Height=40'
