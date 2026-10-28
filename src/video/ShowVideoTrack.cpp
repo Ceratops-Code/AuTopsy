@@ -517,7 +517,8 @@ public:
                const auto sample = SampleVideoThumbnail(thumbnailClip, source, clip.ContentTimeAtProjectTime(time));
                if (sample) {
                   const bool titleCard = sample.generated &&
-                     sample.generated->operation == VideoClipContent::Operation::Title;
+                     (sample.generated->operation == VideoClipContent::Operation::Title ||
+                      sample.generated->operation == VideoClipContent::Operation::Text);
                   if (titleCard) {
                      mGeneratedThumbnails = true;
                      wxDCClipper card{dc, wxRect{cell, rect.y+25, FrameWidth, pictureHeight}};
@@ -555,6 +556,7 @@ public:
             case VideoClipContent::Operation::Freeze: title = _("Freeze frame"); break;
             case VideoClipContent::Operation::Image: title = wxFileName(wxString::FromUTF8(clip.content->imagePath)).GetFullName(); break;
             case VideoClipContent::Operation::Title: title = _("Title: ") + wxString::FromUTF8(clip.content->title); break;
+            case VideoClipContent::Operation::Text: title = _("Text: ") + wxString::FromUTF8(clip.content->title); break;
             default: break;
          }
          if (clip.playbackRate != 1) title = wxString::Format("%.8g%%  ", clip.playbackRate * 100) + title;
@@ -678,6 +680,11 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(21, _("Reverse Picture")); menu.Enable(21, clipId != 0);
          menu.Append(22, _("Freeze Frame...")); menu.Enable(22, clipId != 0);
          menu.Append(23, _("Repeat Picture...")); menu.Enable(23, clipId != 0);
+          menu.Append(24, _("Add Text Overlay...")); menu.Enable(24, clipId != 0);
+          const auto textClip = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
+             [clipId](const auto &clip) { return clip.id == clipId; });
+          if (textClip != track->Timeline().clips.end() && FindEditableVideoTextContent(*textClip))
+             menu.Append(25, _("Edit Text Overlay..."));
          menu.Append(19, _("Picture-in-Picture..."));
          menu.Append(20, _("Detach Embedded Video"));
          menu.Enable(20, !track->Timeline().placement.parentId.empty());
@@ -723,7 +730,9 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          }
          else if (choice == 12)
             ClipActions::ShowVideoClipExport(*project, *track, clipId, parent);
-         else if (choice >= 21 && choice <= 23) {
+          else if (choice == 24 || choice == 25)
+             VideoEditing::ShowVideoTextOverlayDialog(*project, *track, clipId, parent, clickTime, choice == 25);
+          else if (choice >= 21 && choice <= 23) {
             const VideoEditing::VideoClipPictureAction actions[]{VideoEditing::VideoClipPictureAction::Reverse,
                VideoEditing::VideoClipPictureAction::Freeze, VideoEditing::VideoClipPictureAction::Repeat};
             VideoEditing::ShowVideoClipPictureAction(*project, *track, clipId, actions[choice - 21], parent, clickTime);

@@ -10,6 +10,19 @@
 #include <vector>
 
 namespace VideoEditing {
+// Text size is a fraction of the caption box, independent of preview quality
+// and export resolution. Fonts are saved by family, never by machine paths.
+struct VideoTextAppearance {
+   std::string fontFace;
+   double heightFraction{.4};
+   uint32_t rgb{0xffffff};
+   bool bold{}, italic{}, outline{true};
+   bool operator==(const VideoTextAppearance &other) const {
+      return fontFace == other.fontFace && heightFraction == other.heightFraction &&
+         rgb == other.rgb && bold == other.bold && italic == other.italic && outline == other.outline;
+   }
+};
+void RequireUsableVideoTextAppearance(const VideoTextAppearance &appearance);
 // Canvas fractions retain framing across proxies, export sizes and relinking.
 struct VideoFrameRectangle {
    double x{}, y{}, width{1}, height{1};
@@ -97,13 +110,14 @@ struct VideoClipContent {
    std::vector<Clip> parts;
    // Generators retain their source tree. Cache files are derived and can be
    // discarded without losing the edit; sequence remains the legacy default.
-   enum class Operation { Sequence, Reverse, Freeze, Image, Title };
+   enum class Operation { Sequence, Reverse, Freeze, Image, Title, Text };
    Operation operation{Operation::Sequence};
    double heldTime{};
    // Picture-only generators keep soundtrack links on their original forward
    // clock, independently of reversed or held pictures.
    double audioContentOffset{};
    std::string imagePath, title;
+   VideoEditing::VideoTextAppearance textAppearance;
    int width{1280}, height{720};
 };
 struct VideoContentSample {
@@ -153,6 +167,14 @@ bool SameVideoContent(const Clip &left, const Clip &right);
 bool ReplaceVideoContentSource(Clip &clip, const MediaSource &fallback,
    const std::string &oldPath, const MediaSource &replacement);
 bool HasGeneratedVideoContent(const Clip &clip);
+// Transparency propagates through retained joins/reverse/freeze. Losing it in
+// an intermediate would put a black rectangle over the parent picture.
+bool VideoContentUsesAlpha(const Clip &clip);
+bool VideoContentUsesAlpha(const VideoClipContent &content);
+bool IsStaticVideoContent(const VideoClipContent &content);
+const VideoClipContent *FindEditableVideoTextContent(const Clip &clip);
+bool ChangeVideoTextContent(Clip &clip, const std::string &text,
+   const VideoEditing::VideoTextAppearance &appearance);
 // Full retained windows, including handles, remain available after reverse.
 // These operations affect picture only; the native soundtrack stays editable.
 bool ReverseVideoClip(Timeline &timeline, uint64_t id);
@@ -162,6 +184,9 @@ Clip MakeStillVideoClip(uint64_t id, double start, double seconds,
    const std::string &path, int width, int height);
 Clip MakeTitleVideoClip(uint64_t id, double start, double seconds,
    const std::string &text, int width, int height);
+Clip MakeTextVideoClip(uint64_t id, double start, double seconds,
+   const std::string &text, int width, int height,
+   const VideoEditing::VideoTextAppearance &appearance);
 }
 namespace VideoEditing {
 bool HasVideoOpacity(const VideoTimeline::Clip &clip);

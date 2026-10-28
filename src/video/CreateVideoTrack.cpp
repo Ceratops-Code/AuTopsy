@@ -278,7 +278,7 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
          if (!ReadAttribute(attributes, "contentDuration", reading.content->duration) ||
              !ReadAttribute(attributes, "contentFps", reading.content->frameRate)) return false;
          int operation{}; std::string_view image, localImage, title;
-         if (!ReadOptionalAttribute(attributes, "contentOperation", operation) || operation < 0 || operation > 4 ||
+          if (!ReadOptionalAttribute(attributes, "contentOperation", operation) || operation < 0 || operation > 5 ||
              !ReadOptionalAttribute(attributes, "contentHeldTime", reading.content->heldTime) ||
              !ReadOptionalAttribute(attributes, "contentAudioOffset", reading.content->audioContentOffset) ||
              !ReadOptionalAttribute(attributes, "contentImage", image) ||
@@ -288,6 +288,20 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
              !ReadOptionalAttribute(attributes, "contentHeight", reading.content->height)) return false;
          reading.content->operation = static_cast<VideoTimeline::VideoClipContent::Operation>(operation);
          reading.content->title = title;
+          if (reading.content->operation == VideoTimeline::VideoClipContent::Operation::Text) {
+             auto &style = reading.content->textAppearance;
+             std::string_view font; int colour = 0xffffff, bold{}, italic{}, outline = 1;
+             if (!ReadOptionalAttribute(attributes, "textFont", font) ||
+                 !ReadOptionalAttribute(attributes, "textHeight", style.heightFraction) ||
+                 !ReadOptionalAttribute(attributes, "textColour", colour) ||
+                 !ReadOptionalAttribute(attributes, "textBold", bold) ||
+                 !ReadOptionalAttribute(attributes, "textItalic", italic) ||
+                 !ReadOptionalAttribute(attributes, "textOutline", outline) || colour < 0 || colour > 0xffffff ||
+                 bold < 0 || bold > 1 || italic < 0 || italic > 1 || outline < 0 || outline > 1) return false;
+             style.fontFace = font; style.rgb = static_cast<uint32_t>(colour);
+             style.bold = bold != 0; style.italic = italic != 0; style.outline = outline != 0;
+             VideoEditing::RequireUsableVideoTextAppearance(style);
+          }
          if (!image.empty()) {
             const auto owner = GetOwner();
             reading.content->imagePath = ProjectMedia::OpenVideoSourcePath(owner ? owner->GetOwner() : nullptr,
@@ -391,6 +405,15 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
             writer.WriteAttr("contentAudioOffset", clip.content->audioContentOffset, 17);
             writer.WriteAttr("contentWidth", clip.content->width); writer.WriteAttr("contentHeight", clip.content->height);
             if (!clip.content->title.empty()) writer.WriteAttr("contentTitle", wxString::FromUTF8(clip.content->title));
+            if (clip.content->operation == VideoTimeline::VideoClipContent::Operation::Text) {
+               const auto &style = clip.content->textAppearance;
+               writer.WriteAttr("textFont", wxString::FromUTF8(style.fontFace));
+               writer.WriteAttr("textHeight", style.heightFraction, 17);
+               writer.WriteAttr("textColour", static_cast<int>(style.rgb));
+               writer.WriteAttr("textBold", style.bold ? 1 : 0);
+               writer.WriteAttr("textItalic", style.italic ? 1 : 0);
+               writer.WriteAttr("textOutline", style.outline ? 1 : 0);
+            }
             if (!clip.content->imagePath.empty()) {
                writer.WriteAttr("contentImage", wxString::FromUTF8(ProjectMedia::StoreVideoSourcePath(project, clip.content->imagePath)));
                const auto localImage = ProjectMedia::StoreLocalVideoSourcePath(project, clip.content->imagePath);

@@ -4,9 +4,9 @@ Status: current implementation plus target architecture. Native clips,
 Heal/Join/Separate, preview transport controls, flat-track video Mute/Solo and
 per-clip speed, visual picture crop, picture mute, exact clip properties,
 gap-preserving Delete, portable media collection and picture fades are implemented
-in this branch. Embedded-layer
-geometry remains an independent foundation awaiting native controls, saved
-parent identities and pixel rendering.
+in this branch. Embedded-layer geometry, native controls, stable saved parent
+identities, generated pictures and timed transparent text overlays are also
+implemented; their current candidate acceptance is recorded by SDLC.
 Collapsible track groups, native-size transport controls and the preview timeline
 and keyboard controls are also implemented.
 Other later operations remain targets until their delivery status says otherwise.
@@ -187,7 +187,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | Location | Current ownership | Intended responsibility |
 | --- | --- | --- |
 | `src/video/EditVideoTimeline.h` | Host-free timeline placement, range edits and layered source selection | Preserve native editing contracts for simple and joined clips |
-| `src/video/EditVideoContent.h/.cpp` | Immutable retained sequences, reverse/freeze/image/title generators, sources and independent audio link clocks | Keep source identity independent of native tracks and decoders |
+| `src/video/EditVideoContent.h/.cpp` | Immutable retained sequences, reverse/freeze/image/title/text generators, sources and independent audio link clocks | Keep source identity independent of native tracks and decoders |
 | `src/video/JoinVideoClips.h/.cpp` | Heal, editable Join and Separate | Atomic structural changes without rendering samples or video |
 | `src/video/PlanVideoEdits.h/.cpp` | Host-free batch planner and one-swap snapshot application | Native coordinator consumes complete plans in one history transaction |
 | `src/video/EvaluateVideoTimeline.h/.cpp` | Host-free ordered layers, crop, mute/solo and embedded rectangles | Native preview/export consume the same composition semantics |
@@ -205,7 +205,7 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/PrepareVideoPreview.h/.cpp` | Leased proxy/thumbnail cache | Derived preview ownership and background preparation |
 | `src/video/PlanVideoTransitions.h/.cpp` | Host-free opacity layers and shared frame intervals | Fades and overlaps on the same project clock as ordinary cuts |
 | `src/video/PrepareVideoEffects.h/.cpp` | Derived transition spans and project-scoped leases | Cancellable FFmpeg work shared by preview and original-quality export |
-| `src/video/PrepareGeneratedVideo.h/.cpp` | Derived frame windows for reverse, freeze, images and title cards | Bounded reverse buffers and leased cache entries, shared by preview/export/crop |
+| `src/video/PrepareGeneratedVideo.h/.cpp` | Derived frame windows for reverse, freeze, images, title cards and transparent text | Bounded reverse buffers and leased cache entries, shared by preview/export/crop |
 | `src/update/ChooseProductUpdate.h` and `CheckProductUpdates.h/.cpp` | Host-free release policy and Windows request/UI boundary | Numeric release ordering, explicit network opt-in, fixed repository links and no installer execution |
 | `src/video/EditVideoFades.h/.cpp` | Fade/crossfade dialog, commands and history | Candidate preparation before publishing an edit |
 | `src/video/ShowVideoCrop.h/.cpp` | Visual crop handles and numeric fields | A private draft until Apply, with no temporary screenshot file |
@@ -666,7 +666,9 @@ existing drag engine applies its common legal displacement.
 Picture generators are immutable content, separate from the outer editable
 window. Reverse retains its input sequence and maps picture time backwards;
 freeze retains a chosen input frame; image/title nodes own a still source or
-text/dimensions. An independent forward audio-content offset preserves original
+text/dimensions. Transparent text nodes additionally own font family, height
+fraction, RGB colour and bold/italic/outline flags. Font size is relative to the
+caption box rather than screen DPI; no machine font path enters saved content. An independent forward audio-content offset preserves original
 soundtrack linkage when picture direction or duration changes. Reverse and
 freeze do not silently reverse or stretch audio. Repeat is explicitly
 picture-only and creates unlinked copies only after checking the whole requested
@@ -687,15 +689,33 @@ The existing cache owner leases every output; recipe identities name saved
 content, requested windows, quality and original source identities, never
 disposable intermediate paths. Scratch PNG/concat files stay inside a leased
 entry, are removed on exit, and abandoned entries use existing owner cleanup.
-No new mutable store, sidecar, persistent execution log or media format is added.
+Text rasterization uses the existing wxWidgets dependency and writes one
+straight-alpha PNG at the requested box resolution. A transparent caption never
+occludes lower full-frame layers in the planner. Recursive generated composition
+retains alpha in private qtrle MOV chunks; final preview/export still uses an
+opaque video stream. Both PNG/MOV variants share the same leased, bounded cache
+owner as MP4, including pending-file and orphan cleanup. They add no project
+media dependency, mutable store, sidecar or execution log.
 
 UI drafts and all required media preparation finish before native publication.
 Cancellation, an invalid parent, missing source, render failure or collision
 retains the prior tracks and history. Split, trim, crop and save preserve opaque
 generator content; Separate refuses a generator root rather than discarding its
 effect. Still relinking probes an image instead of treating it as a movie and
-keeps the declared duration. Title cards are white text on black; richer
-formatting and transparent subtitle overlays are separate future capabilities.
+keeps the declared duration. Title cards stay white text on black. A caption is
+an ordinary generated video clip on an embedded track, reusing parent binding,
+clip edits and project history rather than a parallel subtitle timeline. Each
+Add request creates a dedicated track; Edit changes wording/style/timing as one
+history effect. Invalid bounds, unavailable fonts, text that does not fit and
+render cancellation publish no row or history. An unchanged Edit is a no-op.
+Caption geometry belongs to the existing track placement; content/style belongs
+to immutable text nodes, so Undo restores previous shared snapshots. Editing a
+joined sequence requires Separate; reverse/freeze wrappers retain an editable
+text leaf. Native font/layout code stays in the renderer adapter; the owned
+model checks appearance, source bounds, copy-on-write edits and alpha semantics.
+Saved text/style attributes stay inside the existing optional video XML
+extension, and the stock-Audacity consumer checks that ordinary audio survives.
+Rich per-word formatting and subtitle interchange remain future capabilities.
 
 ### Product release checking
 
@@ -1018,7 +1038,7 @@ user's responsibility; the product must not delete them to repair a cache.
 
 | Runtime path group | Owner and purpose | Lifecycle and bound |
 | --- | --- | --- |
-| Active settings `_video-previews` | `PrepareVideoPreview.cpp`: proxy/thumbnail pairs and transition spans by source/recipe identity | Startup and completed preparation prune orphans; current plus two predecessors per group, up to 36 retained unleased entries; leases protect active project/decoder readers even above the disposal quota |
+| Active settings `_video-previews` | `PrepareVideoPreview.cpp`: proxy/thumbnail pairs and transition spans and internal PNG/MOV text layers by source/recipe identity | Startup and completed preparation prune orphans; current plus two predecessors per group, up to 36 retained unleased entries; leases protect active project/decoder readers even above the disposal quota |
 | Selected portable project folder | `CollectMediaFiles.cpp`: completed native project, original media copies and `_collection.txt` integrity manifest | Each selected destination is one user-owned archive; repeated matching requests leave it intact; changed/foreign contents are refused |
 | Sibling `_<name>.collecting` and `_<name>.collection.lock` | Collector: one current unpublished archive and exclusive Windows handle | Startup of a fresh collection removes only marked orphaned staging; success/failure removes staging; process exit closes/deletes its lock; pre-existing foreign locks are refused |
 | `_autopsy-video-export-*` beside chosen output | `ExportVideoMix.cpp`: owner marker, mix, filter instructions and pending result | Startup and each export remove abandoned owned work; live owner lock prevents deletion; success/cancel removes staging; one atomic same-volume publication |
@@ -1223,8 +1243,12 @@ parent IDs, invalid graphs, rendered pixels, visual draft cancellation, bound
 movement and saved projects. `fork-video-reverse`, `fork-video-freeze`,
 `fork-video-repeat` and `fork-video-pictures` exercise decoded frame order/counts,
 repeat and Undo/Redo, invalid requests, crop cancellation, original audio,
-relinking and reopen. Picture projects also pass through the stock-consumer
-audio compatibility journey. Owned composition cases cover source-window bounds
+relinking and reopen. Caption projects also pass through the stock-consumer
+audio compatibility journey using the picture case. `fork-video-text` covers
+styled transparent pixels, font/layout rejection before publication, cancelled
+and successful native dialogs, idempotent edits, nested reverse/freeze alpha,
+Undo/Redo and save/reopen. Portable text cases independently cover appearance,
+split/join, retained snapshots, invalid inputs and transparent-layer ordering. Owned composition cases cover source-window bounds
 and forward soundtrack linkage independently of GUI/decoder behavior.
 
 `fork-product-updates` covers version filtering and the native preferences dialog

@@ -83,7 +83,8 @@ std::vector<VideoBlendSpan> PlanVideoTransitions(const std::vector<const VideoTi
       const auto picture = EvaluateVideoTimeline(project, composition, time);
       size_t firstVisible{};
       for (size_t j{}; j < picture.layers.size(); ++j)
-         if (picture.layers[j].opacity >= 1 && picture.layers[j].rectangle == VideoFrameRectangle{})
+         if (picture.layers[j].opacity >= 1 && picture.layers[j].rectangle == VideoFrameRectangle{} &&
+             !(picture.layers[j].generated && VideoTimeline::VideoContentUsesAlpha(*picture.layers[j].generated)))
             firstVisible = j; // Opaque full-canvas roots conceal lower families.
       for (size_t j = firstVisible; j < picture.layers.size(); ++j) {
          const auto &sample = picture.layers[j];
@@ -93,6 +94,7 @@ std::vector<VideoBlendSpan> PlanVideoTransitions(const std::vector<const VideoTi
             (time - static_cast<double>(first) / frameRate) * sample.playbackRate,
             sample.playbackRate, sample.crop, sample.opacityRamps};
          layer.rectangle = sample.rectangle; layer.generated = sample.generated;
+          if (sample.generated) layer.transparent = VideoTimeline::VideoContentUsesAlpha(*sample.generated);
          span.layers.push_back(std::move(layer));
          if (sample.opacity < 1 || !(sample.rectangle == VideoFrameRectangle{})) span.requiresBlend = true;
       }
@@ -102,7 +104,8 @@ std::vector<VideoBlendSpan> PlanVideoTransitions(const std::vector<const VideoTi
    return result;
 }
 
-std::string VideoTransitionFilterGraph(const VideoBlendSpan &span, int width, int height, double rate)
+std::string VideoTransitionFilterGraph(const VideoBlendSpan &span, int width, int height, double rate,
+   bool preserveAlpha)
 {
    if (width < 2 || height < 2 || width % 2 || height % 2 || width > 16384 || height > 16384 ||
        span.firstFrame < 0 || span.frameCount <= 0 || !std::isfinite(rate) || rate <= 0 || rate > 1000 || span.layers.size() > 16)
@@ -115,7 +118,8 @@ std::string VideoTransitionFilterGraph(const VideoBlendSpan &span, int width, in
       offset = std::max(offset, -ramp.start);
    }
    std::ostringstream graph; graph.imbue(std::locale::classic()); graph << std::setprecision(17);
-   graph << "color=c=black:s=" << width << 'x' << height << ":r=" << rate << ":d=" << span.frameCount / rate
+   graph << "color=c=" << (preserveAlpha ? "black@0" : "black") << ":s=" << width << 'x' << height << ":r=" << rate << ":d=" << span.frameCount / rate
+      << (preserveAlpha ? ",format=rgba" : "")
       << ",trim=end_frame=" << span.frameCount << ",setpts=N/(" << rate << "*TB)[base];\n";
    for (size_t i{}; i < span.layers.size(); ++i) {
       const auto &layer = span.layers[i];
@@ -132,7 +136,8 @@ std::string VideoTransitionFilterGraph(const VideoBlendSpan &span, int width, in
       if (!layer.fillsCanvas) graph << ":force_original_aspect_ratio=decrease:force_divisible_by=2";
       graph << ",setsar=1,format=rgba";
       if (!layer.fillsCanvas) graph << ",pad=" << rectangle.width << ':' << rectangle.height
-         << ":(ow-iw)/2:(oh-ih)/2:color=" << (layer.rectangle == VideoFrameRectangle{} ? "black" : "black@0");
+         << ":(ow-iw)/2:(oh-ih)/2:color=" <<
+            (layer.rectangle == VideoFrameRectangle{} && !layer.transparent ? "black" : "black@0");
       for (const auto &ramp : layer.ramps)
          graph << ",fade=t=" << (ramp.increasing ? "in" : "out") << ":st=" << ramp.start + offset
             << ":d=" << ramp.end - ramp.start << ":alpha=1";
@@ -141,7 +146,8 @@ std::string VideoTransitionFilterGraph(const VideoBlendSpan &span, int width, in
          << "]overlay=x=" << rectangle.x << ":y=" << rectangle.y << ":shortest=1:format=auto[b" << i << "];\n";
    }
    graph << (span.layers.empty() ? "[base]" : "[b" + std::to_string(span.layers.size() - 1) + "]")
-      << "trim=end_frame=" << span.frameCount << ",settb=expr=1/(" << rate << "),setpts=N,format=yuv420p[vout]\n";
+      << "trim=end_frame=" << span.frameCount << ",settb=expr=1/(" << rate << "),setpts=N,format="
+      << (preserveAlpha ? "argb" : "yuv420p") << "[vout]\n";
    return graph.str();
 }
 }

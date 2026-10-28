@@ -148,7 +148,7 @@ INSTALLER_NATIVE_GROUPS = (
     (("product-updates",), ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*",
         "resources/autopsy-release.json", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "src/menus/HelpMenus.cpp",
         "scripts/piped-work/test_product_updates.py")),
-    (("video-reverse", "video-freeze", "video-repeat", "video-pictures"), (
+    (("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text"), (
         "src/video/EditVideoContent.*", "src/video/EditVideoTimeline.*", "src/video/PrepareGeneratedVideo.*",
         "src/video/PrepareVideoEffects.*", "src/video/PlanVideoTransitions.*", "src/video/CreateVideoTrack.*",
         "src/video/EditVideoComposition.*", "src/video/ShowVideoTrack.*", "src/video/ShowVideoPreview.cpp",

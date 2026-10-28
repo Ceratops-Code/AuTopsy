@@ -11,6 +11,7 @@ struct VideoEffectRenderSettings {
    int width{}, height{}, maximumHeight{};
    double frameRate{};
    bool originalQuality{};
+   bool preserveAlpha{}; // Internal caption intermediates; final output stays opaque.
 };
 struct PreparedVideoComposition {
    VideoTimeline::Timeline timeline;

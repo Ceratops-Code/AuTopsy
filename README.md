@@ -355,9 +355,20 @@ not to removing a picture effect; use Undo to cancel an effect.
 **File > Import > Still Image...** adds a picture clip with an explicit duration;
 **File > Import > Title Card...** adds white text on a black card. Both use normal
 video tracks and can be cropped, placed inside another picture and exported with
-the audible project mix. Title cards support line breaks; rich text, transparent
-caption overlays and subtitle interchange remain backlog items. Media relinking
-also accepts still images while retaining their timing and edits.
+the audible project mix. Media relinking also accepts still images while retaining
+their timing and edits.
+
+Right-click the parent video clip and choose **Add Text Overlay...** (also under
+**File > Import**) for a caption with a transparent background. Choose its text,
+font family, size, colour, bold/italic, outline, time range and picture rectangle.
+The caption appears on an embedded **Text Overlays** video track and moves with
+its parent. **Edit Text Overlay...** changes it later; ordinary split, trim,
+move, picture mute and Undo/Redo work as for other video clips. Size is a
+percentage of the caption box height. Line breaks are supported; text must fit
+the box. The rectangle applies to its whole track. Separate joined captions
+before editing their individual wording. Preview and export use the same
+rendered text; another computer needs the selected font installed.
+Subtitle-file interchange and per-word formatting remain backlog items.
 
 Each video track has visible **Mute** and **Solo** buttons, also available in
 its track menu. They affect picture in both preview and export; the separate

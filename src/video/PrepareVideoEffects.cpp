@@ -32,7 +32,7 @@ ProjectEffects &Effects(AudacityProject &project) { return project.AttachedObjec
 std::string ProjectKey(AudacityProject &project, const VideoEffectRenderSettings &settings) {
    std::ostringstream out; out.imbue(std::locale::classic());
    out << settings.width << ':' << settings.height << ':' << settings.maximumHeight << ':'
-       << Number(settings.frameRate) << ':' << settings.originalQuality;
+       << Number(settings.frameRate) << ':' << settings.originalQuality << ':' << settings.preserveAlpha;
    for (const auto *track : VideoTimeline::ProjectVideoTracks(project))
       out << '/' << track->PictureRevision() << ':' << track->VideoVisible() << ':' << track->VideoSolo();
    return out.str();
@@ -78,9 +78,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    for (auto &span : spans) for (auto &layer : span.layers) if (layer.generated) {
       const auto from = std::max(0.0, layer.sourceStart);
       const auto to = std::min(layer.generated->duration, from + double(span.frameCount) / rate * layer.playbackRate);
-      using Operation = VideoTimeline::VideoClipContent::Operation;
-      const auto constant = layer.generated->operation == Operation::Freeze || layer.generated->operation == Operation::Image ||
-         layer.generated->operation == Operation::Title;
+      const auto constant = VideoTimeline::IsStaticVideoContent(*layer.generated);
       auto prepared = PrepareGeneratedVideo(*layer.generated, settings, parent,
          constant ? 0 : from, constant ? std::min(layer.generated->duration, 1 / layer.generated->frameRate) : to);
       if (constant) { layer.sourceStart = 0; layer.playbackRate = 1; span.requiresBlend = true; }
@@ -135,6 +133,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
       for (const auto &source : VideoTimeline::VideoContentSources(clip, VideoTimeline::SourceFor(*layer, clip)))
          timeline.protectedSourcePaths.push_back(source.path);
    for (auto &span : spans) {
+      if (settings.preserveAlpha) span.requiresBlend = true;
       if (span.layers.empty()) continue;
       const auto start = static_cast<double>(span.firstFrame) / rate;
       const auto seconds = static_cast<double>(span.frameCount) / rate;
@@ -149,15 +148,15 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
          // when mod-2 encoder rounding slightly changes its aspect ratio.
          for (auto &layer : span.layers)
             layer.fillsCanvas = automaticCanvas && layer.rectangle == VideoFrameRectangle{} && layer.source.path == canvasSource && layer.crop == canvasCrop;
-         const auto graph = VideoTransitionFilterGraph(span, width, height, rate);
+         const auto graph = VideoTransitionFilterGraph(span, width, height, rate, settings.preserveAlpha);
          std::vector<std::string> sources;
          std::string group = "picture-transition";
          for (const auto &layer : span.layers) { sources.push_back(layer.source.path); group += '\n' + layer.source.path; }
          const auto recipe = graph + (settings.originalQuality ? "lossless" : "preview");
          auto media = VideoPreview::PrepareRenderedVideoMedia(group, recipe, sources, seconds,
             [&](const wxString &output) {
-               RenderVideoBlendSpan(span, width, height, rate, settings.originalQuality, parent, output, graph);
-            });
+               RenderVideoBlendSpan(span, width, height, rate, settings.originalQuality, parent, output, graph, settings.preserveAlpha);
+            }, settings.preserveAlpha ? VideoPreview::RenderedVideoKind::Transparent : VideoPreview::RenderedVideoKind::Ordinary);
          clip.media = {Utf8(media->playbackPath), seconds, rate, width, height};
          result->media.push_back(std::move(media));
       }
