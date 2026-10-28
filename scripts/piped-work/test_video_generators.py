@@ -326,6 +326,7 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     client.send("Undo"); assert rows() == split
     client.send("Undo"); assert rows() == added
     client.send("SelectTime: Start=1.5 End=1.5")
+    client.send("ShowVideoPreview")
     ready_video_preview(client)
     expect_preview_crop_pixels(client, root, ffmpeg, {"blue", "white"}, edge_colours=("purple",))
     assert read_audio_project_state(client.data) == audio
