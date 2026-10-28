@@ -258,9 +258,9 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     select_clip_range(client, 2, 2, text_track); client.send("Split")
     split = rows()
     assert [(row["start"], row["end"]) for row in split if row["track"] == text_track] == [(1, 2), (2, 3)], split
-    select_clip_range(client, 1, 3, text_track); client.send("JoinVideoClips")
-    # Joining untouched contiguous source handles heals the split. Different
-    # captions instead form a retained sequence that Separate can expand.
+    select_clip_range(client, 1, 3, text_track); client.send("HealVideoSplit")
+    # Heal restores untouched contiguous handles. Join instead retains distinct
+    # pieces, including different caption wording that Separate can expand.
     assert next(row for row in rows() if row["track"] == text_track)["pictureEffect"] == "text"
     client.send("Undo"); assert rows() == split
     right = next(row for row in split if row["track"] == text_track and row["start"] == 2)

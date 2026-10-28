@@ -775,6 +775,45 @@ TEST_CASE("Text overlays retain their appearance and alpha through native clip m
    }
 }
 
+TEST_CASE("Separating joined generated pictures stops at editable leaves and repeats without losing effects", "[video-composition][video-generators][video-text]")
+{
+   using namespace VideoTimeline;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      Timeline timeline;
+      timeline.clips = {MakeTextVideoClip(1, 0, 2, "Caption", 320, 180, {}),
+         MakeTitleVideoClip(2, 2, 2, "Title", 320, 180),
+         MakeStillVideoClip(3, 4, 2, "neutral.png", 320, 180)};
+      timeline.nextId = 4;
+      auto movie = CreateVideoTimeline("neutral.mp4", 4, 30, 320, 180);
+      REQUIRE(ReverseVideoClip(movie, 1));
+      auto reverse = movie.clips.front(); reverse.id = timeline.nextId++; reverse.start = 6;
+      timeline.clips.push_back(reverse);
+      REQUIRE(FreezeVideoClip(movie, 1, 1, 2));
+      auto freeze = movie.clips.front(); freeze.id = timeline.nextId++; freeze.start = 10;
+      timeline.clips.push_back(freeze);
+      const auto original = timeline;
+      REQUIRE_FALSE(SeparateVideoClips(timeline, 0, 12));
+      REQUIRE(JoinVideoClips(timeline, 0, 6));
+      REQUIRE(JoinVideoClips(timeline, 0, 12));
+      const auto joined = timeline;
+      REQUIRE(SeparateVideoClips(timeline, 0, 12));
+      REQUIRE(timeline.clips.size() == original.clips.size());
+      for (size_t i{}; i < original.clips.size(); ++i) {
+         const auto &actual = timeline.clips[i], &expected = original.clips[i];
+         REQUIRE(actual.id == expected.id);
+         REQUIRE(actual.start == expected.start);
+         REQUIRE(actual.duration == expected.duration);
+         REQUIRE(actual.sourceStart == expected.sourceStart);
+         REQUIRE(SameVideoContent(actual, expected));
+      }
+      REQUIRE_FALSE(SeparateVideoClips(timeline, 0, 12));
+      // Publication remains copy-on-write: the accepted joined snapshot and
+      // original generated leaves cannot change during separation or repetition.
+      REQUIRE(joined.clips.front().content->operation == VideoClipContent::Operation::Sequence);
+      REQUIRE(original.clips.front().content->title == "Caption");
+   }
+}
+
 TEST_CASE("A full frame transparent text layer keeps the parent picture in the composition", "[video-composition][video-text]")
 {
    auto background = VideoTimeline::CreateVideoTimeline("neutral.mp4", 5, 30, 640, 360);

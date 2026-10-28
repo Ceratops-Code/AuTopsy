@@ -700,8 +700,8 @@ media dependency, mutable store, sidecar or execution log.
 UI drafts and all required media preparation finish before native publication.
 Cancellation, an invalid parent, missing source, render failure or collision
 retains the prior tracks and history. Split, trim, crop and save preserve opaque
-generator content; Separate refuses a generator root rather than discarding its
-effect. Still relinking probes an image instead of treating it as a movie and
+generator content; Separate expands joined sequences and stops at generated
+picture leaves, preserving their effect on repeated calls. Still relinking probes an image instead of treating it as a movie and
 keeps the declared duration. Title cards stay white text on black. A caption is
 an ordinary generated video clip on an embedded track, reusing parent binding,
 clip edits and project history rather than a parallel subtitle timeline. Each
