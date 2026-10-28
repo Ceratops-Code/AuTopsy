@@ -196,8 +196,8 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     added = rows()
     caption = next(row for row in added if row["pictureEffect"] == "text")
     text_track, text_id = caption["track"], caption["id"]
-    assert (caption["text"], caption["font"], caption["textSize"], caption["textColour"]) == (
-        "CAPTION", "Arial", 55, 0xffffff), caption
+    assert (caption["text"], caption["font"], caption["textColour"]) == (
+        "CAPTION", "Arial", 0xffffff) and abs(caption["textSize"] - 55) < 1e-9, caption
     layers = client.data("GetVideoClips")["tracks"]
     child = next(layer for layer in layers if layer["index"] == text_track)
     parent = next(layer for layer in layers if layer["index"] == track)
