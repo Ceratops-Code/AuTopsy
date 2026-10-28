@@ -13,6 +13,7 @@
 #include "Viewport.h"
 #include "ViewInfo.h"
 #include "PlanVideoExport.h"
+#include "ExportVideoMix.h"
 #include "Uuid.h"
 #include <wx/checkbox.h>
 #include <wx/clrpicker.h>

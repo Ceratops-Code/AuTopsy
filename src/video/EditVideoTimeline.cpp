@@ -583,13 +583,13 @@ protected:
 public:
    TranslatableString GetDescription() const override { return XO("Add or edit a timed transparent text overlay; size and placement use box percentages."); }
    template<bool Const> bool Settings(SettingsVisitorBase<Const> &v) {
-      v.Define(mTrack, "Track", -1, -1, 1000000); v.Define(mId, "Id", wxString{});
-      v.Define(mText, "Text", wxString{}); v.Define(mFont, "Font", wxString{});
-      v.Define(mAt, "At", -1.0, -1.0, 100000000.0); v.Define(mSeconds, "Seconds", 5.0, .001, 3600.0);
-      v.Define(mSize, "Size", 40.0, 1.0, 90.0); v.Define(mColour, "Colour", 0xffffff, 0, 0xffffff);
-      v.Define(mX, "X", 10.0, 0.0, 100.0); v.Define(mY, "Y", 75.0, 0.0, 100.0);
-      v.Define(mWidth, "Width", 80.0, .1, 100.0); v.Define(mHeight, "Height", 20.0, .1, 100.0);
-      v.Define(mBold, "Bold", false); v.Define(mItalic, "Italic", false); v.Define(mOutline, "Outline", true); return true;
+      v.Define(mTrack, wxT("Track"), -1, -1, 1000000); v.Define(mId, wxT("Id"), wxString{});
+      v.Define(mText, wxT("Text"), wxString{}); v.Define(mFont, wxT("Font"), wxString{});
+      v.Define(mAt, wxT("At"), -1.0, -1.0, 100000000.0); v.Define(mSeconds, wxT("Seconds"), 5.0, .001, 3600.0);
+      v.Define(mSize, wxT("Size"), 40.0, 1.0, 90.0); v.Define(mColour, wxT("Colour"), 0xffffff, 0, 0xffffff);
+      v.Define(mX, wxT("X"), 10.0, 0.0, 100.0); v.Define(mY, wxT("Y"), 75.0, 0.0, 100.0);
+      v.Define(mWidth, wxT("Width"), 80.0, .1, 100.0); v.Define(mHeight, wxT("Height"), 20.0, .1, 100.0);
+      v.Define(mBold, wxT("Bold"), false); v.Define(mItalic, wxT("Italic"), false); v.Define(mOutline, wxT("Outline"), true); return true;
    }
    bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
    bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
