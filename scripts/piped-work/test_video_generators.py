@@ -259,7 +259,17 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     split = rows()
     assert [(row["start"], row["end"]) for row in split if row["track"] == text_track] == [(1, 2), (2, 3)], split
     select_clip_range(client, 1, 3, text_track); client.send("JoinVideoClips")
+    # Joining untouched contiguous source handles heals the split. Different
+    # captions instead form a retained sequence that Separate can expand.
+    assert next(row for row in rows() if row["track"] == text_track)["pictureEffect"] == "text"
+    client.send("Undo"); assert rows() == split
+    right = next(row for row in split if row["track"] == text_track and row["start"] == 2)
+    second = parameters.replace('Text="CAPTION"', 'Text="SECOND"').replace("At=1 Seconds=2", "At=2 Seconds=1")
+    client.send(f'SetVideoText: Track={text_track} Id={right["id"]} {second}')
+    different = rows()
+    select_clip_range(client, 1, 3, text_track); client.send("JoinVideoClips")
     joined = rows(); joined_caption = next(row for row in joined if row["track"] == text_track)
+    assert joined_caption["joined"] and joined_caption["pieces"] == 2, joined_caption
     nested_id = joined_caption["id"]
     for command in (f'ReverseVideoPicture: Track={text_track} Id={nested_id}',
                     f'FreezeVideoFrame: Track={text_track} Id={nested_id} At=1.5 Seconds=2'):
@@ -270,6 +280,7 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     client.send("SeparateVideoClips")
     assert [(row["start"], row["end"]) for row in rows() if row["track"] == text_track] == [(1, 2), (2, 3)]
     client.send("Undo"); assert rows() == joined
+    client.send("Undo"); assert rows() == different
     client.send("Undo"); assert rows() == split
     client.send("Undo"); assert rows() == added
     client.send("SelectTime: Start=1.5 End=1.5")
