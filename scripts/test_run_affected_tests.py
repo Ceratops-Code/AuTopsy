@@ -558,7 +558,7 @@ class SelectionTests(unittest.TestCase):
                                "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
                                "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
                                "fork-video-recording-controls", "fork-video-embedding", "fork-video-embedding-controls",
-                               "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures"}
+                               "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures", "fork-video-text"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),

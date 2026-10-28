@@ -6,6 +6,18 @@ class AudacityProject;
 class AuTopsyVideoTrack;
 class wxWindow;
 namespace VideoEditing {
+struct VideoTextOverlaySettings {
+   std::string text;
+   VideoTextAppearance appearance;
+   double start{}, seconds{5};
+   VideoFrameRectangle rectangle{.1, .75, .8, .2};
+};
+std::shared_ptr<AuTopsyVideoTrack> AddProjectVideoTextOverlay(AudacityProject &project,
+   AuTopsyVideoTrack &parent, const VideoTextOverlaySettings &settings);
+bool ChangeProjectVideoTextOverlay(AudacityProject &project, AuTopsyVideoTrack &track,
+   uint64_t clipId, const VideoTextOverlaySettings &settings);
+bool ShowVideoTextOverlayDialog(AudacityProject &project, AuTopsyVideoTrack &track,
+   uint64_t clipId, wxWindow *parent, double at, bool edit);
 enum class VideoClipPictureAction { Reverse, Freeze, Repeat };
 bool ApplyProjectVideoPictureAction(AudacityProject &project, AuTopsyVideoTrack &track,
    uint64_t clipId, VideoClipPictureAction action, double at, double seconds, int copies = 1);

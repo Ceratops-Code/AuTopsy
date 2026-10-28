@@ -20,6 +20,7 @@ struct VideoBlendLayer {
    bool fillsCanvas{};
    VideoFrameRectangle rectangle;
    std::shared_ptr<const VideoTimeline::VideoClipContent> generated;
+   bool transparent{};
 };
 struct VideoBlendSpan {
    std::int64_t firstFrame{}, frameCount{};
@@ -33,5 +34,6 @@ std::vector<VideoBlendSpan> PlanVideoTransitions(const std::vector<const VideoTi
    double duration, double frameRate);
 // All inputs use FFmpeg -copyts -start_at_zero. The graph consumes original
 // source timestamps and publishes an exact, zero-based integer frame sequence.
-std::string VideoTransitionFilterGraph(const VideoBlendSpan &span, int width, int height, double frameRate);
+std::string VideoTransitionFilterGraph(const VideoBlendSpan &span, int width, int height, double frameRate,
+   bool preserveAlpha = false);
 }

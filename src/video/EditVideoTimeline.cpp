@@ -557,6 +557,87 @@ const ComponentInterfaceSymbol ImportStillImageCommand::Symbol{XO("ImportStillIm
 BuiltinCommandsModule::Registration<AddVideoTitleCommand> sAddVideoTitle;
 BuiltinCommandsModule::Registration<ImportStillImageCommand> sImportStillImage;
 
+class VideoTextOverlayCommand : public AudacityCommand {
+   wxString mId, mText, mFont;
+   int mTrack{-1}, mColour{0xffffff};
+   double mAt{-1}, mSeconds{5}, mSize{40}, mX{10}, mY{75}, mWidth{80}, mHeight{20};
+   bool mBold{}, mItalic{}, mOutline{true}, mDialogHandled{};
+   AuTopsyVideoTrack &Target(AudacityProject &project) const {
+      if (mTrack < 0) if (auto *focused = dynamic_cast<AuTopsyVideoTrack*>(TrackFocus::Get(project).Get())) return *focused;
+      AuTopsyVideoTrack *selected{}; int index{};
+      for (auto *track : TrackList::Get(project).Any<Track>()) {
+         if (auto *video = dynamic_cast<AuTopsyVideoTrack*>(track)) {
+            if (index == mTrack) return *video;
+            if (mTrack < 0 && video->GetSelected()) {
+               if (selected) throw std::runtime_error("Focus one video track or supply its Track index.");
+               selected = video;
+            }
+         }
+         ++index;
+      }
+      if (selected) return *selected;
+      throw std::runtime_error("Select a video track or supply its Track index from GetVideoClips.");
+   }
+protected:
+   virtual bool Editing() const = 0;
+public:
+   TranslatableString GetDescription() const override { return XO("Add or edit a timed transparent text overlay; size and placement use box percentages."); }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &v) {
+      v.Define(mTrack, wxT("Track"), -1, -1, 1000000); v.Define(mId, wxT("Id"), wxString{});
+      v.Define(mText, wxT("Text"), wxString{}); v.Define(mFont, wxT("Font"), wxString{});
+      v.Define(mAt, wxT("At"), -1.0, -1.0, 100000000.0); v.Define(mSeconds, wxT("Seconds"), 5.0, .001, 3600.0);
+      v.Define(mSize, wxT("Size"), 40.0, 1.0, 90.0); v.Define(mColour, wxT("Colour"), 0xffffff, 0, 0xffffff);
+      v.Define(mX, wxT("X"), 10.0, 0.0, 100.0); v.Define(mY, wxT("Y"), 75.0, 0.0, 100.0);
+      v.Define(mWidth, wxT("Width"), 80.0, .1, 100.0); v.Define(mHeight, wxT("Height"), 20.0, .1, 100.0);
+      v.Define(mBold, wxT("Bold"), false); v.Define(mItalic, wxT("Italic"), false); v.Define(mOutline, wxT("Outline"), true); return true;
+   }
+   bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
+   bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
+   bool PromptUser(AudacityProject &project) override {
+      try {
+         auto &track = Target(project); const auto at = ViewInfo::Get(project).selectedRegion.t0();
+         const auto *clip = VideoTimeline::ClipAt(track.Timeline(), at);
+         if (!clip) throw std::runtime_error("Put the cursor inside the video clip first.");
+         mDialogHandled = VideoEditing::ShowVideoTextOverlayDialog(project, track, clip->id,
+            &ProjectWindow::Get(project), at, Editing()); return mDialogHandled;
+      }
+      catch (const std::exception &error) { wxMessageBox(wxString::FromUTF8(error.what()), _("Text Overlay"), wxOK | wxICON_ERROR, &ProjectWindow::Get(project)); return false; }
+   }
+   bool Apply(const CommandContext &context) override {
+      if (mDialogHandled) { mDialogHandled = false; RefreshPreviewLater(context.project); return true; }
+      try {
+         auto &track = Target(context.project);
+         VideoEditing::VideoTextOverlaySettings value;
+         value.text = std::string(mText.ToUTF8()); value.appearance = {std::string(mFont.ToUTF8()),
+            mSize/100, static_cast<uint32_t>(mColour), mBold, mItalic, mOutline};
+         value.start = mAt < 0 ? ViewInfo::Get(context.project).selectedRegion.t0() : mAt;
+         value.seconds = mSeconds; value.rectangle = {mX/100, mY/100, mWidth/100, mHeight/100};
+         if (Editing()) {
+            unsigned long long id{};
+            if (!mId.ToULongLong(&id) || !id) throw std::runtime_error("Supply the text clip Id from GetVideoClips.");
+            VideoEditing::ChangeProjectVideoTextOverlay(context.project, track, id, value);
+         }
+         else VideoEditing::AddProjectVideoTextOverlay(context.project, track, value);
+         RefreshPreviewLater(context.project); return true;
+      }
+      catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); return false; }
+   }
+};
+class AddVideoTextCommand final : public VideoTextOverlayCommand {
+   bool Editing() const override { return false; }
+public: static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+class SetVideoTextCommand final : public VideoTextOverlayCommand {
+   bool Editing() const override { return true; }
+public: static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+};
+const ComponentInterfaceSymbol AddVideoTextCommand::Symbol{XO("AddVideoText")};
+const ComponentInterfaceSymbol SetVideoTextCommand::Symbol{XO("SetVideoText")};
+BuiltinCommandsModule::Registration<AddVideoTextCommand> sAddVideoText;
+BuiltinCommandsModule::Registration<SetVideoTextCommand> sSetVideoText;
+
 class GetVideoClipsCommand final : public AudacityCommand {
 public:
    static const ComponentInterfaceSymbol Symbol;
@@ -615,9 +696,16 @@ public:
                out.EndObject();
                out.Key("source"); out.String(source.path.c_str()); out.Key("fps"); out.Double(VideoTimeline::VideoContentFrameRate(clip, source));
                out.Key("joined"); out.Bool(clip.content && clip.content->operation == VideoTimeline::VideoClipContent::Operation::Sequence);
-               const char *operations[]{"none", "reverse", "freeze", "image", "title"};
+                const char *operations[]{"none", "reverse", "freeze", "image", "title", "text"};
                out.Key("pictureEffect"); out.String(clip.content ? operations[static_cast<int>(clip.content->operation)] : "none");
                out.Key("pieces"); out.Uint64(clip.content ? clip.content->parts.size() : 1);
+                if (const auto *textContent = VideoTimeline::FindEditableVideoTextContent(clip)) {
+                   const auto &style = textContent->textAppearance;
+                   out.Key("text"); out.String(textContent->title.c_str()); out.Key("font"); out.String(style.fontFace.c_str());
+                   out.Key("textSize"); out.Double(style.heightFraction * 100); out.Key("textColour"); out.Uint(style.rgb);
+                   out.Key("textBold"); out.Bool(style.bold); out.Key("textItalic"); out.Bool(style.italic);
+                   out.Key("textOutline"); out.Bool(style.outline);
+                }
                out.EndObject();
             }
          ++index;
@@ -735,6 +823,10 @@ AttachedItem sAddVideoTitleMenu{
    Command("AddVideoTitle", XXO("&Title Card..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
    Placement{wxT("File/Import-Export/Import"), {OrderingHint::After, "ImportStillImage"}}
 };
+AttachedItem sAddVideoTextMenu{
+   Command("AddVideoText", XXO("Text &Overlay..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+   Placement{wxT("File/Import-Export/Import"), {OrderingHint::After, "AddVideoTitle"}}
+};
 AttachedItem sVideoStructureMenu{
    Section("VideoStructure",
       Command("HealVideoSplit", XXO("Heal Video Split"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
@@ -743,6 +835,7 @@ AttachedItem sVideoStructureMenu{
 };
 AttachedItem sVideoClipScripting{
    Items("",
+       Command("SetVideoText", XXO("Edit Text Overlay..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("ReverseVideoPicture", XXO("Reverse Video Picture"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("FreezeVideoFrame", XXO("Freeze Video Frame..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("RepeatVideoPicture", XXO("Repeat Video Picture..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),

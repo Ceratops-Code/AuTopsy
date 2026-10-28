@@ -27,7 +27,8 @@ inline MediaSource SourceFor(const Timeline &timeline, const Clip &clip)
    const Clip *leaf = &clip;
    for (size_t depth{}; leaf->content && depth < 17; ++depth) {
       if (leaf->content->operation == VideoClipContent::Operation::Image ||
-          leaf->content->operation == VideoClipContent::Operation::Title)
+          leaf->content->operation == VideoClipContent::Operation::Title ||
+          leaf->content->operation == VideoClipContent::Operation::Text)
          return {leaf->content->imagePath, leaf->content->duration, leaf->content->frameRate,
             leaf->content->width, leaf->content->height};
       if (leaf->content->parts.empty()) break;

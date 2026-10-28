@@ -103,15 +103,18 @@ void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &
    const auto &content = *clip.content;
    using Operation = VideoClipContent::Operation;
    if (!std::isfinite(content.frameRate) || content.frameRate <= 0 || content.frameRate > 1000 ||
-       int(content.operation) < 0 || int(content.operation) > int(Operation::Title) ||
+       int(content.operation) < 0 || int(content.operation) > int(Operation::Text) ||
        !std::isfinite(content.audioContentOffset) || std::abs(content.audioContentOffset) > 100000000)
       throw std::runtime_error("Video content needs a supported operation and editing frame rate.");
-   if (content.operation == Operation::Image || content.operation == Operation::Title) {
+   if (content.operation == Operation::Image || content.operation == Operation::Title || content.operation == Operation::Text) {
       if (!content.parts.empty() || content.width < 2 || content.height < 2 ||
           content.width > 8192 || content.height > 8192 ||
           (content.operation == Operation::Image && (content.imagePath.empty() || content.imagePath.size() > 32768)) ||
-          (content.operation == Operation::Title && (content.title.empty() || content.title.size() > 16384)))
+          (content.operation != Operation::Image && (content.title.empty() || content.title.size() > 16384)) ||
+          (content.operation == Operation::Text && (content.title.find_first_not_of(" \t\r\n") == std::string::npos ||
+             content.title.find('\0') != std::string::npos)))
          throw std::runtime_error("A still picture or title requires usable dimensions and bounded content.");
+      if (content.operation == Operation::Text) VideoEditing::RequireUsableVideoTextAppearance(content.textAppearance);
       return;
    }
    if (content.parts.empty()) throw std::runtime_error("Video content requires retained source pieces.");
@@ -249,7 +252,7 @@ VideoContentSample SampleVideoThumbnail(const Clip &clip, const MediaSource &fal
    for (size_t depth{}; sample && sample.generated && depth <= MaximumVideoContentDepth; ++depth) {
       const auto &content = *sample.generated;
       using Operation = VideoClipContent::Operation;
-      if (content.operation == Operation::Image || content.operation == Operation::Title) return sample;
+      if (content.operation == Operation::Image || content.operation == Operation::Title || content.operation == Operation::Text) return sample;
       if (content.parts.size() != 1) throw std::runtime_error("A picture thumbnail needs one retained input.");
       auto inputTime = std::floor(content.heldTime * content.frameRate + 1e-8) / content.frameRate;
       if (content.operation == Operation::Reverse) {
@@ -324,7 +327,8 @@ bool SameVideoContent(const Clip &a, const Clip &b)
        a.content->operation != b.content->operation || a.content->heldTime != b.content->heldTime ||
        a.content->audioContentOffset != b.content->audioContentOffset ||
        a.content->imagePath != b.content->imagePath || a.content->title != b.content->title ||
-       a.content->width != b.content->width || a.content->height != b.content->height) return false;
+       a.content->width != b.content->width || a.content->height != b.content->height ||
+       !(a.content->textAppearance == b.content->textAppearance)) return false;
    for (size_t i{}; i < a.content->parts.size(); ++i) {
       const auto &x = a.content->parts[i], &y = b.content->parts[i];
       if (x.id != y.id || x.start != y.start || x.sourceStart != y.sourceStart ||
@@ -480,6 +484,80 @@ Clip MakeTitleVideoClip(uint64_t id, double start, double seconds,
    content->operation = VideoClipContent::Operation::Title; content->imagePath.clear(); content->title = text;
    result.content = std::move(content); RequireUsableVideoContent(result, {}); return result;
 }
+Clip MakeTextVideoClip(uint64_t id, double start, double seconds,
+   const std::string &text, int width, int height, const VideoEditing::VideoTextAppearance &appearance)
+{
+   auto result = MakeTitleVideoClip(id, start, seconds, text, width, height);
+   auto content = std::make_shared<VideoClipContent>(*result.content);
+   content->operation = VideoClipContent::Operation::Text; content->textAppearance = appearance;
+   result.content = std::move(content); RequireUsableVideoContent(result, {}); return result;
+}
+bool VideoContentUsesAlpha(const Clip &clip)
+{
+   return clip.content && VideoContentUsesAlpha(*clip.content);
+}
+bool VideoContentUsesAlpha(const VideoClipContent &content)
+{
+   return content.operation == VideoClipContent::Operation::Text ||
+      std::any_of(content.parts.begin(), content.parts.end(),
+         [](const Clip &part) { return VideoContentUsesAlpha(part); });
+}
+bool IsStaticVideoContent(const VideoClipContent &content)
+{
+   using Operation = VideoClipContent::Operation;
+   return content.operation == Operation::Image || content.operation == Operation::Title ||
+      content.operation == Operation::Text || content.operation == Operation::Freeze;
+}
+const VideoClipContent *FindEditableVideoTextContent(const Clip &clip)
+{
+   const auto *node = clip.content.get();
+   for (size_t depth{}; node && depth <= MaximumVideoContentDepth; ++depth) {
+      if (node->operation == VideoClipContent::Operation::Text) return node;
+      if ((node->operation != VideoClipContent::Operation::Reverse &&
+           node->operation != VideoClipContent::Operation::Freeze) || node->parts.size() != 1) return nullptr;
+      node = node->parts.front().content.get();
+   }
+   return nullptr;
+}
+bool ChangeVideoTextContent(Clip &clip, const std::string &text,
+   const VideoEditing::VideoTextAppearance &appearance)
+{
+   const auto *current = FindEditableVideoTextContent(clip);
+   if (!current) throw std::runtime_error("Separate joined text clips to edit their individual wording.");
+   RequireUsableVideoContent(clip, {});
+   MakeTextVideoClip(1, 0, std::min(3600.0, current->duration), text,
+      current->width, current->height, appearance);
+   if (current->title == text && current->textAppearance == appearance) return false;
+   const auto replace = [&](const auto &self, Clip &target) -> void {
+      auto content = std::make_shared<VideoClipContent>(*target.content);
+      if (content->operation == VideoClipContent::Operation::Text) {
+         content->title = text; content->textAppearance = appearance;
+      }
+      else self(self, content->parts.front());
+      target.content = std::move(content);
+   };
+   auto changed = clip; replace(replace, changed); RequireUsableVideoContent(changed, {});
+   clip = std::move(changed); return true;
+}
+bool ResizeVideoTextContent(Clip &clip, int width, int height)
+{
+   if (width < 2 || height < 2 || width > 8192 || height > 8192)
+      throw std::runtime_error("A text overlay needs usable picture dimensions.");
+   RequireUsableVideoContent(clip, clip.media);
+   const auto resize = [&](const auto &self, Clip &target) -> bool {
+      if (!target.content || !VideoContentUsesAlpha(target)) return false;
+      auto content = std::make_shared<VideoClipContent>(*target.content);
+      bool changed = content->width != width || content->height != height;
+      content->width = width; content->height = height;
+      for (auto &part : content->parts) changed = self(self, part) || changed;
+      if (changed) target.content = std::move(content);
+      return changed;
+   };
+   auto candidate = clip;
+   if (!resize(resize, candidate)) return false;
+   RequireUsableVideoContent(candidate, candidate.media);
+   clip = std::move(candidate); return true;
+}
 bool RepeatVideoClip(Timeline &timeline, uint64_t id, int copies)
 {
    RequireWellFormedTimeline(timeline);
@@ -505,5 +583,16 @@ bool RepeatVideoClip(Timeline &timeline, uint64_t id, int copies)
    std::sort(candidate.clips.begin(), candidate.clips.end(), [](const auto &a, const auto &b) { return a.start < b.start; });
    RequireWellFormedTimeline(candidate);
    if (changed) timeline = std::move(candidate); return changed;
+}
+}
+
+namespace VideoEditing {
+void RequireUsableVideoTextAppearance(const VideoTextAppearance &appearance)
+{
+   if (!std::isfinite(appearance.heightFraction) || appearance.heightFraction < .01 ||
+       appearance.heightFraction > .9 || appearance.rgb > 0xffffff || appearance.fontFace.size() > 256 ||
+       std::any_of(appearance.fontFace.begin(), appearance.fontFace.end(),
+          [](unsigned char c) { return c < 32; }))
+      throw std::runtime_error("Choose a usable font, text colour and text size between 1% and 90% of the box height.");
 }
 }

@@ -54,6 +54,7 @@ bool PlainFile(const fs::path &path) {
 // rather than allowing a broad recursive delete of user or live work.
 void RemoveEntry(const fs::path &path) {
    for (const auto *name : {"_building.mp4", "_building.jpg", "_preview.mp4",
+            "_building.mov", "_preview.mov", "_building.png", "_preview.png", "_title.png", "_concat.txt",
            "_frames.jpg", "_complete", "_source", "_owner", "_lease"}) {
       std::error_code error;
       fs::remove(path / name, error);
@@ -214,13 +215,21 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
 
 std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string &group,
    const std::string &recipe, const std::vector<std::string> &sources, double duration,
-   const std::function<void(const wxString&)> &render)
+   const std::function<void(const wxString&)> &render, RenderedVideoKind kind)
 {
    if (!std::isfinite(duration) || duration <= 0 || !render)
       throw std::runtime_error("A rendered picture needs a usable duration and renderer.");
    std::vector<Handle> inputs;
    std::ostringstream identity; identity.imbue(std::locale::classic());
    identity << "picture-transition=1\n" << recipe;
+   const char *extension{};
+   switch (kind) {
+   case RenderedVideoKind::Ordinary: extension = ".mp4"; break;
+   case RenderedVideoKind::Transparent: extension = ".mov"; break;
+   case RenderedVideoKind::StaticImage: extension = ".png"; break;
+   default: throw std::runtime_error("Unsupported derived picture container.");
+   }
+   if (kind != RenderedVideoKind::Ordinary) identity << "\ncontainer=" << extension;
    for (const auto &source : sources) {
       const auto path = fs::absolute(fs::path(wxString::FromUTF8(source).ToStdWstring()));
       Handle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
@@ -254,20 +263,22 @@ std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string
    if (fs::exists(path / "_owner") && (!PlainFile(path / "_owner") || Read(path / "_owner") != Signature))
       throw std::runtime_error("The picture cache entry has another owner.");
    Write(path / "_owner", Signature);
-   bool complete = PlainFile(path / "_complete") && PlainFile(path / "_preview.mp4") &&
+   const auto pending = path / (std::string("_building") + extension);
+   const auto published = path / (std::string("_preview") + extension);
+   bool complete = PlainFile(path / "_complete") && PlainFile(published) &&
       PlainFile(path / "_source") && Read(path / "_source") == value;
    try {
       if (!complete) {
-         fs::remove(path / "_complete"); fs::remove(path / "_building.mp4");
-         fs::remove(path / "_preview.mp4");
-         render(wxString((path / "_building.mp4").wstring()));
-         if (!PlainFile(path / "_building.mp4") || !fs::file_size(path / "_building.mp4"))
+         fs::remove(path / "_complete"); fs::remove(pending);
+         fs::remove(published);
+         render(wxString(pending.wstring()));
+         if (!PlainFile(pending) || !fs::file_size(pending))
             throw std::runtime_error("The transition renderer produced no picture.");
-         fs::rename(path / "_building.mp4", path / "_preview.mp4");
+         fs::rename(pending, published);
          Write(path / "_source", value); Write(path / "_complete", Signature); complete = true;
       }
       auto result = std::make_shared<PreparedMedia>();
-      result->sourcePath = result->playbackPath = wxString((path / "_preview.mp4").wstring());
+      result->sourcePath = result->playbackPath = wxString(published.wstring());
       result->duration = duration; result->lease = lease;
       liveMedia[path] = result; CleanPreviewCache(); return result;
    }

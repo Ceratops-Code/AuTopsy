@@ -772,7 +772,14 @@ identities, visual placement, movement and decoded composition pixels.
 `fork-video-reverse`, `fork-video-freeze`, `fork-video-repeat` and
 `fork-video-pictures` own the generated-picture journeys; their fixtures use
 colours, tones, a still image and neutral text. The picture case includes the
-stock-Audacity audio consumer. `fork-product-updates` uses a private owner-scoped
+stock-Audacity audio consumer with saved caption data. `fork-video-text`
+checks transparent text pixels in preview/export, font/style/timing persistence,
+failed and cancelled drafts, hidden-layer rejection, box-aspect changes through
+caption/PiP controls, repeat edits, Undo/Redo and nested picture effects.
+`AddVideoText` and `SetVideoText` share the native caption adapter; their
+size and rectangle fields use percentages, colour is 0xRRGGBB as an integer, and
+font is a family name. Text rasterization uses wxWidgets; FFmpeg's existing
+PNG/qtrle support preserves alpha through temporary generated-picture layers. `fork-product-updates` uses a private owner-scoped
 release fixture by default. Set `AUTOPSY_TEST_UPDATES_SOURCE=github` only for a
 separate live public-API transport check; its acceptance scope is distinct and
 it never downloads or executes an installer.

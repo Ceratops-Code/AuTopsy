@@ -114,15 +114,18 @@ static bool SeparateOneLevel(Timeline &timeline, double from, double to)
    auto changed = timeline; changed.clips.clear(); bool any{};
    std::set<uint64_t> used;
    for (size_t i{}; i < timeline.clips.size(); ++i)
-      if (!timeline.clips[i].content || std::find(selected.begin(), selected.end(), i) == selected.end())
+      if (!timeline.clips[i].content || timeline.clips[i].content->operation != VideoClipContent::Operation::Sequence ||
+          std::find(selected.begin(), selected.end(), i) == selected.end())
          used.insert(timeline.clips[i].id);
    for (size_t i{}; i < timeline.clips.size(); ++i) {
       const auto &clip = timeline.clips[i];
-      if (!clip.content || std::find(selected.begin(), selected.end(), i) == selected.end()) {
+      // Generated pictures are editable leaves, even though they own content.
+      // Only joined sequences can be expanded; subsequent passes must stop at
+      // retained text/still/reverse/freeze nodes without stripping their effect.
+      if (!clip.content || clip.content->operation != VideoClipContent::Operation::Sequence ||
+          std::find(selected.begin(), selected.end(), i) == selected.end()) {
          changed.clips.push_back(clip); continue;
       }
-      if (clip.content->operation != VideoClipContent::Operation::Sequence)
-         throw std::runtime_error("This clip contains a picture effect, not a joined sequence. Use Undo to remove the effect.");
       any = true;
       const auto windowEnd = clip.ContentTimeAtProjectTime(clip.End());
       if (std::none_of(clip.content->parts.begin(), clip.content->parts.end(), [&](const auto &part) {

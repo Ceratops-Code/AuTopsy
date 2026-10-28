@@ -739,3 +739,157 @@ TEST_CASE("Timeline thumbnails resolve reverse freeze and nested picture clocks 
    REQUIRE(VideoTimeline::ReverseVideoClip(frozen, 1));
    REQUIRE(VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, .25).sourceTime == Approx(37.0 / 30));
 }
+
+TEST_CASE("Text overlays retain their appearance and alpha through native clip models", "[video-composition][video-text]")
+{
+   for (int repeat{}; repeat < 2; ++repeat) {
+      VideoTextAppearance style{"", .35, 0xffcc44, true, false, true};
+      VideoTimeline::Timeline text;
+      text.clips.push_back(VideoTimeline::MakeTextVideoClip(1, 1, 4, "A caption\nSecond line", 640, 144, style));
+      text.nextId = 2;
+      const auto original = text;
+      REQUIRE(VideoTimeline::VideoContentUsesAlpha(text.clips.front()));
+      REQUIRE(VideoTimeline::IsStaticVideoContent(*text.clips.front().content));
+      REQUIRE(VideoTimeline::SourceFor(text, text.clips.front()).width == 640);
+      REQUIRE(VideoTimeline::SplitClipAt(text, 3));
+      REQUIRE_FALSE(VideoTimeline::SplitClipAt(text, 3));
+      REQUIRE(text.clips.back().content == original.clips.front().content);
+      REQUIRE(VideoTimeline::JoinVideoClips(text, 1, 5));
+      REQUIRE(VideoTimeline::VideoContentUsesAlpha(text.clips.front()));
+      REQUIRE(VideoTimeline::ReverseVideoClip(text, 1));
+      REQUIRE(VideoTimeline::VideoContentUsesAlpha(text.clips.front()));
+      const auto sample = VideoTimeline::SampleVideoThumbnail(text.clips.front(), {}, 1);
+      REQUIRE(sample.generated);
+      REQUIRE(sample.generated->operation == VideoTimeline::VideoClipContent::Operation::Text);
+      REQUIRE(sample.generated->textAppearance == style);
+      auto frozen = original;
+      REQUIRE(VideoTimeline::FreezeVideoClip(frozen, 1, 2, 3));
+      REQUIRE(VideoTimeline::VideoContentUsesAlpha(frozen.clips.front()));
+      REQUIRE(VideoTimeline::FindEditableVideoTextContent(frozen.clips.front()));
+      auto changed = style; changed.rgb = 0x4488ff; changed.fontFace = "Example font family";
+      REQUIRE(VideoTimeline::ChangeVideoTextContent(frozen.clips.front(), "Changed", changed));
+      REQUIRE_FALSE(VideoTimeline::ChangeVideoTextContent(frozen.clips.front(), "Changed", changed));
+      REQUIRE(VideoTimeline::FindEditableVideoTextContent(frozen.clips.front())->textAppearance == changed);
+      REQUIRE(original.clips.front().content->title == "A caption\nSecond line");
+      REQUIRE(original.clips.front().content->textAppearance == style);
+   }
+}
+
+TEST_CASE("Separating joined generated pictures stops at editable leaves and repeats without losing effects", "[video-composition][video-generators][video-text]")
+{
+   using namespace VideoTimeline;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      Timeline timeline;
+      timeline.clips = {MakeTextVideoClip(1, 0, 2, "Caption", 320, 180, {}),
+         MakeTitleVideoClip(2, 2, 2, "Title", 320, 180),
+         MakeStillVideoClip(3, 4, 2, "neutral.png", 320, 180)};
+      timeline.nextId = 4;
+      auto movie = CreateVideoTimeline("neutral.mp4", 4, 30, 320, 180);
+      REQUIRE(ReverseVideoClip(movie, 1));
+      auto reverse = movie.clips.front(); reverse.id = timeline.nextId++; reverse.start = 6;
+      timeline.clips.push_back(reverse);
+      REQUIRE(FreezeVideoClip(movie, 1, 1, 2));
+      auto freeze = movie.clips.front(); freeze.id = timeline.nextId++; freeze.start = 10;
+      timeline.clips.push_back(freeze);
+      const auto original = timeline;
+      REQUIRE_FALSE(SeparateVideoClips(timeline, 0, 12));
+      REQUIRE(JoinVideoClips(timeline, 0, 6));
+      REQUIRE(JoinVideoClips(timeline, 0, 12));
+      const auto joined = timeline;
+      REQUIRE(SeparateVideoClips(timeline, 0, 12));
+      REQUIRE(timeline.clips.size() == original.clips.size());
+      for (size_t i{}; i < original.clips.size(); ++i) {
+         const auto &actual = timeline.clips[i], &expected = original.clips[i];
+         REQUIRE(actual.id == expected.id);
+         REQUIRE(actual.start == expected.start);
+         REQUIRE(actual.duration == expected.duration);
+         REQUIRE(actual.sourceStart == expected.sourceStart);
+         REQUIRE(SameVideoContent(actual, expected));
+      }
+      REQUIRE_FALSE(SeparateVideoClips(timeline, 0, 12));
+      // Publication remains copy-on-write: the accepted joined snapshot and
+      // original generated leaves cannot change during separation or repetition.
+      REQUIRE(joined.clips.front().content->operation == VideoClipContent::Operation::Sequence);
+      REQUIRE(original.clips.front().content->title == "Caption");
+   }
+}
+
+TEST_CASE("A full frame transparent text layer keeps the parent picture in the composition", "[video-composition][video-text]")
+{
+   auto background = VideoTimeline::CreateVideoTimeline("neutral.mp4", 5, 30, 640, 360);
+   background.placement.id = "background";
+   VideoTimeline::Timeline text;
+   text.placement = {"caption", "background", {}};
+   text.clips.push_back(VideoTimeline::MakeTextVideoClip(1, 1, 2, "Caption", 640, 360, {})); text.nextId = 2;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto spans = PlanVideoTransitions({&background, &text}, 5, 30);
+      REQUIRE(spans.size() == 3);
+      REQUIRE(spans[0].layers.size() == 1);
+      REQUIRE(spans[1].firstFrame == 30);
+      REQUIRE(spans[1].frameCount == 60);
+      REQUIRE(spans[1].layers.size() == 2);
+      REQUIRE(spans[1].layers.front().source.path == "neutral.mp4");
+      REQUIRE(spans[1].layers.back().transparent);
+      REQUIRE(spans[2].layers.size() == 1);
+   }
+}
+
+TEST_CASE("Caption box layout copies resize text and retained wrappers without changing accepted snapshots", "[video-composition][video-text]")
+{
+   using namespace VideoTimeline;
+   auto original = Timeline{};
+   original.clips = {MakeTextVideoClip(1, 0, 3, "Caption", 320, 90, {})}; original.nextId = 2;
+   for (int repeat{}; repeat < 2; ++repeat) for (const int effect : {0, 1, 2}) {
+      auto timeline = original;
+      if (effect == 1) ReverseVideoClip(timeline, 1);
+      if (effect == 2) FreezeVideoClip(timeline, 1, 1, 3);
+      const auto accepted = timeline.clips.front();
+      REQUIRE(ResizeVideoTextContent(timeline.clips.front(), 640, 180));
+      REQUIRE_FALSE(ResizeVideoTextContent(timeline.clips.front(), 640, 180));
+      const auto *text = FindEditableVideoTextContent(timeline.clips.front());
+      REQUIRE(text); REQUIRE(text->width == 640); REQUIRE(text->height == 180);
+      REQUIRE(timeline.clips.front().content->width == 640);
+      REQUIRE(timeline.clips.front().content->height == 180);
+      REQUIRE(FindEditableVideoTextContent(accepted)->width == 320);
+      REQUIRE(FindEditableVideoTextContent(accepted)->height == 90);
+      const auto sized = timeline.clips.front().content;
+      REQUIRE_THROWS(ResizeVideoTextContent(timeline.clips.front(), 1, 180));
+      REQUIRE(timeline.clips.front().content == sized);
+   }
+}
+
+TEST_CASE("Caption font layout is independent of preview and export pixel resolution", "[video-composition][video-text]")
+{
+   const VideoFrameRectangle box{.1, .3, .8, .4};
+   const auto expected = CalculateVideoTextRasterSize(box, 640, 360);
+   for (const auto scale : {1, 2, 3, 6}) {
+      const auto raster = CalculateVideoTextRasterSize(box, 640 * scale, 360 * scale);
+      REQUIRE(raster.width == expected.width); REQUIRE(raster.height == expected.height);
+      REQUIRE(raster.height == 720);
+   }
+   const auto thin = CalculateVideoTextRasterSize({0, 0, .8, .02}, 320, 180);
+   REQUIRE(thin.width <= 8192); REQUIRE(thin.height >= 2);
+   const auto taller = CalculateVideoTextRasterSize({.1, .3, .8, .6}, 640, 360);
+   REQUIRE(taller.width < expected.width); REQUIRE(taller.height == expected.height);
+   REQUIRE_THROWS(CalculateVideoTextRasterSize({0, 0, 0, 1}, 640, 360));
+}
+
+TEST_CASE("Invalid text changes cannot alter shared content or caption timing", "[video-composition][video-text]")
+{
+   auto clip = VideoTimeline::MakeTextVideoClip(1, 2, 3, "Original", 320, 90, {});
+   const auto original = clip;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      for (const auto *bad : {"", " \t\n"}) REQUIRE_THROWS(VideoTimeline::ChangeVideoTextContent(clip, bad, {}));
+      REQUIRE_THROWS(VideoTimeline::ChangeVideoTextContent(clip, std::string("A\0B", 3), {}));
+      for (const auto size : {0.0, -.1, 1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+         VideoTextAppearance style; style.heightFraction = size;
+         REQUIRE_THROWS(VideoTimeline::ChangeVideoTextContent(clip, "Changed", style));
+      }
+      VideoTextAppearance style; style.fontFace = "Bad\nfont";
+      REQUIRE_THROWS(VideoTimeline::ChangeVideoTextContent(clip, "Changed", style));
+      style = {}; style.rgb = 0x1000000;
+      REQUIRE_THROWS(VideoTimeline::ChangeVideoTextContent(clip, "Changed", style));
+      REQUIRE(clip.content == original.content);
+      REQUIRE(clip.start == 2); REQUIRE(clip.duration == 3);
+   }
+}
