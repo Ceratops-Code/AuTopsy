@@ -175,6 +175,9 @@ bool IsStaticVideoContent(const VideoClipContent &content);
 const VideoClipContent *FindEditableVideoTextContent(const Clip &clip);
 bool ChangeVideoTextContent(Clip &clip, const std::string &text,
    const VideoEditing::VideoTextAppearance &appearance);
+// A render layout is a private copy: text and alpha-bearing wrappers use the
+// current box dimensions without changing retained source/history snapshots.
+bool ResizeVideoTextContent(Clip &clip, int width, int height);
 // Full retained windows, including handles, remain available after reverse.
 // These operations affect picture only; the native soundtrack stays editable.
 bool ReverseVideoClip(Timeline &timeline, uint64_t id);

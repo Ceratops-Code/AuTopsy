@@ -237,6 +237,9 @@ std::shared_ptr<const PreparedVideoComposition> PrepareAddedTextTrack(AudacityPr
       input.push_back({&track->Timeline(), {!track->VideoVisible(), track->VideoSolo()}});
       if (track == &parent) input.push_back({&candidate, {false, false}});
    }
+   std::vector<const VideoTimeline::Timeline*> all;
+   for (const auto &layer : input) all.push_back(layer.timeline);
+   PrepareVideoTextLayouts(all, candidate.placement.id, &ProjectWindow::Get(project));
    return PrepareVideoComposition(VideoTimeline::VisibleVideoLayers(input),
       std::max(VideoTimeline::GetProjectVideoDuration(project), candidate.End()),
       {0, 0, 540, 30, false}, &ProjectWindow::Get(project));

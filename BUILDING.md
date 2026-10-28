@@ -774,7 +774,8 @@ identities, visual placement, movement and decoded composition pixels.
 colours, tones, a still image and neutral text. The picture case includes the
 stock-Audacity audio consumer with saved caption data. `fork-video-text`
 checks transparent text pixels in preview/export, font/style/timing persistence,
-failed and cancelled drafts, repeat edits, Undo/Redo and nested picture effects.
+failed and cancelled drafts, hidden-layer rejection, box-aspect changes through
+caption/PiP controls, repeat edits, Undo/Redo and nested picture effects.
 `AddVideoText` and `SetVideoText` share the native caption adapter; their
 size and rectangle fields use percentages, colour is 0xRRGGBB as an integer, and
 font is a family name. Text rasterization uses wxWidgets; FFmpeg's existing

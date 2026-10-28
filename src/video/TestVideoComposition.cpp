@@ -834,6 +834,30 @@ TEST_CASE("A full frame transparent text layer keeps the parent picture in the c
    }
 }
 
+TEST_CASE("Caption box layout copies resize text and retained wrappers without changing accepted snapshots", "[video-composition][video-text]")
+{
+   using namespace VideoTimeline;
+   auto original = Timeline{};
+   original.clips = {MakeTextVideoClip(1, 0, 3, "Caption", 320, 90, {})}; original.nextId = 2;
+   for (int repeat{}; repeat < 2; ++repeat) for (const int effect : {0, 1, 2}) {
+      auto timeline = original;
+      if (effect == 1) ReverseVideoClip(timeline, 1);
+      if (effect == 2) FreezeVideoClip(timeline, 1, 1, 3);
+      const auto accepted = timeline.clips.front();
+      REQUIRE(ResizeVideoTextContent(timeline.clips.front(), 640, 180));
+      REQUIRE_FALSE(ResizeVideoTextContent(timeline.clips.front(), 640, 180));
+      const auto *text = FindEditableVideoTextContent(timeline.clips.front());
+      REQUIRE(text); REQUIRE(text->width == 640); REQUIRE(text->height == 180);
+      REQUIRE(timeline.clips.front().content->width == 640);
+      REQUIRE(timeline.clips.front().content->height == 180);
+      REQUIRE(FindEditableVideoTextContent(accepted)->width == 320);
+      REQUIRE(FindEditableVideoTextContent(accepted)->height == 90);
+      const auto sized = timeline.clips.front().content;
+      REQUIRE_THROWS(ResizeVideoTextContent(timeline.clips.front(), 1, 180));
+      REQUIRE(timeline.clips.front().content == sized);
+   }
+}
+
 TEST_CASE("Invalid text changes cannot alter shared content or caption timing", "[video-composition][video-text]")
 {
    auto clip = VideoTimeline::MakeTextVideoClip(1, 2, 3, "Original", 320, 90, {});

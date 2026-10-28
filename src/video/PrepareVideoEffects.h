@@ -21,6 +21,10 @@ struct PreparedVideoComposition {
 std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    const std::vector<const VideoTimeline::Timeline*> &layers, double duration,
    const VideoEffectRenderSettings &settings, wxWindow *parent, bool force = false);
+// Check affected caption layouts even in muted tracks/clips or parent gaps.
+// All candidate/ancestor inputs are owned snapshots; nothing is published here.
+void PrepareVideoTextLayouts(const std::vector<const VideoTimeline::Timeline*> &layers,
+   const std::string &changedLayerId, wxWindow *parent);
 std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoPreview(AudacityProject &project,
    VideoPreview::PreviewQuality quality, bool precise, wxWindow *parent, bool allowPreparation = true);
 std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoExport(AudacityProject &project,

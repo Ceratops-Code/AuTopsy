@@ -539,6 +539,25 @@ bool ChangeVideoTextContent(Clip &clip, const std::string &text,
    auto changed = clip; replace(replace, changed); RequireUsableVideoContent(changed, {});
    clip = std::move(changed); return true;
 }
+bool ResizeVideoTextContent(Clip &clip, int width, int height)
+{
+   if (width < 2 || height < 2 || width > 8192 || height > 8192)
+      throw std::runtime_error("A text overlay needs usable picture dimensions.");
+   RequireUsableVideoContent(clip, clip.media);
+   const auto resize = [&](const auto &self, Clip &target) -> bool {
+      if (!target.content || !VideoContentUsesAlpha(target)) return false;
+      auto content = std::make_shared<VideoClipContent>(*target.content);
+      bool changed = content->width != width || content->height != height;
+      content->width = width; content->height = height;
+      for (auto &part : content->parts) changed = self(self, part) || changed;
+      if (changed) target.content = std::move(content);
+      return changed;
+   };
+   auto candidate = clip;
+   if (!resize(resize, candidate)) return false;
+   RequireUsableVideoContent(candidate, candidate.media);
+   clip = std::move(candidate); return true;
+}
 bool RepeatVideoClip(Timeline &timeline, uint64_t id, int copies)
 {
    RequireWellFormedTimeline(timeline);

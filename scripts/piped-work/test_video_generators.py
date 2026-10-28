@@ -205,6 +205,21 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     for _ in range(2):
         client.send("Undo"); assert rows() == baseline
         client.send("Redo"); assert rows() == added
+    # Font/layout acceptance must not depend on current contribution to the
+    # picture: muted parents and clips still own editable, saved caption data.
+    for hidden in ("parent", "clip"):
+        if hidden == "parent":
+            operate_owned_video_track(client, .25, track=track, gesture="click", area="mute")
+            assert next(t for t in client.data("GetVideoClips")["tracks"] if t["index"] == track)["muted"]
+        else:
+            client.send(f'SetVideoClipMute: Track={text_track} Id={text_id} Muted=1')
+        hidden_rows = rows()
+        for bad in ('Text="Missing" Font="AuTopsy Missing Fixture Font"',
+                    'Text="Too long for this tiny box" Size=90 Width=10 Height=10'):
+            client.send(f'AddVideoText: Track={track} At=1 Seconds=2 {bad}', success=False)
+            client.send(f'SetVideoText: Track={text_track} Id={text_id} At=1 Seconds=2 {bad}', success=False)
+            assert rows() == hidden_rows
+        client.send("Undo"); assert rows() == added
         client.send(f"SetVideoText: Track={text_track} Id={text_id} {parameters}")
         client.send("Undo"); assert rows() == baseline, "An identical edit added a history entry."
         client.send("Redo"); assert rows() == added
@@ -253,6 +268,33 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
         enter_caption, menu_gesture=True)
     assert next(row for row in rows() if row["track"] == text_track)["text"] == "GUI caption"
     client.send("Undo"); assert rows() == added
+    # Text size follows the current box, including aspect changes through the
+    # common PiP adapter. A saved source raster must never freeze its old size.
+    def text_height(path):
+        picture = decoded_picture(ffmpeg, path, 1.5)
+        ys = [i // 160 for i in range(160 * 90) if min(picture[3*i:3*i+3]) > 190]
+        assert ys, path
+        return max(ys) - min(ys) + 1
+
+    small = 'Text="Hi" Font="Arial" At=1 Seconds=2 Size=50 X=10 Y=30 Width=80 Height=20'
+    client.send(f'SetVideoText: Track={text_track} Id={text_id} {small}')
+    small_height = text_height(export_picture(client, root, ffmpeg, ffprobe, "small-text-box", 5))
+    client.send(f'SetVideoText: Track={text_track} Id={text_id} {small.replace("Height=20", "Height=40")}')
+    large_height = text_height(export_picture(client, root, ffmpeg, ffprobe, "large-text-box", 5))
+    assert large_height > small_height * 1.5, (small_height, large_height)
+    resized = rows()
+    save_reopen(client, root / "_resized-caption.aup3")
+    assert rows() == resized
+    assert text_height(export_picture(client, root, ffmpeg, ffprobe, "resized-text-reopened", 5)) == large_height
+    client.send(f'SetVideoEmbedding: Track={text_track} Parent={track} X=0.1 Y=0.3 Width=0.8 Height=0.6')
+    taller = text_height(export_picture(client, root, ffmpeg, ffprobe, "pip-resized-text", 5))
+    assert taller > large_height * 1.2, (large_height, taller)
+    client.send("Undo"); assert rows() == resized
+    wide = 'Text="MMMMMMMMMM" Font="Arial" At=1 Seconds=2 Size=50 X=0 Y=30 Width=100 Height=40'
+    client.send(f'SetVideoText: Track={text_track} Id={text_id} {wide}')
+    assert text_height(export_picture(client, root, ffmpeg, ffprobe, "widened-text-box", 5)) > 0
+    client.send(f'SetVideoText: Track={text_track} Id={text_id} {parameters}')
+    assert rows() == added
     # Split/join and nested picture effects must retain alpha in their private
     # intermediates. Checking only the direct PNG would miss black-box regressions.
     select_clip_range(client, 2, 2, text_track); client.send("Split")

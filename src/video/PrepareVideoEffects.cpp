@@ -1,4 +1,6 @@
 #include "PrepareVideoEffects.h"
+#include "RenderVideoComposition.h"
+#include <unordered_set>
 #include "PrepareGeneratedVideo.h"
 #include "PlanVideoTransitions.h"
 #include "RenderVideoComposition.h"
@@ -74,18 +76,6 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    if (!force && !RequiresVideoComposition(layers)) return {};
    const auto rate = settings.frameRate;
    auto spans = PlanVideoTransitions(layers, duration, rate);
-   std::vector<std::shared_ptr<const VideoPreview::PreparedMedia>> generated;
-   for (auto &span : spans) for (auto &layer : span.layers) if (layer.generated) {
-      const auto from = std::max(0.0, layer.sourceStart);
-      const auto to = std::min(layer.generated->duration, from + double(span.frameCount) / rate * layer.playbackRate);
-      const auto constant = VideoTimeline::IsStaticVideoContent(*layer.generated);
-      auto prepared = PrepareGeneratedVideo(*layer.generated, settings, parent,
-         constant ? 0 : from, constant ? std::min(layer.generated->duration, 1 / layer.generated->frameRate) : to);
-      if (constant) { layer.sourceStart = 0; layer.playbackRate = 1; span.requiresBlend = true; }
-      else layer.sourceStart -= prepared.contentStart;
-      layer.source = {Utf8(prepared.media->playbackPath), prepared.media->duration, prepared.frameRate, prepared.width, prepared.height};
-      layer.generated.reset(); generated.push_back(std::move(prepared.media));
-   }
    const VideoBlendLayer *reference{};
    for (const auto &span : spans) {
       for (const auto &layer : span.layers) if (layer.rectangle == VideoFrameRectangle{}) { reference = &layer; break; }
@@ -122,6 +112,25 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
    }
    if (width < 2 || height < 2 || width > 16384 || height > 16384 || width % 2 || height % 2)
       throw std::runtime_error("Picture transitions require usable even canvas dimensions.");
+   std::vector<std::shared_ptr<const VideoPreview::PreparedMedia>> generated;
+   for (auto &span : spans) for (auto &layer : span.layers) if (layer.generated) {
+      const auto from = std::max(0.0, layer.sourceStart);
+      const auto to = std::min(layer.generated->duration, from + double(span.frameCount) / rate * layer.playbackRate);
+      const auto constant = VideoTimeline::IsStaticVideoContent(*layer.generated);
+      auto content = layer.generated;
+      if (layer.transparent) {
+         const auto box = CalculateVideoPlacementRectangle(layer.rectangle, width, height);
+         VideoTimeline::Clip layout{1, 0, 0, content->duration}; layout.content = content;
+         VideoTimeline::ResizeVideoTextContent(layout, box.width, box.height);
+         content = layout.content;
+      }
+      auto prepared = PrepareGeneratedVideo(*content, settings, parent,
+         constant ? 0 : from, constant ? std::min(layer.generated->duration, 1 / layer.generated->frameRate) : to);
+      if (constant) { layer.sourceStart = 0; layer.playbackRate = 1; span.requiresBlend = true; }
+      else layer.sourceStart -= prepared.contentStart;
+      layer.source = {Utf8(prepared.media->playbackPath), prepared.media->duration, prepared.frameRate, prepared.width, prepared.height};
+      layer.generated.reset(); generated.push_back(std::move(prepared.media));
+   }
    auto result = std::make_shared<PreparedVideoComposition>(); result->settings = settings;
    result->media = std::move(generated);
    auto &timeline = result->timeline;
@@ -199,6 +208,52 @@ std::shared_ptr<const PreparedVideoComposition> PrepareProjectVideoExport(Audaci
    return PrepareVideoComposition(layers, duration, settings, parent);
 }
 bool IsPreparingVideoEffects(AudacityProject &project) { return Effects(project).preparing; }
+void PrepareVideoTextLayouts(const std::vector<const VideoTimeline::Timeline*> &layers,
+   const std::string &changedLayerId, wxWindow *parent)
+{
+   for (const auto *layer : layers) {
+      if (std::none_of(layer->clips.begin(), layer->clips.end(), [](const auto &clip) {
+             return VideoTimeline::VideoContentUsesAlpha(clip); })) continue;
+      double widthFraction = 1, heightFraction = 1;
+      const auto *root = layer; bool affected{};
+      std::unordered_set<const VideoTimeline::Timeline*> seen;
+      for (;;) {
+         if (!seen.insert(root).second) throw std::runtime_error("A caption cannot have cyclic parents.");
+         affected = affected || root->placement.id == changedLayerId;
+         widthFraction *= root->placement.rectangle.width;
+         heightFraction *= root->placement.rectangle.height;
+         if (root->placement.parentId.empty()) break;
+         const auto found = std::find_if(layers.begin(), layers.end(), [&](const auto *item) {
+            return item->placement.id == root->placement.parentId;
+         });
+         if (found == layers.end()) throw std::runtime_error("The caption parent was removed.");
+         root = *found;
+      }
+      if (!affected) continue;
+      if (root->clips.empty()) throw std::runtime_error("A caption needs a parent picture canvas.");
+      const auto &picture = root->clips.front();
+      auto source = VideoTimeline::SourceFor(*root, picture);
+      if (!source.width || !source.height) {
+         const auto size = VideoExport::ReadVideoSourcePictureSize(wxString::FromUTF8(source.path), parent);
+         if (!size) throw VideoPreview::PreviewPreparationCancelled{};
+         source.width = size->first; source.height = size->second;
+      }
+      const auto canvas = VideoExport::CalculateVideoExportCanvas(source.width, source.height, picture.crop);
+      const int width = std::max(2, int(std::llround(canvas.first * widthFraction)) & ~1);
+      const int height = std::max(2, int(std::llround(canvas.second * heightFraction)) & ~1);
+      for (auto clip : layer->clips) if (VideoTimeline::VideoContentUsesAlpha(clip)) {
+         VideoTimeline::ResizeVideoTextContent(clip, width, height);
+         const auto prepare = [&](const auto &self, const VideoTimeline::VideoClipContent &content) -> void {
+            if (content.operation == VideoTimeline::VideoClipContent::Operation::Text)
+               PrepareGeneratedVideo(content, {width, height, 0, content.frameRate, true}, parent,
+                  0, std::min(content.duration, 1 / content.frameRate));
+            else for (const auto &part : content.parts) if (part.content) self(self, *part.content);
+         };
+         prepare(prepare, *clip.content);
+      }
+   }
+}
+
 std::shared_ptr<const PreparedVideoComposition> PrepareCandidateVideoEffects(AudacityProject &project,
    const AuTopsyVideoTrack &track, const VideoTimeline::Timeline &candidate, wxWindow *parent)
 {
@@ -207,6 +262,9 @@ std::shared_ptr<const PreparedVideoComposition> PrepareCandidateVideoEffects(Aud
    std::vector<VideoTimeline::VideoTimelineLayer> input;
    for (const auto *item : VideoTimeline::ProjectVideoTracks(project))
       input.push_back({item == &track ? &candidate : &item->Timeline(), {!item->VideoVisible(), item->VideoSolo()}});
+   std::vector<const VideoTimeline::Timeline*> all;
+   for (const auto &layer : input) all.push_back(layer.timeline);
+   PrepareVideoTextLayouts(all, candidate.placement.id, parent);
    const auto layers = VideoTimeline::VisibleVideoLayers(input);
    return PrepareVideoComposition(layers, std::max(VideoTimeline::GetProjectVideoDuration(project), candidate.End()),
       PreviewSettings(layers, state.quality, false), parent);
