@@ -858,6 +858,22 @@ TEST_CASE("Caption box layout copies resize text and retained wrappers without c
    }
 }
 
+TEST_CASE("Caption font layout is independent of preview and export pixel resolution", "[video-composition][video-text]")
+{
+   const VideoFrameRectangle box{.1, .3, .8, .4};
+   const auto expected = CalculateVideoTextRasterSize(box, 640, 360);
+   for (const auto scale : {1, 2, 3, 6}) {
+      const auto raster = CalculateVideoTextRasterSize(box, 640 * scale, 360 * scale);
+      REQUIRE(raster.width == expected.width); REQUIRE(raster.height == expected.height);
+      REQUIRE(raster.height == 720);
+   }
+   const auto thin = CalculateVideoTextRasterSize({0, 0, .8, .02}, 320, 180);
+   REQUIRE(thin.width <= 8192); REQUIRE(thin.height >= 2);
+   const auto taller = CalculateVideoTextRasterSize({.1, .3, .8, .6}, 640, 360);
+   REQUIRE(taller.width < expected.width); REQUIRE(taller.height == expected.height);
+   REQUIRE_THROWS(CalculateVideoTextRasterSize({0, 0, 0, 1}, 640, 360));
+}
+
 TEST_CASE("Invalid text changes cannot alter shared content or caption timing", "[video-composition][video-text]")
 {
    auto clip = VideoTimeline::MakeTextVideoClip(1, 2, 3, "Original", 320, 90, {});

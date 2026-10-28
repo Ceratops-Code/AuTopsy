@@ -106,6 +106,7 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
       const auto canvas = VideoExport::CalculateVideoExportCanvas(sourceWidth, sourceHeight, reference->crop);
       width = canvas.first; height = canvas.second;
    }
+   const auto layoutWidth = width, layoutHeight = height;
    if (settings.maximumHeight > 0 && height > settings.maximumHeight) {
       width = std::max(2, int(std::llround(double(width) * settings.maximumHeight / height)) / 2 * 2);
       height = settings.maximumHeight / 2 * 2;
@@ -118,13 +119,15 @@ std::shared_ptr<const PreparedVideoComposition> PrepareVideoComposition(
       const auto to = std::min(layer.generated->duration, from + double(span.frameCount) / rate * layer.playbackRate);
       const auto constant = VideoTimeline::IsStaticVideoContent(*layer.generated);
       auto content = layer.generated;
+      auto generatedSettings = settings;
       if (layer.transparent) {
-         const auto box = CalculateVideoPlacementRectangle(layer.rectangle, width, height);
+         const auto box = CalculateVideoTextRasterSize(layer.rectangle, layoutWidth, layoutHeight);
          VideoTimeline::Clip layout{1, 0, 0, content->duration}; layout.content = content;
          VideoTimeline::ResizeVideoTextContent(layout, box.width, box.height);
          content = layout.content;
+         generatedSettings.width = generatedSettings.height = generatedSettings.maximumHeight = 0;
       }
-      auto prepared = PrepareGeneratedVideo(*content, settings, parent,
+      auto prepared = PrepareGeneratedVideo(*content, generatedSettings, parent,
          constant ? 0 : from, constant ? std::min(layer.generated->duration, 1 / layer.generated->frameRate) : to);
       if (constant) { layer.sourceStart = 0; layer.playbackRate = 1; span.requiresBlend = true; }
       else layer.sourceStart -= prepared.contentStart;
@@ -239,8 +242,8 @@ void PrepareVideoTextLayouts(const std::vector<const VideoTimeline::Timeline*> &
          source.width = size->first; source.height = size->second;
       }
       const auto canvas = VideoExport::CalculateVideoExportCanvas(source.width, source.height, picture.crop);
-      const int width = std::max(2, int(std::llround(canvas.first * widthFraction)) & ~1);
-      const int height = std::max(2, int(std::llround(canvas.second * heightFraction)) & ~1);
+      const auto box = CalculateVideoTextRasterSize({0, 0, widthFraction, heightFraction}, canvas.first, canvas.second);
+      const auto width = box.width, height = box.height;
       for (auto clip : layer->clips) if (VideoTimeline::VideoContentUsesAlpha(clip)) {
          VideoTimeline::ResizeVideoTextContent(clip, width, height);
          const auto prepare = [&](const auto &self, const VideoTimeline::VideoClipContent &content) -> void {

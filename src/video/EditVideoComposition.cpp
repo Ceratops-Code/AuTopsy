@@ -14,6 +14,7 @@
 #include "ViewInfo.h"
 #include "PlanVideoExport.h"
 #include "ExportVideoMix.h"
+#include "RenderVideoComposition.h"
 #include "Uuid.h"
 #include <wx/checkbox.h>
 #include <wx/clrpicker.h>
@@ -267,8 +268,8 @@ std::shared_ptr<AuTopsyVideoTrack> AddProjectVideoTextOverlay(AudacityProject &p
    VideoTimeline::Timeline candidate;
    candidate.placement = {audacity::Uuid::Generate().ToHexString(), parent.Timeline().placement.id, settings.rectangle};
    RequireUsableVideoPlacement(candidate.placement);
-   const auto width = std::max(2, int(std::llround(canvas.first * settings.rectangle.width)) & ~1);
-   const auto height = std::max(2, int(std::llround(canvas.second * settings.rectangle.height)) & ~1);
+   const auto box = CalculateVideoTextRasterSize(settings.rectangle, canvas.first, canvas.second);
+   const auto width = box.width, height = box.height;
    candidate.clips.push_back(VideoTimeline::MakeTextVideoClip(1, settings.start, settings.seconds,
       settings.text, width, height, settings.appearance));
    candidate.nextId = 2; candidate.sourceWidth = width; candidate.sourceHeight = height;

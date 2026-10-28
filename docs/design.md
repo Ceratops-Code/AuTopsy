@@ -711,7 +711,10 @@ render cancellation publish no row or history. An unchanged Edit is a no-op.
 Caption geometry belongs to the existing track placement; content/style belongs
 to immutable text nodes, so Undo restores previous shared snapshots. The renderer
 sizes private text/wrapper copies to each resolved output box before preparing
-pixels, including edits made through the ordinary PiP controls. Saved raster
+pixels, including edits made through the ordinary PiP controls. A bounded logical
+text canvas (720 pixels high, reduced for extreme wide boxes) depends on box
+aspect rather than preview/export pixel resolution; the compositor scales the
+result. Changing preview quality therefore cannot change font fitting. Saved raster
 dimensions do not freeze the caption's font size or aspect. Candidate preparation
 checks affected caption fonts and layouts independently of current visibility,
 including muted parents/clips and parent gaps; hidden invalid text cannot enter

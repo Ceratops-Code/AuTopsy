@@ -229,10 +229,10 @@ PreparedGeneratedVideo PrepareGeneratedVideo(
       return;
    }
    // Reverse buffers decoded frames. Split AFTER composition/scaling into at
-   // most two seconds and about 64 MiB of YUV frames, then reverse chunk order.
+   // most two seconds and about 64 MiB of decoded YUV/ARGB frames, then reverse chunk order.
    const auto maximumFrames = std::max<std::int64_t>(1, std::min<std::int64_t>(
       std::max<std::int64_t>(1, static_cast<std::int64_t>(rate * 2)),
-      static_cast<std::int64_t>(64.0 * 1024 * 1024 / (width * double(height) * 1.5))));
+       static_cast<std::int64_t>(64.0 * 1024 * 1024 / (width * double(height) * (alpha ? 4 : 1.5)))));
    for (auto span = spans.rbegin(); span != spans.rend(); ++span) {
       auto end = span->firstFrame + span->frameCount;
       while (end > span->firstFrame) {

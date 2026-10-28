@@ -76,4 +76,14 @@ VideoPixelRectangle CalculateVideoPlacementRectangle(const VideoFrameRectangle &
    return {x, y, std::clamp(even(rectangle.width * width), 2, width - x),
       std::clamp(even(rectangle.height * height), 2, height - y)};
 }
+VideoPixelRectangle CalculateVideoTextRasterSize(const VideoFrameRectangle &rectangle, int width, int height)
+{
+   CalculateVideoPlacementRectangle(rectangle, width, height);
+   const auto aspect = rectangle.width * width / (rectangle.height * height);
+   if (!std::isfinite(aspect) || aspect < 1.0 / 4096 || aspect > 4096)
+      throw std::runtime_error("The caption box is too narrow or wide for readable text.");
+   const auto logicalHeight = std::max(2, int(std::min(720.0, 8192.0 / aspect)) / 2 * 2);
+   const auto logicalWidth = std::clamp(int(std::llround(logicalHeight * aspect / 2)) * 2, 2, 8192);
+   return {0, 0, logicalWidth, logicalHeight};
+}
 }

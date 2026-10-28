@@ -277,6 +277,8 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
         return max(ys) - min(ys) + 1
 
     small = 'Text="Hi" Font="Arial" At=1 Seconds=2 Size=50 X=10 Y=30 Width=80 Height=20'
+    client.send(f'SetVideoText: Track={text_track} Id={text_id} {small.replace("Height=20", "Height=2")}')
+    client.send("Undo"); assert rows() == added
     client.send(f'SetVideoText: Track={text_track} Id={text_id} {small}')
     small_height = text_height(export_picture(client, root, ffmpeg, ffprobe, "small-text-box", 5))
     client.send(f'SetVideoText: Track={text_track} Id={text_id} {small.replace("Height=20", "Height=40")}')
