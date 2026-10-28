@@ -272,7 +272,9 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     # common PiP adapter. A saved source raster must never freeze its old size.
     def text_height(path):
         picture = decoded_picture(ffmpeg, path, 1.5)
-        ys = [i // 160 for i in range(160 * 90) if min(picture[3*i:3*i+3]) > 190]
+        # Small glyphs are antialiased by the 2:1 observation scale. Measure
+        # visible white-text contrast against blue, rather than opaque cores.
+        ys = [i // 160 for i in range(160 * 90) if min(picture[3*i:3*i+3]) > 90]
         assert ys, path
         return max(ys) - min(ys) + 1
 
