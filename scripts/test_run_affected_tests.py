@@ -28,7 +28,7 @@ class SelectionTests(unittest.TestCase):
         import run_fork_test_harness as harness
         for text in ("Green dinosaur", "שלום עולם"):
             response = text + "\nBatchCommand finished: OK\n\n"
-            def open_pipe(_path, mode, **options):
+            def open_pipe(_path, mode, response=response, **options):
                 return io.TextIOWrapper(io.BytesIO(response.encode("utf-8") if mode == "r" else b""),
                     encoding=options.get("encoding", "cp1252"), newline="")
             with patch.object(pipeclient.PipeClient, "_shared_state", {}), \
@@ -37,10 +37,11 @@ class SelectionTests(unittest.TestCase):
                 client = harness.ScriptClient()
                 client.client._write_pipe_open()
                 client.client.write(text)
-                self.assertIn(text, client.client._write_pipe.buffer.getvalue().decode("utf-8"))
+                writer: Any = client.client._write_pipe
+                self.assertIn(text, writer.buffer.getvalue().decode("utf-8"))
                 client.client._reader()
                 self.assertIn(text, client.client.read())
-                client.client._write_pipe.close()
+                writer.close()
 
     def test_embedded_picture_regions_allow_blended_edges_without_accepting_other_colours(self) -> None:
         from test_video_transport import preview_colours_match
