@@ -758,8 +758,8 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.names(["src/video/TestVideoEdits.cpp"]), {"video-edits"})
         self.assertEqual(self.names(["src/video/EditCaptionCues.cpp"]), {"video-captions"})
         self.assertEqual(self.names(["src/video/TestVideoCaptions.cpp"]), {"video-captions"})
-        catalogue = [{"name": name} for name in (*runner.INSTALLER_BASELINE_TESTS, "fork-video-captions")]
-        self.assertIn("fork-video-captions", runner.select_installer_tests(["src/video/GenerateVideoCaptions.cpp"], catalogue))
+        catalogue = [{"name": name} for name in (*runner.INSTALLER_BASELINE_TESTS, "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew")]
+        self.assertEqual(set(runner.select_installer_tests(["src/video/GenerateVideoCaptions.cpp"], catalogue)), {row["name"] for row in catalogue})
 
     def test_shared_headers_and_test_runtime_expand_only_declared_scope(self) -> None:
         self.assertEqual(self.names(["src/video/EditVideoTimeline.h"]),

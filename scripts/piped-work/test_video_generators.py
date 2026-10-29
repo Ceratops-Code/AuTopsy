@@ -14,9 +14,10 @@ from run_fork_test_harness import (
     ready_video_preview, run_process, save_reopen,
 )
 from test_clip_actions import with_native_dialog
+from test_video_captions import CAPTION_CASES, check_video_caption
 from test_video_transport import expect_preview_crop_pixels
 
-GENERATOR_CASES = ("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text", "video-captions")
+GENERATOR_CASES = ("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text", *CAPTION_CASES)
 
 
 def create_colour_video(root, ffmpeg):
@@ -90,8 +91,8 @@ def check_video_generator(client, root, ffmpeg, ffprobe, case):
     initial = client.data("GetVideoClips")["clips"][0]
     track, clip = initial["track"], initial["id"]
     audio = read_audio_project_state(client.data)
-    if case == "video-captions":
-        return check_video_captions(client, root, ffmpeg, ffprobe, initial, audio)
+    if case in CAPTION_CASES:
+        return check_video_caption(client, root, ffmpeg, ffprobe, case, initial, audio)
     if case == "video-pictures":
         return check_video_pictures(client, root, ffmpeg, ffprobe, initial, audio)
     if case == "video-text":
@@ -341,135 +342,6 @@ def check_video_text(client, root, ffmpeg, ffprobe, original, audio):
     assert rows() == added and read_audio_project_state(client.data) == audio
     again = export_picture(client, root, ffmpeg, ffprobe, "text-reopened", 5)
     assert caption_pixels(again, 1.5) == expected
-
-
-def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
-    """Subtitles and real local recognition use neutral text and synthetic speech.
-
-    Public commands supply every project effect. File/word/timestamp checks,
-    Undo, export frames and normal reopen observe the result independently.
-    """
-    track = original["track"]
-
-    def rows():
-        return client.data("GetVideoClips")["clips"]
-
-    before = rows()
-    source = root / "_captions.srt"
-    source.write_text("1\n00:00:00,500 --> 00:00:02,000\nBlue headphones\n\n"
-                      "2\n00:00:02,000 --> 00:00:04,000\nשלום עולם\n\n", encoding="utf-8")
-    for repeat in range(2):
-        client.file("ImportCaptions", source, f"Track={track}")
-        added = rows()
-        caption_rows = [row for row in added if row["pictureEffect"] == "text"]
-        assert len(caption_rows) == 2 and len({row["track"] for row in caption_rows}) == 1, caption_rows
-        captions = caption_rows[0]["track"]
-        assert {row["text"] for row in caption_rows} == {"Blue headphones", "שלום עולם"}
-        with_native_dialog(lambda: operate_owned_video_track(client, .5, track=track,
-            gesture="context", menu_path=("Generate Captions...",)), "Generate Captions",
-            lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")), menu_gesture=True)
-        assert rows() == added, "Cancelling caption options changed the project."
-        client.file("ImportCaptions", source, f"Track={track}")
-        assert rows() == added, "Repeating the same caption import duplicated its clips."
-        client.send("Undo"); assert rows() == before, "A batch needs exactly one Undo."
-        client.send("Redo"); assert rows() == added
-        for extension in ("srt", "vtt"):
-            output = root / f"_captions-{repeat}.{extension}"
-            for _ in range(2):
-                client.file("ExportCaptions", output, f"Track={captions}")
-            text = output.read_text(encoding="utf-8")
-            assert "Blue headphones" in text and "שלום עולם" in text
-            assert ("00:00:00,500" if extension == "srt" else "00:00:00.500") in text
-            output.write_text("Existing user subtitle", encoding="utf-8")
-            client.file("ExportCaptions", output, f"Track={captions}", success=False)
-            assert output.read_text(encoding="utf-8") == "Existing user subtitle"
-            client.file("ExportCaptions", output, f"Track={captions} Overwrite=1")
-            assert output.read_text(encoding="utf-8") == text
-        bad = root / "_bad-captions.srt"
-        bad.write_text("1\n00:00:00,000 --> 00:00:01,000\nGood\n\n2\ninvalid time\nBad\n", encoding="utf-8")
-        client.file("ImportCaptions", bad, f"Track={track}", success=False)
-        assert rows() == added, "A malformed later cue published a partial track."
-        client.send(f"GenerateCaptions: Track={track} Model=unknown Language=en", success=False)
-        assert rows() == added, "An invalid model changed project content."
-        assert read_audio_project_state(client.data) == audio
-        save_reopen(client, root / f"_captions-{repeat}.aup3")
-        assert rows() == added and read_audio_project_state(client.data) == audio
-        movie = export_picture(client, root, ffmpeg, ffprobe, f"captions-{repeat}", 5)
-        # Observe the encoded size. Halving an eight-pixel fixture font removes
-        # its opaque cores through antialiasing without removing any caption.
-        picture = run_process([ffmpeg, "-v", "error", "-ss", "1", "-i", str(movie), "-frames:v", "1",
-            "-pix_fmt", "rgb24", "-f", "rawvideo", "-"], text=False, timeout=30)
-        assert len(picture) == 320 * 180 * 3
-        assert sum(min(picture[i:i+3]) > 170 for i in range(0, len(picture), 3)) > 5, "Exported captions disappeared."
-        if repeat == 0:
-            # Reopen resets history, so remove the caption row through the normal
-            # selected-track command before independently repeating the import.
-            client.send(f"SelectTracks: Track={captions} TrackCount=1 Mode=Set")
-            client.send("RemoveTracks")
-            before = rows()
-
-    speech = root / "_neutral-speech.wav"
-    # The desktop worker deliberately uses a bare, stable Python. Speech COM is
-    # owned by the repository-tools runtime, whose manifest declares pywin32.
-    # Run only this fixture producer in that explicit runtime, without changing
-    # global Python or invalidating the compiled application's acceptance.
-    speech_code = """import sys,win32com.client
-voice=win32com.client.Dispatch('SAPI.SpVoice')
-voices=voice.GetVoices('Language=409')
-assert voices.Count, 'An English Windows voice is required for this neutral fixture'
-voice.Voice=voices.Item(0)
-stream=win32com.client.Dispatch('SAPI.SpFileStream')
-stream.Format.Type=22
-stream.Open(sys.argv[1],3,False)
-try:
-    voice.AudioOutputStream=stream
-    voice.Speak('A small green dinosaur is wearing blue headphones. This is a caption test.')
-finally:
-    stream.Close()
-"""
-    run_process(["uv", "run", "--project", str(Path(__file__).resolve().parents[1]),
-        "--locked", "--python", "3.12", "python", "-c", speech_code, str(speech)], timeout=45)
-    client.file("Import2", speech)
-    tracks = client.data("GetInfo: Type=Tracks Format=JSON")
-    speech_track = len(tracks)-1
-    client.send("SelectTime: Start=0 End=0")
-    baseline = rows()
-    action = f"GenerateCaptions: Track={speech_track} Model=tiny Language=en"
-    with_native_dialog(lambda: client.send(action, success=False), "Download Caption Model",
-        lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")))
-    assert rows() == baseline, "Cancelling model acquisition changed the project."
-    client.send(action)
-    generated = rows()
-    fresh = [row for row in generated if row not in baseline and row["pictureEffect"] == "text"]
-    words = " ".join(row["text"] for row in fresh).lower()
-    assert all(word in words for word in ("green", "dinosaur", "blue", "headphones")), words
-    assert len({row["track"] for row in fresh}) == 1
-    speech_track = len(client.data("GetInfo: Type=Tracks Format=JSON"))-1
-    action = f"GenerateCaptions: Track={speech_track} Model=tiny Language=en"
-    client.send(action); assert rows() == generated, "Repeated recognition duplicated accepted captions."
-    client.send("Undo"); assert rows() == baseline
-    client.send("Redo"); assert rows() == generated
-    save_reopen(client, root / "_recognized-captions.aup3")
-    assert rows() == generated
-    speech_track = len(client.data("GetInfo: Type=Tracks Format=JSON"))-1
-    with_native_dialog(lambda: client.send(f"GenerateCaptions: Track={speech_track} Model=tiny Language=en", success=False),
-        "Generate Captions", lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")))
-    assert rows() == generated, "Cancelling a recognition job changed the project."
-
-    fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/captions/hebrew.wav"
-    client.file("Import2", fixture)
-    speech_track = len(client.data("GetInfo: Type=Tracks Format=JSON"))-1
-    client.send("SelectTime: Start=0 End=0")
-    baseline = rows()
-    client.send(f"GenerateCaptions: Track={speech_track} Model=base Language=he")
-    fresh = [row for row in rows() if row not in baseline and row["pictureEffect"] == "text"]
-    words = " ".join(row["text"] for row in fresh)
-    assert sum(word in words for word in ("אנשים", "השמש", "הארץ")) >= 2, words
-    assert len({row["track"] for row in fresh}) == 1
-    completed = rows()
-    for _ in range(2):
-        client.send("Undo"); assert rows() == baseline
-        client.send("Redo"); assert rows() == completed
 
 
 def check_video_pictures(client, root, ffmpeg, ffprobe, original, audio):

@@ -91,6 +91,7 @@ from test_video_clip_edits import (
     check_video_visibility,
 )
 from test_video_export_timing import check_video_export_timing
+from test_video_captions import CAPTION_CASES, caption_test_inputs
 from test_video_generators import GENERATOR_CASES, check_video_generator
 from test_video_recording import (
     VIDEO_RECORDING_CASES,
@@ -1249,10 +1250,8 @@ def native_test_inputs(args, executable, module, display):
     if args.case in GENERATOR_CASES:
         inputs["video_generators_sha256"] = sha(here / "test_video_generators.py")
         inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
-    if args.case == "video-captions":
-        inputs["caption_worker_sha256"] = sha(executable.parent / "autopsy-whisper.exe")
-        inputs["caption_fixtures"] = {p.name: sha(p) for p in sorted(
-            (here.parents[1] / "tests/fixtures/captions").iterdir()) if p.is_file()}
+    if args.case in CAPTION_CASES:
+        inputs.update(caption_test_inputs(args.case, executable))
     if args.case in VIDEO_RECORDING_CASES:
         inputs["video_recording_sha256"] = sha(here / "test_video_recording.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")

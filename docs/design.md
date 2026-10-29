@@ -294,7 +294,8 @@ log is retained. User-exported subtitle files remain user-owned. Existing export
 workspace ownership also covers interrupted subtitle writes beside destinations.
 
 Caption behavior belongs to the named `video-captions` portable tests and the
-native `fork-video-captions` journey; the affected-test map selects them through
+native `fork-video-caption-interchange`, `fork-video-caption-english` and
+`fork-video-caption-hebrew` journeys; the affected-test map selects them through
 SDLC against the newest release at the chosen qualification level or higher.
 Multilingual text preservation is distinct from recognition accuracy. The native
 journey uses generated English speech and a short, CC BY 4.0 Hebrew astronomy
