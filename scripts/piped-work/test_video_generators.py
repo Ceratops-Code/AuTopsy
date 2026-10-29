@@ -349,8 +349,6 @@ def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
     Public commands supply every project effect. File/word/timestamp checks,
     Undo, export frames and normal reopen observe the result independently.
     """
-    import win32com.client
-
     track = original["track"]
 
     def rows():
@@ -407,18 +405,26 @@ def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
             before = rows()
 
     speech = root / "_neutral-speech.wav"
-    voice = win32com.client.Dispatch("SAPI.SpVoice")
-    voices = voice.GetVoices("Language=409")
-    assert voices.Count, "An English Windows voice is required for the neutral speech fixture."
-    voice.Voice = voices.Item(0)
-    stream = win32com.client.Dispatch("SAPI.SpFileStream")
-    stream.Format.Type = 22  # 22.05 kHz, 16-bit mono; native import renders 16 kHz.
-    stream.Open(str(speech), 3, False)
-    try:
-        voice.AudioOutputStream = stream
-        voice.Speak("A small green dinosaur is wearing blue headphones. This is a caption test.")
-    finally:
-        stream.Close()
+    # The desktop worker deliberately uses a bare, stable Python. Speech COM is
+    # owned by the repository-tools runtime, whose manifest declares pywin32.
+    # Run only this fixture producer in that explicit runtime, without changing
+    # global Python or invalidating the compiled application's acceptance.
+    speech_code = """import sys,win32com.client
+voice=win32com.client.Dispatch('SAPI.SpVoice')
+voices=voice.GetVoices('Language=409')
+assert voices.Count, 'An English Windows voice is required for this neutral fixture'
+voice.Voice=voices.Item(0)
+stream=win32com.client.Dispatch('SAPI.SpFileStream')
+stream.Format.Type=22
+stream.Open(sys.argv[1],3,False)
+try:
+    voice.AudioOutputStream=stream
+    voice.Speak('A small green dinosaur is wearing blue headphones. This is a caption test.')
+finally:
+    stream.Close()
+"""
+    run_process(["uv", "run", "--project", str(Path(__file__).resolve().parents[1]),
+        "--locked", "--python", "3.12", "python", "-c", speech_code, str(speech)], timeout=45)
     client.file("Import2", speech)
     tracks = client.data("GetInfo: Type=Tracks Format=JSON")
     speech_track = len(tracks)-1
