@@ -1098,4 +1098,3 @@ def run_requested_cases(args, root, case_api):
             os.environ.pop("AUTOPSY_TEST_DISPLAY", None)
         else:
             os.environ["AUTOPSY_TEST_DISPLAY"] = previous_display
-
