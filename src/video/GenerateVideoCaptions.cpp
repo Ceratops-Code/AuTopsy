@@ -31,6 +31,7 @@
 #include <wx/combobox.h>
 #include <wx/dialog.h>
 #include <wx/filedlg.h>
+#include <wx/file.h>
 #include <wx/filename.h>
 #include <wx/msgdlg.h>
 #include <wx/progdlg.h>
@@ -96,9 +97,11 @@ SourceRange GetSourceRange(AudacityProject &project, Track *source)
       result.from = clip->start; result.to = clip->End();
    }
    else if (auto *audio = dynamic_cast<WaveTrack*>(source)) {
-      const auto clip = audio->GetClipAtTime(at);
-      if (!clip) throw std::runtime_error("Put the cursor inside the audio clip to caption.");
-      result.audio = audio; result.from = clip->GetPlayStartTime(); result.to = clip->GetPlayEndTime();
+      bool found{};
+      for (const auto &clip : audio->Intervals()) if (clip->GetPlayStartTime() <= at && at < clip->GetPlayEndTime()) {
+         result.audio = audio; result.from = clip->GetPlayStartTime(); result.to = clip->GetPlayEndTime(); found = true; break;
+      }
+      if (!found) throw std::runtime_error("Put the cursor inside the audio clip to caption.");
    }
    else throw std::runtime_error("Choose an audio or video clip for caption generation.");
    if (!selection.isPoint()) { result.from = std::max(result.from, selection.t0()); result.to = std::min(result.to, selection.t1()); }
@@ -206,8 +209,9 @@ void GenerateCaptions(AudacityProject &project, Track *track, const std::string 
    // Empty audio cannot yield useful captions. Avoid hallucinated words and an
    // unnecessary model download for exact silence, including muted mixes.
    SF_INFO info{};
-   const auto nativeAudio = audio.ToStdWstring();
-   auto *sound = sf_wchar_open(nativeAudio.c_str(), SFM_READ, &info);
+   wxFile audioFile{audio, wxFile::read};
+   if (!audioFile.IsOpened()) throw std::runtime_error("Cannot open the prepared caption audio.");
+   auto *sound = sf_open_fd(audioFile.fd(), SFM_READ, &info, SF_FALSE);
    if (!sound) throw std::runtime_error("Cannot read the prepared caption audio.");
    struct CloseSound { SNDFILE *file; ~CloseSound() { sf_close(file); } } close{sound};
    std::vector<float> samples(16000); double peak{};
@@ -233,19 +237,26 @@ bool ChooseCaptionOptions(AudacityProject &project, CaptionOptions &options)
       _("Speech recognition runs on this computer. The selected model downloads once.\nVideo uses the audible project mix; an audio clip uses its own track.\nSelect a time range first to caption only that portion."));
    layout->Add(intro, 0, wxALL, 12);
    layout->Add(new wxStaticText(&dialog, wxID_ANY, _("Quality")), 0, wxLEFT|wxRIGHT, 12);
-   auto *quality = new wxChoice(&dialog, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-      wxArrayString{_("Fast (tiny, 74 MiB)"), _("Balanced (base, 141 MiB)"), _("Accurate (small, 465 MiB)")});
+   wxArrayString qualityLabels;
+   qualityLabels.Add(_("Fast (tiny, 74 MiB)")); qualityLabels.Add(_("Balanced (base, 141 MiB)"));
+   qualityLabels.Add(_("Accurate (small, 465 MiB)"));
+   auto *quality = new wxChoice(&dialog, wxID_ANY, wxDefaultPosition, wxDefaultSize, qualityLabels);
    quality->SetSelection(1); layout->Add(quality, 0, wxEXPAND|wxALL, 12);
-   layout->Add(new wxStaticText(&dialog, wxID_ANY, _("Language code (auto, he, en, ru, ar, ...)")), 0, wxLEFT|wxRIGHT, 12);
-   auto *language = new wxComboBox(&dialog, wxID_ANY, "auto", wxDefaultPosition, wxDefaultSize,
-      wxArrayString{"auto", "he", "en", "ru", "ar", "uk", "es", "fr", "de", "pt", "ja", "zh"});
+   layout->Add(new wxStaticText(&dialog, wxID_ANY, _("Language (or enter another language code)")), 0, wxLEFT|wxRIGHT, 12);
+   wxArrayString languages;
+   for (const auto *label : {"Automatic", "Hebrew", "English", "Russian", "Arabic", "Ukrainian", "Spanish", "French", "German", "Portuguese", "Japanese", "Chinese"})
+      languages.Add(wxGetTranslation(label));
+   auto *language = new wxComboBox(&dialog, wxID_ANY, languages[0], wxDefaultPosition, wxDefaultSize, languages);
+   language->SetSelection(0);
    layout->Add(language, 0, wxEXPAND|wxALL, 12);
    auto *buttons = dialog.CreateSeparatedButtonSizer(wxOK|wxCANCEL);
    if (auto *ok = dialog.FindWindow(wxID_OK)) ok->SetLabel(_("Generate"));
    layout->Add(buttons, 0, wxEXPAND|wxALL, 12); dialog.SetSizerAndFit(layout);
    if (dialog.ShowModal() != wxID_OK) return false;
    const char *models[] = {"tiny", "base", "small"}; options.model = models[quality->GetSelection()];
-   options.language = std::string(language->GetValue().Lower().Trim().ToUTF8());
+   const char *codes[] = {"auto", "he", "en", "ru", "ar", "uk", "es", "fr", "de", "pt", "ja", "zh"};
+   options.language = language->GetSelection() >= 0 ? codes[language->GetSelection()] :
+      std::string(language->GetValue().Lower().Trim().ToUTF8());
    if (options.language.empty() || options.language.size() > 16 || options.language.find_first_not_of("abcdefghijklmnopqrstuvwxyz-") != std::string::npos)
       throw std::runtime_error("Use auto or a language code such as he, en or ru.");
    return true;
