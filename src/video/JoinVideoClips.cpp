@@ -54,6 +54,7 @@ bool HealVideoClips(Timeline &timeline, double from, double to)
          throw std::runtime_error("Heal Split needs touching pieces of continuous footage with compatible links. Use Join otherwise.");
       auto a = result, b = part; a.markers.clear(); b.markers.clear();
       a.media = source; b.media = other;
+       a.appearance = {}; b.appearance = {};
       if (!SameVideoContent(a, b))
          throw std::runtime_error("These clips do not share the same retained content. Use Join instead.");
       differentLinks |= result.linkGroup != part.linkGroup;
@@ -87,6 +88,7 @@ bool JoinVideoClips(Timeline &timeline, double from, double to)
       (VideoContentDuration(last, SourceFor(timeline, last)) - last.sourceStart) / last.playbackRate - last.duration;
    Clip joined{first.id, first.start, handle, last.End() - first.start};
    joined.linkGroup = first.linkGroup;
+   joined.appearance = first.appearance;
    for (const auto index : selected) {
       auto part = timeline.clips[index]; part.media = SourceFor(timeline, part);
       part.start = handle + part.start - first.start;

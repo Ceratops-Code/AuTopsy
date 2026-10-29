@@ -134,6 +134,17 @@ void AuTopsyVideoTrack::SetTimeline(VideoTimeline::Timeline timeline)
 }
 void AuTopsyVideoTrack::SetVideoVisible(bool visible)
 { mVisible = visible; Notify(false); }
+bool AuTopsyVideoTrack::SetClipAppearance(uint64_t id, const VideoEditing::VideoClipAppearance &appearance)
+{
+   VideoEditing::RequireUsableVideoClipAppearance(appearance);
+   auto found = std::find_if(mTimeline.clips.begin(), mTimeline.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == mTimeline.clips.end()) throw std::runtime_error("The video clip was removed.");
+   if (found->appearance == appearance) return false;
+   found->appearance = appearance;
+   // Presentation edits do not expire accepted picture proxies or composition.
+   Notify(false); return true;
+}
 void AuTopsyVideoTrack::SetVideoSolo(bool solo)
 { mSolo = solo; Notify(false); }
 size_t AuTopsyVideoTrack::NIntervals() const { return mTimeline.clips.size(); }
@@ -229,6 +240,11 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       }
       if (tag != "videoclip") return false;
       VideoTimeline::Clip clip;
+       std::string_view clipName;
+       if (!ReadOptionalAttribute(attributes, "videoClipName", clipName) ||
+           !ReadOptionalAttribute(attributes, "videoClipColour", clip.appearance.rgb)) return false;
+       clip.appearance.name = clipName;
+       VideoEditing::RequireUsableVideoClipAppearance(clip.appearance);
       int muted{};
       if (!ReadOptionalAttribute(attributes, "videoMuted", muted) || muted < 0 || muted > 1) return false;
       clip.muted = muted != 0;
@@ -369,6 +385,8 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       const auto source = VideoTimeline::SourceFor(mTimeline, clip);
       writer.StartTag("videoclip");
       writer.WriteAttr("id", static_cast<long long>(clip.id));
+       if (!clip.appearance.name.empty()) writer.WriteAttr("videoClipName", wxString::FromUTF8(clip.appearance.name));
+       if (clip.appearance.rgb >= 0) writer.WriteAttr("videoClipColour", clip.appearance.rgb);
       if (!clip.linkGroup.empty()) writer.WriteAttr("mediaLink", wxString::FromUTF8(clip.linkGroup));
       if (!clip.markers.empty()) writer.WriteAttr("clipMarkers", wxString::FromUTF8(ClipMarkers::EncodeMarkers(clip.markers)));
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);

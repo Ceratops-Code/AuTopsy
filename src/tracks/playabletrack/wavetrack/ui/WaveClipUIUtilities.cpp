@@ -84,6 +84,9 @@ WaveClipUIUtilities::GetWaveClipMenuItems()
       { L"Paste", XO("Paste") },
        { L"DeleteKey2", XO("Delete and Leave Gap") },
        { L"RippleDelete", XO("Ripple Delete (Close Gap)") },
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+       { L"RippleDeleteProject", XO("Ripple Delete across Whole Project") },
+#endif
       {},
       { L"Split", XO("Split Clip") },
       { L"Join", XO("Join Clips") },

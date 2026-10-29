@@ -376,6 +376,63 @@ Repeating an unchanged collection reads the completed archive without rewriting
 it. Changed, damaged or unrelated destinations are refused. A fresh call removes
 only its own interrupted staging; it does not infer steps from an execution log.
 
+### Selected-range export, clip appearance and coordinated ripple deletion
+
+The desired export state is one file whose time zero corresponds to the chosen
+project range start, containing the same visible composition and audible mix.
+`PlanVideoRangeExport` in `EditVideoTimeline.h` snapshots every visible layer,
+copies the intersecting retained windows and rebases project placement only.
+Layer/parent identities, source clocks, fades, crop and nested content remain
+intact. `ExportVideoMix` passes the original start to the native mixer and the
+rebased snapshots to the existing composition renderer. Track selection limits
+neither audible tracks nor visible picture. A picture gap or a range after the
+last picture produces black, using the project's existing canvas as fallback.
+The scripting `SelectedOnly` parameter defaults to false; the GUI offers both
+scopes and defaults to a nonempty current selection. Empty or invalid selected
+ranges are rejected before any output. Protected source identities include the
+whole project's sources, even outside the chosen interval. The existing export
+workspace owns staging, cancellation cleanup and atomic destination publication;
+no new output owner or recovery log is introduced. Export does not edit selection
+or history. A failed/aborted overwrite leaves the prior destination intact.
+
+`VideoClipAppearance` owns a bounded UTF-8 name and optional 24-bit RGB header
+colour. Empty/default values retain source-based labels and theme colours.
+`EditVideoClipAppearance` is the only new native dialog/history boundary. Its
+setter changes presentation without advancing the native picture revision, so
+cosmetic edits do not expire picture caches. Names are never clip identities.
+Copy, split and movement retain appearance; Join takes the leftmost header and
+retains individual child appearances for Separate. Heal Split takes the left
+appearance. Optional `videoClipName` and `videoClipColour` attributes use the
+existing clip reader/writer at every retained-tree level. Older projects need no
+migration; stock Audacity skips the video extension. Malformed UTF-8, control
+characters, oversized names and invalid colours cannot enter saved state.
+Cancellation and repeated identical edits add no history. Header text switches
+between black and white for readable contrast; mute/lock and selection markings
+remain independent of colour. Rendering never reads this presentation state.
+
+`PlanRippleDeletion.h` owns scope closure independent of native track types.
+Opaque host track identities seed selected/native-sync-lock scope, or all
+editable tracks for the explicitly named whole-project command. Affected clip
+links and embedded families expand the set transitively, including later clips
+that move when a gap closes. Unchanged earlier links do not widen scope. Every
+affected timing lock is checked after closure and before publication. The narrow
+`ApplyRippleDeletion` adapter keeps native `Track::Clear` responsible for audio,
+labels and retained video. No event-yielding worker runs between snapshot and
+publication. One native history transaction records the result; any edit or
+autosave exception restores the project and prior selection. A successful call
+collapses the removed range to its start; ordinary Delete remains gap-preserving.
+Calling ripple deletion again requires a new nonempty selection. There are no
+temporary files, persistent operation checkpoints or new sample-editing engine.
+
+Independent `range-export`, `clip-appearance` and `ripple-deletion` cases cover
+the policies, including reordered opaque identities. Native cases
+`video-range-export`, `video-clip-appearance` and `linked-ripple-delete` in
+`scripts/piped-work/test_clip_workflows.py` check decoded picture/audio, offsets,
+PIP/fade clocks, repeated and rejected effects, menu cancellation, Undo/Redo and
+save/reopen. The existing stock-Audacity consumer case now includes optional clip
+appearance in both simple and retained video. These cases use generated media
+and the shared private-session runner on the permitted display.
+
 ### Clip actions, recording gaps and cursor projection
 
 An audio clip's context pick resolves against the native temporary track/time

@@ -7,6 +7,33 @@
 #include <locale>
 
 namespace VideoEditing {
+void RequireUsableVideoClipAppearance(const VideoClipAppearance &value)
+{
+   if (value.rgb < -1 || value.rgb > 0xffffff || value.name.size() > 1024)
+      throw std::runtime_error("Use a clip name up to 1024 UTF-8 bytes and a 24-bit colour.");
+   // Reject control characters and malformed Unicode before optional XML
+   // publication. Names are display labels, never identities or media paths.
+   for (size_t i{}; i < value.name.size();) {
+      const auto first = static_cast<unsigned char>(value.name[i++]);
+      if (first < 32 || first == 127)
+         throw std::runtime_error("Clip names cannot contain control characters.");
+      if (first < 128) continue;
+      unsigned count{}, code{}, minimum{};
+      if (first >= 0xc2 && first <= 0xdf) { count = 1; code = first & 31; minimum = 0x80; }
+      else if (first >= 0xe0 && first <= 0xef) { count = 2; code = first & 15; minimum = 0x800; }
+      else if (first >= 0xf0 && first <= 0xf4) { count = 3; code = first & 7; minimum = 0x10000; }
+      else throw std::runtime_error("The clip name is not usable UTF-8.");
+      if (value.name.size() - i < count) throw std::runtime_error("The clip name is incomplete UTF-8.");
+      while (count--) {
+         const auto next = static_cast<unsigned char>(value.name[i++]);
+         if ((next & 0xc0) != 0x80) throw std::runtime_error("The clip name is not usable UTF-8.");
+         code = (code << 6) | (next & 63);
+      }
+      if (code < minimum || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ||
+          (code >= 0x80 && code <= 0x9f))
+         throw std::runtime_error("The clip name contains an unsupported Unicode character.");
+   }
+}
 void RequireUsableVideoFrameCrop(const VideoFrameCrop &crop)
 {
    for (const auto value : {crop.left, crop.top, crop.right, crop.bottom})
@@ -89,6 +116,7 @@ void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &
        clip.ContentTimeAtProjectTime(clip.End()) > duration + 1e-7)
       throw std::runtime_error("A video content window is outside its retained footage.");
    ClipMarkers::RequireUsableMarkers(clip.markers);
+   VideoEditing::RequireUsableVideoClipAppearance(clip.appearance);
    VideoEditing::RequireUsableVideoOpacityRamps(clip.opacityModifiers);
    const auto &opacity = clip.opacity;
    for (const auto value : {opacity.inStart, opacity.inDuration, opacity.outEnd, opacity.outDuration})
@@ -316,6 +344,7 @@ void RemapVideoContentLinks(Clip &clip, const std::vector<std::pair<std::string,
 }
 bool SameVideoContent(const Clip &a, const Clip &b)
 {
+   if (!(a.appearance == b.appearance)) return false;
    if (a.muted != b.muted || a.timingLocked != b.timingLocked || !(a.opacity == b.opacity) || a.opacityModifiers != b.opacityModifiers || !(a.crop == b.crop) || a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
        a.markers.size() != b.markers.size()) return false;
    for (size_t i{}; i < a.markers.size(); ++i)

@@ -8,6 +8,67 @@
 
 using namespace VideoEditing;
 
+TEST_CASE("Range export rebases every layer while retaining content clocks and source protection", "[video-edits][range-export]")
+{
+   using namespace VideoTimeline;
+   auto main = CreateVideoTimeline("main.mp4", 12, 30);
+   main.sourceWidth = 640; main.sourceHeight = 360; main.placement.id = "main";
+   main.clips[0].opacity = {0, 4, 12, 2}; main.clips[0].crop.top = .2;
+   SplitClipAt(main, 5);
+   auto overlay = CreateVideoTimeline("overlay.mp4", 12, 25);
+   overlay.placement = {"overlay", "main", {.6, .1, .3, .3}};
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const auto plan = PlanVideoRangeExport({&overlay, &main}, main, 3, 8);
+      REQUIRE(plan.projectStart == 3); REQUIRE(plan.duration == 5);
+      REQUIRE(plan.layers.size() == 2);
+      REQUIRE(plan.layers[0].placement.parentId == "main");
+      REQUIRE(plan.layers[0].placement.rectangle == overlay.placement.rectangle);
+      REQUIRE(plan.layers[1].clips.size() == 2);
+      REQUIRE(plan.layers[1].clips[0].start == 0);
+      REQUIRE(plan.layers[1].clips[0].sourceStart == 3);
+      REQUIRE(plan.layers[1].clips[1].start == 2);
+      REQUIRE(plan.layers[1].clips[1].sourceStart == 5);
+      REQUIRE(plan.layers[1].clips[0].crop == main.clips[0].crop);
+      REQUIRE(plan.layers[1].clips[0].opacity == main.clips[0].opacity);
+      REQUIRE(plan.layers[1].clips[0].ContentTimeAtProjectTime(.5) ==
+         main.clips[0].ContentTimeAtProjectTime(3.5));
+      REQUIRE(main.clips[0].duration == 5); REQUIRE(main.clips[1].start == 5);
+      const auto empty = PlanVideoRangeExport({}, main, 15, 17);
+      REQUIRE(empty.picture.clips.empty()); REQUIRE(empty.duration == 2);
+      REQUIRE(empty.picture.sourcePath == "main.mp4"); REQUIRE(empty.picture.sourceWidth == 640);
+      REQUIRE(std::find(empty.picture.protectedSourcePaths.begin(), empty.picture.protectedSourcePaths.end(),
+         "main.mp4") != empty.picture.protectedSourcePaths.end());
+      REQUIRE_THROWS(PlanVideoRangeExport({&main}, main, 2, 2));
+      REQUIRE_THROWS(PlanVideoRangeExport({&main}, main, -1, 2));
+      REQUIRE_THROWS(PlanVideoRangeExport({nullptr}, main, 0, 2));
+   }
+}
+TEST_CASE("Video names and colours survive structural edits without changing picture sampling", "[video-edits][clip-appearance]")
+{
+   using namespace VideoTimeline;
+   const VideoClipAppearance style{u8"\u05e9\u05dc\u05d5\u05dd / \u0422\u0435\u0441\u0442", 0x22eecc};
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto timeline = CreateVideoTimeline("source.mp4", 12, 30);
+      const auto original = SampleVideoContent(timeline.clips[0], SourceFor(timeline, timeline.clips[0]), 3);
+      timeline.clips[0].appearance = style;
+      REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
+      const auto named = SampleVideoContent(timeline.clips[0], SourceFor(timeline, timeline.clips[0]), 3);
+      REQUIRE(named.source.path == original.source.path); REQUIRE(named.sourceTime == original.sourceTime);
+      SplitClipAt(timeline, 6); REQUIRE(timeline.clips[1].appearance == style);
+      auto copy = CopyVideoRange(timeline, 2, 9);
+      REQUIRE(copy.clips[0].appearance == style); REQUIRE(copy.clips[1].appearance == style);
+      const VideoClipAppearance second{"Second", 0xffffff}; timeline.clips[1].appearance = second;
+      REQUIRE(JoinVideoClips(timeline, 0, 12)); REQUIRE(timeline.clips[0].appearance == style);
+      REQUIRE(SeparateVideoClips(timeline, 0, 12));
+      REQUIRE(timeline.clips[0].appearance == style); REQUIRE(timeline.clips[1].appearance == second);
+      REQUIRE(HealVideoClips(timeline, 0, 12)); REQUIRE(timeline.clips[0].appearance == style);
+      REQUIRE_NOTHROW(RequireUsableVideoClipAppearance({"", -1}));
+      for (const auto &value : std::vector<VideoClipAppearance>{{"bad\nname", 0}, {std::string(1025, 'x'), 0},
+            {std::string("\xc0\x80", 2), 0}, {std::string("\xed\xa0\x80", 3), 0}, {"ok", -2}, {"ok", 0x1000000}})
+         REQUIRE_THROWS(RequireUsableVideoClipAppearance(value));
+   }
+}
+
 TEST_CASE("Clip placement distinguishes touching edges, gaps and occupied destinations", "[video-edits][clip-placement]")
 {
    using namespace ClipActions;

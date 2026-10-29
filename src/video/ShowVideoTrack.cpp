@@ -7,6 +7,7 @@
 #include "CreateVideoTrack.h"
 #include "EditVideoFades.h"
 #include "EditVideoComposition.h"
+#include "EditVideoClipAppearance.h"
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
@@ -503,7 +504,10 @@ public:
          const auto source = SourceFor(timeline,clip);
          dc.SetClippingRegion(left,rect.y,right-left,rect.height);
          dc.SetPen(*wxTRANSPARENT_PEN);
-         dc.SetBrush(wxBrush(track->VideoVisible() && !clip.muted ? wxColour(57,105,143) : wxColour(69,72,77)));
+         const int rgb = clip.appearance.rgb < 0 ? 0x39698f : clip.appearance.rgb;
+         const wxColour header = track->VideoVisible() && !clip.muted
+            ? wxColour((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255) : wxColour(69,72,77);
+         dc.SetBrush(wxBrush(header));
          dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
          const int pictureHeight = std::max(0,std::min(FrameHeight,rect.height-30));
          // A muted occurrence remains recognizable in the editing pane. This
@@ -549,7 +553,8 @@ public:
             : track->GetSelected() && selection.t0() <= clip.start+1e-7 && selection.t1() >= clip.End()-1e-7;
          dc.SetPen(wxPen(selected ? wxColour(252,211,90) : wxColour(111,155,187),selected ? 2 : 1));
          dc.SetBrush(*wxTRANSPARENT_BRUSH); dc.DrawRectangle(left,rect.y+2,right-left,rect.height-4);
-         dc.SetTextForeground(*wxWHITE);
+         dc.SetTextForeground(299 * header.Red() + 587 * header.Green() + 114 * header.Blue() > 150000
+            ? *wxBLACK : *wxWHITE);
          auto title = clip.content ? wxString::Format(_("Joined video (%zu pieces)"), clip.content->parts.size())
              : wxFileName(wxString::FromUTF8(source.path)).GetFullName();
          if (clip.content) switch (clip.content->operation) {
@@ -560,6 +565,7 @@ public:
             case VideoClipContent::Operation::Text: title = _("Text: ") + wxString::FromUTF8(clip.content->title); break;
             default: break;
          }
+         if (!clip.appearance.name.empty()) title = wxString::FromUTF8(clip.appearance.name);
          if (clip.playbackRate != 1) title = wxString::Format("%.8g%%  ", clip.playbackRate * 100) + title;
          if (!track->Timeline().placement.parentId.empty()) title = _("[Embedded] ") + title;
          if (clip.muted) title = _("[Muted] ") + title;
@@ -673,6 +679,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
           auto &commandManager = CommandManager::Get(*project);
           menu.Append(5, commandManager.FormatLabelForMenu("DeleteKey2", &gapLabel));
           menu.Append(18, commandManager.FormatLabelForMenu("RippleDelete", &rippleLabel));
+           menu.Append(28, _("Ripple Delete across Whole Project"));
          menu.Append(6,_("Trim to Selection"));
          menu.AppendSeparator(); menu.Append(7,_("Heal Split")); menu.Append(8,_("Join"));
          menu.Append(9,_("Separate Joined Clip"));
@@ -693,6 +700,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(16, _("Fade Picture...")); menu.Enable(16, clipId != 0);
          menu.Append(17, _("Crossfade from Video Below...")); menu.Enable(17, clipId != 0);
          menu.Append(14, _("Clip Properties...")); menu.Enable(14, clipId != 0);
+          menu.Append(27, _("Clip Name and Colour...")); menu.Enable(27, clipId != 0);
          menu.Append(15, _("Close Gap Before Clip")); menu.Enable(15, clipId != 0);
          menu.AppendCheckItem(13, _("Mute Clip")); menu.Enable(13, clipId != 0);
          for (const auto &clip : track->Timeline().clips)
@@ -718,6 +726,8 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          }
           else if (choice == 18)
              commandManager.HandleTextualCommand("RippleDelete", CommandContext{*project}, AlwaysEnabledFlag, false);
+           else if (choice == 28)
+              commandManager.HandleTextualCommand("RippleDeleteProject", CommandContext{*project}, AlwaysEnabledFlag, false);
           else if (choice == 16 || choice == 17)
             VideoEditing::ShowVideoClipFades(*project, *track, clipId, parent, choice == 17);
          else if (choice == 14)
@@ -741,6 +751,8 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
                VideoEditing::VideoClipPictureAction::Freeze, VideoEditing::VideoClipPictureAction::Repeat};
             VideoEditing::ShowVideoClipPictureAction(*project, *track, clipId, actions[choice - 21], parent, clickTime);
          }
+         else if (choice == 27)
+            VideoEditing::ShowVideoClipAppearanceDialog(*project, *track, clipId, parent);
          else if (choice == 19)
             VideoEditing::ShowVideoTrackEmbeddingDialog(*project, *track, parent);
          else if (choice == 20) {

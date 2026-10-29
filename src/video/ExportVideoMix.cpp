@@ -492,7 +492,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTim
       : PlanVideoExportFrames(timeline, duration, outputRate);
    const fs::path target = fs::absolute(fs::path(destination.ToStdWstring()));
    if (!std::isfinite(duration) || duration <= 0 || duration + 1e-7 < timeline.End() ||
-       timeline.sourcePath.empty() || destination.empty())
+       (!timeline.clips.empty() && timeline.sourcePath.empty()) || destination.empty())
       throw std::runtime_error("Choose video clips and an output filename before exporting.");
    const auto extension = wxString(target.extension().wstring()).Lower();
    if (extension != ".mp4" && extension != ".mkv")

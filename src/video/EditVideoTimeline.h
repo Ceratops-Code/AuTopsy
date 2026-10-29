@@ -486,6 +486,48 @@ inline Timeline ComposeVideoTracks(const std::vector<const Timeline*> &layers)
    return result;
 }
 
+// Owned snapshots keep progress-dialog events from changing an in-flight
+// export. Layer identities and content clocks survive selection rebasing.
+struct VideoRangeExportPlan {
+   std::vector<Timeline> layers;
+   Timeline picture;
+   double projectStart{}, duration{};
+};
+inline VideoRangeExportPlan PlanVideoRangeExport(const std::vector<const Timeline*> &layers,
+   const Timeline &fallback, double from, double to)
+{
+   RequireWellFormedTimeline(fallback, MaximumVideoRenderSegments);
+   if (!std::isfinite(from) || !std::isfinite(to) || from < 0 || to <= from ||
+       !std::isfinite(to - from))
+      throw std::runtime_error("Select a nonempty time range before exporting the current selection.");
+   VideoRangeExportPlan result;
+   result.projectStart = from; result.duration = to - from;
+   for (const auto *layer : layers) {
+      if (!layer) throw std::runtime_error("An export video layer is missing.");
+      auto copy = CopyVideoRange(*layer, from, to);
+      copy.placement = layer->placement;
+      result.layers.push_back(std::move(copy));
+   }
+   std::vector<const Timeline*> snapshots;
+   for (const auto &layer : result.layers) snapshots.push_back(&layer);
+   result.picture = ComposeVideoTracks(snapshots);
+   if (result.picture.sourcePath.empty()) {
+      // A selection can contain only a picture gap or extend beyond the last
+      // video. The original canvas still defines black output plus project audio.
+      result.picture.sourcePath = fallback.sourcePath;
+      result.picture.sourceDuration = fallback.sourceDuration;
+      result.picture.frameRate = fallback.frameRate;
+      result.picture.sourceWidth = fallback.sourceWidth;
+      result.picture.sourceHeight = fallback.sourceHeight;
+   }
+   result.picture.protectedSourcePaths = fallback.protectedSourcePaths;
+   if (!fallback.sourcePath.empty()) result.picture.protectedSourcePaths.push_back(fallback.sourcePath);
+   for (const auto &clip : fallback.clips)
+      for (const auto &source : VideoContentSources(clip, SourceFor(fallback, clip)))
+         result.picture.protectedSourcePaths.push_back(source.path);
+   return result;
+}
+
 struct VideoClipExportPlan {
    Timeline picture;
    double projectStart{}, duration{};

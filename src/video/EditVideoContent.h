@@ -10,6 +10,16 @@
 #include <vector>
 
 namespace VideoEditing {
+// Editing labels only: neither field participates in picture rendering.
+// -1 follows the track's default colour; other values are 24-bit RGB.
+struct VideoClipAppearance {
+   std::string name;
+   int rgb{-1};
+   bool operator==(const VideoClipAppearance &other) const {
+      return name == other.name && rgb == other.rgb;
+   }
+};
+void RequireUsableVideoClipAppearance(const VideoClipAppearance &appearance);
 // Text size is a fraction of the caption box, independent of preview quality
 // and export resolution. Fonts are saved by family, never by machine paths.
 struct VideoTextAppearance {
@@ -99,6 +109,7 @@ struct Clip {
    // Parent envelopes projected into this content clock by Separate. Products
    // cannot be replaced with a single linear ramp without changing the picture.
    std::vector<VideoEditing::VideoOpacityRamp> opacityModifiers;
+   VideoEditing::VideoClipAppearance appearance;
    double End() const { return start + duration; }
    double ContentTimeAtProjectTime(double at) const { return sourceStart + (at - start) * playbackRate; }
    double ProjectTimeAtContentTime(double at) const { return start + (at - sourceStart) / playbackRate; }

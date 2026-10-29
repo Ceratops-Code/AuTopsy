@@ -50,5 +50,12 @@ inline std::vector<std::string> VideoEncoderArguments(const ExportSettings &sett
    return {"-c:v", "libx264", "-preset", "medium", "-crf", quality, "-pix_fmt", "yuv420p"};
 }
 // GUI boundary only: cancelling does not change the supplied settings or project.
-std::optional<ExportSettings> ChooseVideoExport(wxWindow *parent, ExportSettings settings);
+// A null choice keeps clip exports scoped to that clip. Project exports offer
+// the live time selection without changing which tracks participate in the mix.
+struct ExportRangeChoice {
+   double start{}, end{};
+   bool selectedOnly{};
+};
+std::optional<ExportSettings> ChooseVideoExport(wxWindow *parent, ExportSettings settings,
+   ExportRangeChoice *range = nullptr);
 }

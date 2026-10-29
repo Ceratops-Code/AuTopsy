@@ -590,11 +590,16 @@ class SelectionTests(unittest.TestCase):
             self.assertIn("fork-video-embedding", selected)
             self.assertIn("fork-video-embedding-controls", selected)
         expected = baseline | {"fork-preview-controls", "fork-preview-quality", "fork-preview-navigation",
+                               "fork-video-range-export",
                                "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
                                "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
                                "fork-video-recording-controls", "fork-video-embedding", "fork-video-embedding-controls",
                                "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures", "fork-video-text", "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew", "fork-video-caption-warp"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
+        for source, case in (("src/video/EditVideoClipAppearance.cpp", "video-clip-appearance"),
+                             ("src/clip-groups/ApplyRippleDeletion.cpp", "linked-ripple-delete"),
+                             ("src/video/ChooseVideoExport.cpp", "video-range-export")):
+            self.assertIn("fork-" + case, runner.select_installer_tests([source], catalogue))
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
                                       ([], "does-not-exist", False), ([], None, True)):
