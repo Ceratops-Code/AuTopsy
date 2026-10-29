@@ -367,6 +367,10 @@ def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
         assert len(caption_rows) == 2 and len({row["track"] for row in caption_rows}) == 1, caption_rows
         captions = caption_rows[0]["track"]
         assert {row["text"] for row in caption_rows} == {"Blue headphones", "שלום עולם"}
+        with_native_dialog(lambda: operate_owned_video_track(client, .5, track=track,
+            gesture="context", menu_path=("Generate Captions...",)), "Generate Captions",
+            lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")), menu_gesture=True)
+        assert rows() == added, "Cancelling caption options changed the project."
         client.file("ImportCaptions", source, f"Track={track}")
         assert rows() == added, "Repeating the same caption import duplicated its clips."
         client.send("Undo"); assert rows() == before, "A batch needs exactly one Undo."
@@ -378,6 +382,11 @@ def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
             text = output.read_text(encoding="utf-8")
             assert "Blue headphones" in text and "שלום עולם" in text
             assert ("00:00:00,500" if extension == "srt" else "00:00:00.500") in text
+            output.write_text("Existing user subtitle", encoding="utf-8")
+            client.file("ExportCaptions", output, f"Track={captions}", success=False)
+            assert output.read_text(encoding="utf-8") == "Existing user subtitle"
+            client.file("ExportCaptions", output, f"Track={captions} Overwrite=1")
+            assert output.read_text(encoding="utf-8") == text
         bad = root / "_bad-captions.srt"
         bad.write_text("1\n00:00:00,000 --> 00:00:01,000\nGood\n\n2\ninvalid time\nBad\n", encoding="utf-8")
         client.file("ImportCaptions", bad, f"Track={track}", success=False)
@@ -411,7 +420,7 @@ def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
     finally:
         stream.Close()
     client.file("Import2", speech)
-    tracks = client.data("GetInfo: Type=Tracks")
+    tracks = client.data("GetInfo: Type=Tracks Format=JSON")
     speech_track = len(tracks)-1
     client.send("SelectTime: Start=0 End=0")
     baseline = rows()
@@ -422,15 +431,21 @@ def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
     words = " ".join(row["text"] for row in fresh).lower()
     assert all(word in words for word in ("green", "dinosaur", "blue", "headphones")), words
     assert len({row["track"] for row in fresh}) == 1
+    speech_track = len(client.data("GetInfo: Type=Tracks Format=JSON"))-1
+    action = f"GenerateCaptions: Track={speech_track} Model=tiny Language=en"
     client.send(action); assert rows() == generated, "Repeated recognition duplicated accepted captions."
     client.send("Undo"); assert rows() == baseline
     client.send("Redo"); assert rows() == generated
     save_reopen(client, root / "_recognized-captions.aup3")
     assert rows() == generated
+    speech_track = len(client.data("GetInfo: Type=Tracks Format=JSON"))-1
+    with_native_dialog(lambda: client.send(f"GenerateCaptions: Track={speech_track} Model=tiny Language=en", success=False),
+        "Generate Captions", lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")))
+    assert rows() == generated, "Cancelling a recognition job changed the project."
 
     fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/captions/hebrew.wav"
     client.file("Import2", fixture)
-    speech_track = len(client.data("GetInfo: Type=Tracks"))-1
+    speech_track = len(client.data("GetInfo: Type=Tracks Format=JSON"))-1
     client.send("SelectTime: Start=0 End=0")
     baseline = rows()
     client.send(f"GenerateCaptions: Track={speech_track} Model=base Language=he")
