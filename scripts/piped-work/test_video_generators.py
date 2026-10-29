@@ -395,7 +395,11 @@ def check_video_captions(client, root, ffmpeg, ffprobe, original, audio):
         save_reopen(client, root / f"_captions-{repeat}.aup3")
         assert rows() == added and read_audio_project_state(client.data) == audio
         movie = export_picture(client, root, ffmpeg, ffprobe, f"captions-{repeat}", 5)
-        picture = decoded_picture(ffmpeg, movie, 1)
+        # Observe the encoded size. Halving an eight-pixel fixture font removes
+        # its opaque cores through antialiasing without removing any caption.
+        picture = run_process([ffmpeg, "-v", "error", "-ss", "1", "-i", str(movie), "-frames:v", "1",
+            "-pix_fmt", "rgb24", "-f", "rawvideo", "-"], text=False, timeout=30)
+        assert len(picture) == 320 * 180 * 3
         assert sum(min(picture[i:i+3]) > 170 for i in range(0, len(picture), 3)) > 5, "Exported captions disappeared."
         if repeat == 0:
             # Reopen resets history, so remove the caption row through the normal
