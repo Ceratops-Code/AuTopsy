@@ -80,6 +80,24 @@ def check_caption_interchange(client, root, ffmpeg, ffprobe, original, audio):
             client.send(f"SelectTracks: Track={captions} TrackCount=1 Mode=Set")
             client.send("RemoveTracks")
             before = rows()
+    # A long cue must wrap before publication, preserving every word rather
+    # than asking the user to manually repair machine-generated subtitles.
+    long_text = " ".join(["Blue headphones and green dinosaurs"] * 4)
+    source.write_text("1\n00:00:00,500 --> 00:00:04,000\n" + long_text + "\n", encoding="utf-8")
+    snapshot = client.data("GetVideoClips")
+    layers = {layer["layerId"] for layer in snapshot["tracks"]}
+    client.file("ImportCaptions", source, f"Track={track}")
+    result = client.data("GetVideoClips")
+    fresh_layers = [layer for layer in result["tracks"] if layer["layerId"] not in layers]
+    assert len(fresh_layers) == 1
+    fresh = [row for row in result["clips"] if row["track"] == fresh_layers[0]["index"]]
+    assert len(fresh) == 1 and "\n" in fresh[0]["text"], fresh
+    assert fresh[0]["text"].split() == long_text.split()
+    client.file("ImportCaptions", source, f"Track={track}")
+    assert client.data("GetVideoClips") == result, "Wrapped captions duplicated on repeat."
+    client.send("Undo"); assert client.data("GetVideoClips") == snapshot
+    client.send("Redo"); assert client.data("GetVideoClips") == result
+
 
 def check_caption_english(client, root, ffmpeg, ffprobe, original, audio):
     """Real speech, exact silence, cancellation, repeated publication and reopen."""

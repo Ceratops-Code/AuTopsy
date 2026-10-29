@@ -268,6 +268,10 @@ download failure, malformed transcript, empty result, invalid font/layout or
 cancelled preparation cannot publish a partial row. SRT cue times are shifted
 by the frozen project start and bounded by the mixed window. A host-free plan
 combines overlapping cues into adjacent clips containing all active text.
+Before publication, wxWidgets wraps each cue at Unicode word boundaries using
+the renderer's pixel font. A common font size is reduced only when needed to fit
+the full batch, retaining every word. Cancel is consumed at audio preparation
+and worker completion before a batch can be accepted.
 Only after preparation succeeds does the native adapter insert the track and
 record one Undo state; a history failure removes the inserted row. An identical
 existing visible batch with the same parent is a no-op. Text clips use the

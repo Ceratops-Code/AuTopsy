@@ -313,7 +313,7 @@ public:
    }
    bool Wait(wxWindow *parent,
       const wxString &title = _("Export Video with Audio Mix"),
-      const wxString &status = _("Writing video with the edited audio..."))
+      const wxString &status = _("Writing video with the edited audio..."), bool pollCancellationAtCompletion = false)
    {
       const auto style = wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE | wxPD_ELAPSED_TIME;
       // Windows' task-dialog implementation has a fixed Cancel caption. Capture
@@ -361,6 +361,10 @@ public:
             "\nstderr:\n" + DescribeProcessOutput(errors));
       if (mOutputLimit != 16384 && mOutputOverflow)
          throw std::runtime_error("The decoded picture exceeds the media tool's bounded output buffer.");
+      // A fast speech worker can finish while a Cancel click is queued. Consume
+      // that click before accepting its output; completed recording keeps its
+      // separate Stop-and-Add contract.
+      if (pollCancellationAtCompletion && !progress.Pulse()) return false;
       return true;
    }
 };
@@ -421,7 +425,7 @@ bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *paren
    std::vector<std::wstring> native{executable.ToStdWstring()};
    for (const auto &argument : arguments) native.push_back(argument.ToStdWstring());
    BundledMediaProcess process{native, maximumOutputBytes};
-   if (!process.Wait(parent, title, status)) return false;
+   if (!process.Wait(parent, title, status, tool == VideoTool::Transcriber)) return false;
    if (output) *output = std::move(process.output);
    return true;
 }

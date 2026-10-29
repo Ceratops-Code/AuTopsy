@@ -30,6 +30,9 @@
 #include <wx/choice.h>
 #include <wx/combobox.h>
 #include <wx/dialog.h>
+#include <wx/dcmemory.h>
+#include <wx/font.h>
+#include <wx/textwrapper.h>
 #include <wx/filedlg.h>
 #include <wx/file.h>
 #include <wx/filename.h>
@@ -38,6 +41,7 @@
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 
@@ -133,17 +137,44 @@ FileFormat SubtitleFormat(const wxString &path)
    if (extension == "vtt") return FileFormat::WebVtt;
    throw std::runtime_error("Use an .srt or .vtt subtitle filename.");
 }
+std::vector<Cue> FitCaptionLines(const std::vector<Cue> &cues, int width, int height,
+   VideoEditing::VideoTextAppearance &appearance, wxWindow *parent)
+{
+   // Reuse wx's Unicode word wrapping and the same pixel font as the renderer.
+   // This private child measures text without changing the project's font or UI.
+   wxWindow measurement{parent, wxID_ANY, wxDefaultPosition, wxSize{1, 1}};
+   measurement.Hide();
+   wxBitmap bitmap{2, 2}; wxMemoryDC dc{bitmap};
+   struct WrappedLines final : wxTextWrapper {
+      wxString text; bool first{true};
+      void OnOutputLine(const wxString &line) override {
+         if (!first) text += "\n";
+         first = false; text += line;
+      }
+   };
+   const auto minimum = std::max(1, int(std::ceil(height*.01)));
+   for (int pixels = std::max(minimum, int(std::llround(height*appearance.heightFraction)));
+        pixels >= minimum; --pixels) {
+      auto info = wxFontInfo(wxSize{0, pixels}).Family(wxFONTFAMILY_SWISS)
+         .Bold(appearance.bold).Italic(appearance.italic);
+      if (!appearance.fontFace.empty()) info.FaceName(wxString::FromUTF8(appearance.fontFace));
+      const wxFont font{info}; measurement.SetFont(font); dc.SetFont(font);
+      const auto radius = appearance.outline ? std::max(1, std::min(4, int(std::llround(pixels/24.0)))) : 0;
+      if (width <= 2*radius || height <= 2*radius) continue;
+      auto fitted = cues; bool fits{true};
+      for (auto &cue : fitted) {
+         WrappedLines wrapped; wrapped.Wrap(&measurement, wxString::FromUTF8(cue.text), width-2*radius);
+         wxCoord w{}, h{}; dc.GetMultiLineTextExtent(wrapped.text, &w, &h);
+         if (w+2*radius > width || h+2*radius > height) { fits = false; break; }
+         cue.text = std::string(wrapped.text.ToUTF8());
+      }
+      if (fits) { appearance.heightFraction = double(pixels)/height; return fitted; }
+   }
+   throw std::runtime_error("A subtitle has too much text for its caption box. Split that cue or shorten its wording.");
+}
 void AddCaptionBatch(AudacityProject &project, AuTopsyVideoTrack *parent, const std::vector<Cue> &cues)
 {
    if (cues.empty()) throw std::runtime_error("No spoken words or caption cues were found in this range.");
-   const auto planned = CombineCaptionOverlaps(cues);
-   for (auto *existing : VideoTimeline::ProjectVideoTracks(project)) {
-      if (!existing->VideoVisible() || existing->Timeline().placement.parentId !=
-            (parent ? parent->Timeline().placement.id : std::string{})) continue;
-      const auto current = ReadTimelineCaptions(existing->Timeline());
-      if (current.size() == planned.size() && std::equal(current.begin(), current.end(), planned.begin(),
-            [](const auto &a, const auto &b) { return a.startMs == b.startMs && a.endMs == b.endMs && a.text == b.text; })) return;
-   }
    int width = 1280, height = 720;
    VideoEditing::VideoFrameRectangle box{.05, .73, .9, .24};
    if (parent && !parent->Timeline().clips.empty()) {
@@ -160,7 +191,15 @@ void AddCaptionBatch(AudacityProject &project, AuTopsyVideoTrack *parent, const 
       width = raster.width; height = raster.height;
    }
    VideoEditing::VideoTextAppearance style; style.heightFraction = .2;
-   auto candidate = PlanCaptionClips(cues, width, height, style);
+   const auto planned = FitCaptionLines(CombineCaptionOverlaps(cues), width, height, style, &ProjectWindow::Get(project));
+   for (auto *existing : VideoTimeline::ProjectVideoTracks(project)) {
+      if (!existing->VideoVisible() || existing->Timeline().placement.parentId !=
+            (parent ? parent->Timeline().placement.id : std::string{})) continue;
+      const auto current = ReadTimelineCaptions(existing->Timeline());
+      if (current.size() == planned.size() && std::equal(current.begin(), current.end(), planned.begin(),
+            [](const auto &a, const auto &b) { return a.startMs == b.startMs && a.endMs == b.endMs && a.text == b.text; })) return;
+   }
+   auto candidate = PlanCaptionClips(planned, width, height, style);
    candidate.placement.id = audacity::Uuid::Generate().ToHexString();
    if (parent) { candidate.placement.parentId = parent->Timeline().placement.id; candidate.placement.rectangle = box; }
    VideoEditing::AddProjectVideoTextTrack(project, parent, std::move(candidate), _("Captions"));
@@ -169,7 +208,7 @@ class AudioProgress final : public ExportProcessorDelegate {
    wxProgressDialog mProgress;
    bool mCancelled{};
 public:
-   explicit AudioProgress(wxWindow *parent) : mProgress{_("Generate Captions"),
+   explicit AudioProgress(wxWindow *parent) : mProgress{_("Prepare Caption Audio"),
       _("Preparing the edited audio for local speech recognition..."), 1000, parent,
       wxPD_APP_MODAL|wxPD_CAN_ABORT|wxPD_AUTO_HIDE} {}
    bool IsCancelled() const override { return mCancelled; }
@@ -203,7 +242,7 @@ void GenerateCaptions(AudacityProject &project, Track *track, const std::string 
          .SetRange(source.from, source.to, source.audio != nullptr).SetSampleRate(16000).SetNumChannels(1)
          .SetParameters({{SF_FORMAT_WAV, int(SF_FORMAT_PCM_16)}}).Build(project);
       AudioProgress progress{window}; auto result = task.get_future(); task(progress);
-      if (result.get() != ExportResult::Success) throw VideoPreview::PreviewPreparationCancelled{};
+      if (result.get() != ExportResult::Success || progress.IsCancelled()) throw VideoPreview::PreviewPreparationCancelled{};
    }
    // Empty audio cannot yield useful captions. Avoid hallucinated words and an
    // unnecessary model download for exact silence, including muted mixes.
