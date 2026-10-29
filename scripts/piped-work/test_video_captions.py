@@ -182,6 +182,40 @@ def check_caption_hebrew(client, root, ffmpeg, ffprobe, original, audio):
     for _ in range(2):
         client.send("Undo"); assert rows() == baseline
         client.send("Redo"); assert rows() == completed
+    save_reopen(client, root / "_recognized-hebrew.aup3")
+    assert rows() == completed
+
+    # The video path must transcribe its actual audible mix, over the selected
+    # project window after source audio has been split, moved and sped up.
+    tracks = client.data("GetInfo: Type=Tracks Format=JSON")
+    speech_track = next(i for i, item in enumerate(tracks) if item["name"] == "hebrew")
+    client.send(f"SelectTracks: Track={speech_track} TrackCount=1 Mode=Set")
+    client.send("SelectTime: Start=3 End=3"); client.send("Split")
+    client.send(f"SetClipProperties: Track={speech_track} At=4 Start=6 Speed=1.25")
+    client.send(f'SetClipProperties: Track={original["track"]} At=1 Start=6')
+    tone_track = next(i for i, item in enumerate(
+        client.data("GetInfo: Type=Tracks Format=JSON")) if item["name"] == "_colours")
+    client.send(f"SelectTracks: Track={tone_track} TrackCount=1 Mode=Set")
+    client.send("SetTrackAudio: Mute=1")
+    client.send("SelectTime: Start=6.5 End=10")
+    snapshot = client.data("GetVideoClips")
+    layers = {layer["layerId"] for layer in snapshot["tracks"]}
+    edited_audio = read_audio_project_state(client.data)
+    action = f'GenerateCaptions: Track={original["track"]} Model=base Language=he'
+    client.send(action)
+    result = client.data("GetVideoClips")
+    new_layers = [layer for layer in result["tracks"] if layer["layerId"] not in layers]
+    assert len(new_layers) == 1
+    fresh = [row for row in result["clips"] if row["track"] == new_layers[0]["index"]]
+    assert fresh and all(6.5 <= row["start"] < row["end"] <= 10 for row in fresh), fresh
+    assert len(" ".join(row["text"] for row in fresh).split()) >= 3, fresh
+    assert read_audio_project_state(client.data) == edited_audio
+    client.send(action); assert client.data("GetVideoClips") == result
+    client.send("Undo"); assert client.data("GetVideoClips") == snapshot
+    client.send("Redo"); assert client.data("GetVideoClips") == result
+    save_reopen(client, root / "_mixed-caption-window.aup3")
+    assert client.data("GetVideoClips") == result
+    assert read_audio_project_state(client.data) == edited_audio
 
 
 _CAPTION_CHECKS = {
