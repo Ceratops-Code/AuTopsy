@@ -178,10 +178,11 @@ wxString CaptionWorkspace::PrepareModel(const std::string &quality, wxWindow *pa
    std::atomic<bool> cancelled{}; std::atomic<uint64_t> received{};
    auto worker = std::async(std::launch::async, [&] { return DownloadModel(model, pending, cancelled, received); });
    while (worker.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready)
-      if (!progress.Update(int(received*1000/model.bytes))) cancelled = true;
-   if (!worker.get()) throw VideoPreview::PreviewPreparationCancelled{};
+      if (!progress.Update(std::min(999, int(received*1000/model.bytes)))) cancelled = true;
+   if (cancelled || !worker.get()) throw VideoPreview::PreviewPreparationCancelled{};
    if (!MoveFileExW(pending.c_str(), final.c_str(), MOVEFILE_WRITE_THROUGH))
       throw std::runtime_error("Cannot publish the completed caption model.");
+   if (!progress.Update(1000)) throw VideoPreview::PreviewPreparationCancelled{};
    return wxString(final.wstring());
 }
 }

@@ -431,6 +431,9 @@ finally:
     client.send("SelectTime: Start=0 End=0")
     baseline = rows()
     action = f"GenerateCaptions: Track={speech_track} Model=tiny Language=en"
+    with_native_dialog(lambda: client.send(action, success=False), "Download Caption Model",
+        lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")))
+    assert rows() == baseline, "Cancelling model acquisition changed the project."
     client.send(action)
     generated = rows()
     fresh = [row for row in generated if row not in baseline and row["pictureEffect"] == "text"]

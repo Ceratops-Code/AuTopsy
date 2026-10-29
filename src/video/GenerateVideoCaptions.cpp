@@ -164,7 +164,6 @@ void AddCaptionBatch(AudacityProject &project, AuTopsyVideoTrack *parent, const 
    candidate.placement.id = audacity::Uuid::Generate().ToHexString();
    if (parent) { candidate.placement.parentId = parent->Timeline().placement.id; candidate.placement.rectangle = box; }
    VideoEditing::AddProjectVideoTextTrack(project, parent, std::move(candidate), _("Captions"));
-   VideoTimeline::ShowProjectVideoPreview(project);
 }
 class AudioProgress final : public ExportProcessorDelegate {
    wxProgressDialog mProgress;
