@@ -2,8 +2,9 @@
 
 This folder contains scripts for exercising mod-script-pipe
 
-test_fork_features.py is the CTest runner for AuTopsy behavior cases. It owns a
-marked private profile and child process. With multiple screens it runs on
+test_fork_features.py dispatches scenarios and owns their immutable results.
+run_native_test_sessions.py owns the marked private profile, process and native
+case registry. With multiple screens it runs on
 DISPLAY2 (or another screen except DISPLAY1); a single screen is allowed.
 The rebuilt scripting module constrains test windows before showing them.
 Missing display guards or an unavailable target stop the run. User windows and
@@ -38,7 +39,43 @@ matching blocking outcomes, and two other attempts (three with no pass).
 Unrelated files remain untouched. This is the existing result archive, not a
 second cache or a workflow checkpoint store.
 
-scripts/test_run_affected_tests.py covers repeat/reuse, affecting inputs, failure
+scripts/test_native_test_results.py covers repeat/reuse, affecting inputs, failure
 precedence, bounded cleanup and interruptions around intent, execution, result
 publication and intent removal. Changes to orchestration select these checks
 without automatically rerunning unrelated model tests or accepted app binaries.
+
+Shared native sessions
+----------------------
+
+The SDLC affected-test runner batches compatible CTest commands using --cases.
+The driver keeps one app process for explicitly registered single-project
+scenarios. Each worker gets a new project: no tracks, clips, labels, Undo/Redo
+history or changed shared preferences may carry into its next scenario. Menu
+state is read without invoking Undo. A failed worker or reset retires that app;
+remaining cases start afresh and completed passes retain their original IDs.
+Startup, shutdown, capture/recovery, cold download and multi-project journeys
+keep their fresh-process contract. Unknown cases never become shared implicitly.
+Individual --case commands remain fresh-process checks. One existing Windows
+mutex encloses profiles, generated media and results, and a kill-on-close job
+contains the runner's children if the runner itself is stopped unexpectedly.
+
+prepare_test_media.py owns _generated-media beneath the selected work root.
+Exact recipes and tool bytes identify neutral media; scenarios get independent
+copies. Complete caption weights are grouped by speech-worker bytes; partial
+downloads and job files are excluded. Cold-download cases never seed models.
+Startup and completed publication retain the current and two preceding groups
+per purpose. Pending generation/copies are removed after interruption or at the
+next normal entry; matching completed copies are left intact. Groups contain at
+most sixteen files, 512 MiB per file and 1.5 GiB combined. Native fixture names
+and model filenames retain their loader-required names inside these private
+groups. _app.log retains a two-MiB tail; each fresh case replaces its old work.
+
+native-test-sessions covers process reuse, isolation, failed reset/worker
+retirement, interruption, bounded logs and cache publication/copy/cleanup.
+For new runner checks of an unchanged release, SDLC also accepts
+AUTOPSY_TEST_EXECUTABLE and AUTOPSY_VIDEO_TEST_NAME. The executable must be a
+private extracted payload with _test_runtime_owner containing
+"AuTopsy private test runtime 1". Results belong to .build/_native-runtime-tests;
+this scope never builds or installs an application. The extraction caller owns
+and removes that payload. Ordinary compiled-build checks continue using
+AUTOPSY_VIDEO_BUILD_DIR and AUTOPSY_VIDEO_TEST_NAME.

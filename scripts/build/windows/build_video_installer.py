@@ -524,8 +524,8 @@ def test_existing_installer_build(source: Path, build: Path, test_name: str) -> 
         run_command([cmake, "-S", str(source), "-B", str(build),
                      "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python())],
                     source, diagnostics, operation="native test configuration", target=str(build))
-        run_command([ctest, "--test-dir", str(build), "-C", "Release",
-                     "--output-on-failure", "-R", test_name, "--no-tests=error"], source, diagnostics)
+        run_command([sys.executable, str(source / "scripts/run_affected_tests.py"),
+                     "--native-build", str(build), "--native-tests", test_name], source, diagnostics)
         diagnostics.unlink(missing_ok=True)
     return {"status": "passed", "build_directory": str(build), "tests": test_name}
 

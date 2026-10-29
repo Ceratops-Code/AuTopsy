@@ -231,6 +231,8 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/TestVideoComposition.cpp` | Dedicated layer/crop/embedded-geometry cases | Picture eligibility and placement without native objects or codecs |
 | `scripts/run_affected_tests.py` and `test_run_affected_tests.py` | One portable input/check map, named execution and bounded receipts | Local/CI affected selection; separate native-acceptance impact |
 | `scripts/piped-work/test_fork_features.py` | Native feature dispatch, exact-input result reuse and bounded attempt outcomes | Adapter contracts through public commands |
+| `scripts/piped-work/run_native_test_sessions.py` | Native process/profile and case registry; compatible project-session batching | Fresh-project boundaries, separate named receipts and failed-session retirement |
+| `scripts/piped-work/prepare_test_media.py` | Bounded neutral-media and completed speech-model groups | Recipe/tool identities, atomic publication and independent scenario copies |
 | `scripts/piped-work/test_video_clip_edits.py` | Dedicated split edges, structural edits and compound rendering cases | Reused public-command/gesture cases with generated media |
 | `scripts/piped-work/test_video_transport.py` | Owned preview-window helpers, transport/navigation journeys and pixel observations | Private-process input and surface reads confined to the required display |
 
@@ -1129,7 +1131,8 @@ user's responsibility; the product must not delete them to repair a cache.
 | `.build/_core` | CMake/CTest: portable checks and generated executables | Updated in place on each normal test call; disposable build cache, not an install or product version |
 | `.build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
 | Installer build `package` | `build_video_installer.py`: completed installer and build manifest | Deterministic builder retains its accepted matching output, cleans pending owned build work; a new candidate receives its own content identity |
-| Test work roots | `test_fork_features.py`: generated fixtures and bounded immutable stage receipts; `run_audacity_consumer.py`: private stock process trees and scratch | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; operational histories bounded by owning producer |
+| Test work roots | `test_fork_features.py`: immutable case receipts; `run_native_test_sessions.py`: private app/profile and scenario outputs; `run_audacity_consumer.py`: stock process trees and scratch | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; one app log tail of at most two MiB per scenario; fresh case work replaces previous diagnostics |
+| Test work root `_generated-media` | `prepare_test_media.py`: neutral fixtures and completed caption weights by recipe/tool or speech-worker identity | Current plus two preceding groups per purpose; at most sixteen files, 512 MiB each, 1.5 GiB per group; entry/publication prune groups, incomplete staging is removed, copied inputs cannot mutate the cache |
 | Failure diagnostic payloads, target lifecycle | Each operation's existing owner: evidence for a named unresolved question | Default: persist none; when needed, one unresolved report per operation/target, seven-day expiry, declared finite byte/group limits; matching success removes obsolete failure payloads |
 | Picture transition chunks | `PrepareVideoEffects.cpp` orchestrates the existing cache owner | A project keeps one current plan, and the decoder keeps only its active/replaced files; no unbounded per-play history; generated files are disposable |
 
@@ -1379,6 +1382,26 @@ owner's exact executable/check receipts. Changing portable checks or this docume
 does not revoke an unchanged installer or schedule its media acceptance again.
 This uses the Ceratops refactor plan's existing-owner/affected-input/result-reuse
 idea; Nx, a new database and a second cache/dependency service are unnecessary.
+
+The affected runner batches compatible native commands through `--cases`.
+Explicitly registered single-project editing scenarios reuse one process, with
+fresh Python scenario workers and a fresh native project between cases. Empty
+tracks/clips/labels, disabled Undo/Redo menu controls and known preference values
+form the reset boundary. History is inspected without executing Undo. A worker
+or reset failure retires that process before another case starts; completed
+per-case acceptance survives. A killed runner's Windows job stops its descendants.
+Startup/shutdown, recording/recovery, cold model download and multi-project
+journeys remain isolated. Individual `--case` runs also retain process isolation.
+
+`native-test-sessions` covers these boundaries with repeated/interrupted process,
+result, cache publication/copy and cleanup cases; `native-test-results` owns the
+separate immutable-receipt cases. New runner checks can use a marked private
+released executable through `AUTOPSY_TEST_EXECUTABLE` plus the explicit test
+selector. This bypasses compilation and installation and stores its results in
+`.build/_native-runtime-tests`; it cannot attribute portable source passes to
+that released binary. The extraction caller removes the private runtime after
+its checks. Generated models retain their application-required filenames, while
+all cache groups and unpublished copies use private underscored names.
 
 Product qualification selects the newest published product version at the same
 or a higher level. The runner reads current GitHub release state, requires the
