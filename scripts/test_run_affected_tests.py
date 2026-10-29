@@ -23,6 +23,20 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_caption_fixtures_keep_identity_when_tracks_move_and_reject_ambiguity(self) -> None:
+        from test_video_captions import require_audio_fixture_track
+
+        speech = {"kind": "wave", "name": "speech"}
+        noise = {"kind": "wave", "name": "unrelated"}
+        label = {"kind": "label", "name": "speech"}
+        for _ in range(2):
+            for tracks, expected in (([speech], 0), ([label, speech], 1), ([speech, noise], 0)):
+                client = SimpleNamespace(data=Mock(return_value=tracks))
+                self.assertEqual(require_audio_fixture_track(client, "speech"), expected)
+            for tracks in ([], [noise], [label], [speech, dict(speech)]):
+                with self.subTest(tracks=tracks), self.assertRaises(AssertionError):
+                    require_audio_fixture_track(SimpleNamespace(data=Mock(return_value=tracks)), "speech")
+
     def test_scripting_transport_round_trips_english_and_hebrew(self) -> None:
         import pipeclient
         import run_fork_test_harness as harness
