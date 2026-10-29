@@ -46,6 +46,8 @@ TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/RenderVideoComposi
 GROUPS = (
     CheckGroup("video-captions", ("src/video/EditCaptionCues.*", "src/video/TestVideoCaptions.cpp") + TIMELINE_INPUTS,
         "video-captions-test"),
+    CheckGroup("native-test-results", ("scripts/test_native_test_results.py",
+        "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_native_test_sessions.py")),
     CheckGroup("media-collection", ("src/media/CollectMediaFiles.*", "src/media/TestMediaCollection.cpp"),
         "media-collection-test"),
     CheckGroup("media-clip-selection", ("src/clip-groups/SelectMediaClips.h",
@@ -80,7 +82,7 @@ GROUPS = (
         "scripts/piped-work/pipeclient.py")),
     CheckGroup("affected-test-selection", (
         "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
-        "scripts/piped-work/test_fork_features.py",
+        "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_native_test_sessions.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
         "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py", "scripts/piped-work/test_preview_controls.py",
         "scripts/piped-work/test_video_generators.py", "scripts/piped-work/test_video_captions.py", "scripts/piped-work/test_product_updates.py")) ,
