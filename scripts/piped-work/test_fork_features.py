@@ -987,6 +987,8 @@ def check_branding(client, root):
 
 def worker(args, root):
     client = ScriptClient()
+    if args.keep_app_open:
+        sessions.require_empty_project(client)
     if args.case == "display-guard":
         check_owned_display_guard(client)
     elif args.case == "groups":
@@ -1140,7 +1142,10 @@ def worker(args, root):
         assert ready_video_preview(client)["lightweight"]
         client.send("Save")
     client.send("Close")
-    client.send("Exit")
+    if args.keep_app_open:
+        sessions.require_empty_project(client)
+    else:
+        client.send("Exit")
 
 
 def retain_behavior_result(work_root, record=None, metrics=None):
@@ -1248,7 +1253,7 @@ def native_work_scope(inputs):
     check_fields = {"check_sha256", "harness_sha256", "pipe_client_sha256", "shared_process_checks",
         "clip_edits_sha256", "clip_actions_sha256", "track_groups_sha256", "clip_selection_sha256",
         "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256", "video_transport_sha256",
-        "video_recording_sha256", "session_checks_sha256"}
+        "video_recording_sha256", "session_checks_sha256", "fixture_checks_sha256"}
     return {name: value for name, value in inputs.items() if name not in check_fields}
 
 
@@ -1370,6 +1375,7 @@ def main():
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--case", choices=(*sessions.NATIVE_CASES, *sessions.MODULE_REGISTERED_NATIVE_CASES,
                                              *sessions.RECORDING_CASES, "display-policy", "worker-lifecycle"))
+    selection.add_argument("--cases", nargs="+", help="Run compatible scenarios in one private application session.")
     selection.add_argument("--list-native-cases", action="store_true",
                            help="Print video's centrally registered CTest cases without opening an application.")
     selection.add_argument("--list-recording-devices", action="store_true",
@@ -1382,9 +1388,20 @@ def main():
     parser.add_argument("--ffmpeg", default="")
     parser.add_argument("--ffprobe", default="")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--keep-app-open", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--recording-storage-recovery", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--reject-display", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.cases:
+        try:
+            args.cases = sessions.session_case_order(args.cases)
+        except ValueError as error:
+            parser.error(str(error))
+        if args.worker or args.reject_display or args.interrupt_cache:
+            parser.error("Batch sessions cannot combine worker or interruption flags.")
+        args.case = args.cases[0]
+    if args.keep_app_open and (not args.worker or args.case not in sessions.SHARED_PROJECT_CASES):
+        parser.error("Only compatible worker scenarios may keep the private app open.")
     if args.list_recording_devices:
         if os.name != "nt":
             parser.error("MME input discovery requires Windows.")
@@ -1424,7 +1441,7 @@ def main():
     if args.worker:
         worker(args, root)
         return
-    sessions.run_requested_cases(args, root, sys.modules[__name__])
+    return sessions.run_requested_cases(args, root, sys.modules[__name__])
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

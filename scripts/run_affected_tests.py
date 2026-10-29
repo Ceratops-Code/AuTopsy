@@ -48,6 +48,9 @@ GROUPS = (
         "video-captions-test"),
     CheckGroup("native-test-results", ("scripts/test_native_test_results.py",
         "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_native_test_sessions.py")),
+    CheckGroup("native-test-sessions", ("scripts/test_native_test_sessions.py",
+        "scripts/piped-work/run_native_test_sessions.py", "scripts/piped-work/prepare_test_media.py",
+        "scripts/piped-work/test_fork_features.py")),
     CheckGroup("media-collection", ("src/media/CollectMediaFiles.*", "src/media/TestMediaCollection.cpp"),
         "media-collection-test"),
     CheckGroup("media-clip-selection", ("src/clip-groups/SelectMediaClips.h",
@@ -254,17 +257,17 @@ def summarize_command_failure(details: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-def run_command(command: list[str], root: Path) -> str:
+def run_command(command: list[str], root: Path, *, timeout: int = 600) -> str:
     try:
         result = subprocess.run(command, cwd=root, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", check=False, timeout=600)
+                                encoding="utf-8", errors="replace", check=False, timeout=timeout)
     except OSError as error:
         raise CommandFailure(command, subprocess.CompletedProcess(command, -1, "", str(error))) from error
     except subprocess.TimeoutExpired as error:
         def stream_text(value: str | bytes | None) -> str:
             return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
         raise CommandFailure(command, subprocess.CompletedProcess(
-            command, -1, stream_text(error.stdout), stream_text(error.stderr) + "\nTimed out after 600 seconds.")) from error
+            command, -1, stream_text(error.stdout), stream_text(error.stderr) + f"\nTimed out after {timeout} seconds.")) from error
     if result.returncode:
         raise CommandFailure(command, result)
     return result.stdout
@@ -577,9 +580,23 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
                         help="Compare with the newest published version at this level or higher.")
     parser.add_argument("--all", action="store_true", help="Explicitly select every portable check.")
     parser.add_argument("--before-package", type=Path, help="Check an already compiled native payload before Inno Setup.")
+    parser.add_argument("--native-build", type=Path, help="Run an explicit named scope from an existing native CTest catalogue.")
     parser.add_argument("--native-tests", help="Additional native CTest expression, or an explicit scope when no base exists.")
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[1]
+    if args.native_build:
+        if not args.native_tests or args.before_package:
+            raise RuntimeError("Choose --native-tests for exactly one existing native build scope.")
+        native_build = args.native_build.resolve()
+        catalogue = json.loads(run_command(["ctest", "--test-dir", str(native_build), "-C", "Release",
+                                           "--show-only=json-v1"], root))["tests"]
+        expression = re.compile(args.native_tests)
+        names = [test["name"] for test in catalogue if expression.search(test["name"])]
+        if not names or len({test["name"] for test in catalogue}) != len(catalogue):
+            raise RuntimeError("Explicit native scope needs unique existing CTest names.")
+        results = run_native_catalogue(root, native_build, catalogue, names, collect_receipts=False)
+        print(json.dumps({"result": "passed", "scope": "native", "checks": results}))
+        return 0
     if args.before_package:
         print(json.dumps(run_prepackage_checks(root, args.before_package.resolve(), args.base, args.native_tests,
                                               args.qualification_level)))
@@ -592,6 +609,13 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
             raise RuntimeError(f"Required test tool is missing: {command}")
     changed, comparison = changed_paths(root, args.base, args.qualification_level)
     groups, native = select_groups(changed, args.all or comparison.startswith("all:"))
+    native_executable = os.environ.get("AUTOPSY_TEST_EXECUTABLE")
+    if native_executable:
+        if os.environ.get("AUTOPSY_VIDEO_BUILD_DIR") or not os.environ.get("AUTOPSY_VIDEO_TEST_NAME"):
+            raise RuntimeError("A private runtime needs AUTOPSY_VIDEO_TEST_NAME and no native build directory.")
+        print(json.dumps(run_private_runtime_checks(root, build.parent / "_native-runtime-tests",
+            Path(native_executable), os.environ["AUTOPSY_VIDEO_TEST_NAME"], comparison)))
+        return 0
     if bool(os.environ.get("AUTOPSY_VIDEO_BUILD_DIR")) != bool(os.environ.get("AUTOPSY_VIDEO_TEST_NAME")):
         raise RuntimeError("A native test session needs both AUTOPSY_VIDEO_BUILD_DIR and AUTOPSY_VIDEO_TEST_NAME.")
     native_session = bool(os.environ.get("AUTOPSY_VIDEO_BUILD_DIR") and os.environ.get("AUTOPSY_VIDEO_TEST_NAME"))
@@ -714,7 +738,7 @@ def read_native_acceptance(output: str, test: dict[str, Any], build: Path) -> di
     case = command[command.index("--case") + 1]
     results = []
     for line in output.splitlines():
-        match = re.match(r"^\s*\d+:\s*(\{.*\})\s*$", line)
+        match = re.match(r"^\s*(?:\d+:\s*)?(\{.*\})\s*$", line)
         if match:
             try:
                 value = json.loads(match[1])
@@ -746,6 +770,78 @@ def read_native_acceptance(output: str, test: dict[str, Any], build: Path) -> di
     if not receipts:
         raise RuntimeError(f"Native check {test['name']} returned no acceptance identity.")
     return {"name": test["name"], "result": results[0]["result"], "acceptance": receipts}
+
+
+def run_native_catalogue(root: Path, build: Path, catalogue: list[dict[str, Any]],
+                         names: list[str], *, collect_receipts: bool = True) -> list[dict[str, Any]]:
+    """Batch compatible project scenarios; keep CTest's special journeys intact."""
+    sys.path.insert(0, str(Path(__file__).parent / "piped-work"))
+    from run_native_test_sessions import SHARED_PROJECT_CASES
+
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    separate = []
+    for name in names:
+        test = next(test for test in catalogue if test["name"] == name)
+        command = test.get("command", [])
+        if "--case" in command and len(command) > 1:
+            index = command.index("--case")
+            case = command[index + 1]
+            flags = {value for value in command if value.startswith("--")}
+            ordinary_properties = all(item["name"] in {"RUN_SERIAL", "TIMEOUT", "WORKING_DIRECTORY"}
+                                      for item in test.get("properties", []))
+            if (case in SHARED_PROJECT_CASES and Path(command[1]).name == "test_fork_features.py"
+                    and ordinary_properties
+                    and flags <= {"--executable", "--work-root", "--case", "--ffmpeg", "--ffprobe"}):
+                key = tuple(command[:index] + command[index + 2:])
+                groups.setdefault(key, []).append(test)
+                continue
+        separate.append(test)
+    results: list[dict[str, Any]] = []
+    for command, tests in groups.items():
+        cases = [test["command"][test["command"].index("--case") + 1] for test in tests]
+        output = run_command([*command, "--cases", *cases], root, timeout=300 * len(tests) + 120)
+        results.extend(read_native_acceptance(output, test, build) for test in tests)
+    for test in separate:
+        output = run_command(["ctest", "--test-dir", str(build), "-C", "Release", "--verbose",
+                              "--no-tests=error", "-R", "^" + re.escape(test["name"]) + "$"], root)
+        results.append(read_native_acceptance(output, test, build) if collect_receipts else
+                       {"name": test["name"], "result": "passed"})
+    return results
+
+
+def run_private_runtime_checks(root: Path, work_root: Path, executable: Path,
+                               expression: str, comparison: str) -> dict[str, Any]:
+    """Exercise new runner behavior against an unchanged, privately extracted app.
+
+    The caller owns extraction. A marker distinguishes that payload from an
+    installed user's editor; the runner owns only its project/profile outputs.
+    This route never rebuilds, installs or substitutes portable acceptance.
+    """
+    executable = executable.resolve(strict=True)
+    marker = executable.parent / "_test_runtime_owner"
+    if not marker.is_file() or marker.read_text() != "AuTopsy private test runtime 1":
+        raise RuntimeError("Direct runtime checks require a marked private app payload.")
+    sys.path.insert(0, str(Path(__file__).parent / "piped-work"))
+    from run_native_test_sessions import (
+        MODULE_REGISTERED_NATIVE_CASES,
+        NATIVE_CASES,
+        RECORDING_CASES,
+    )
+
+    pattern = re.compile(expression)
+    cases = [case for case in (*NATIVE_CASES, *MODULE_REGISTERED_NATIVE_CASES, *RECORDING_CASES)
+             if case != "fixtures" and pattern.search("fork-" + case)]
+    if not cases:
+        raise RuntimeError("The private runtime selection matches no native scenarios.")
+    driver = root / "scripts/piped-work/test_fork_features.py"
+    tools = ["--ffmpeg", str(executable.parent / "ffmpeg.exe"),
+             "--ffprobe", str(executable.parent / "ffprobe.exe")]
+    command = [sys.executable, str(driver), "--executable", str(executable),
+               "--work-root", str(work_root), *tools]
+    output = run_command([*command, "--cases", *cases], root, timeout=300 * len(cases) + 120)
+    results = [read_native_acceptance(output, {"name": "fork-" + case,
+        "command": [*command, "--case", case]}, work_root.parent) for case in cases]
+    return {"result": "passed", "scope": "native", "comparison": comparison, "checks": results}
 
 
 def run_prepackage_checks(root: Path, build: Path, base: str | None, extra: str | None,
@@ -786,11 +882,9 @@ def run_prepackage_checks(root: Path, build: Path, base: str | None, extra: str 
                 result = run_named_check(root, build, test, identity, store, fixture_inputs_current)
                 if result["result"] == "failed":
                     raise RuntimeError(f"Required prepackage check failed: {result}")
-            else:
-                output = run_command(["ctest", "--test-dir", str(build), "-C", "Release", "--verbose",
-                                      "--no-tests=error", "-R", "^" + re.escape(name) + "$"], root)
-                result = read_native_acceptance(output, test, build)
-            results.append(result)
+                results.append(result)
+        results.extend(run_native_catalogue(root, build, catalogue,
+            [name for name in selected if name != "fork-fixtures"]))
     if native_payload_identity(catalogue) != payload:
         raise RuntimeError("Compiled payload changed during prepackage checks; packaging is blocked.")
     return {"result": "passed", "scope": "prepackage", "comparison": comparison, "qualification_level": level,

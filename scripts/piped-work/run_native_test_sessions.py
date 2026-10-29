@@ -4,6 +4,7 @@ The caller supplies the scenario/receipt API. Only this adapter knows Windows
 process handles and the installed application's scripting/profile contract.
 No user profile, running editor or unrelated output directory is owned here.
 """
+import copy
 import ctypes
 import hashlib
 import inspect
@@ -14,11 +15,18 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from prepare_test_media import (
+    TestMediaCache,
+    preserve_caption_models,
+    seed_caption_models,
+)
 from run_audacity_consumer import (
     executable_version,
     read_audio_project_state,
@@ -60,6 +68,7 @@ def native_test_inputs(args, executable, module, display, case_api):
         "script_module_sha256": sha(module),
         "check_sha256": sha(Path(case_api.__file__)),
         "session_checks_sha256": sha(Path(__file__)),
+        "fixture_checks_sha256": sha(here / "prepare_test_media.py"),
         "harness_sha256": sha(here / "run_fork_test_harness.py"),
         "pipe_client_sha256": sha(here / "pipeclient.py"),
         "shared_process_checks": {
@@ -226,42 +235,316 @@ NATIVE_CASES = (
 )
 
 
-def execute_isolated_case(args, root, executable, module, display, kernel, pipe, case_api, run_id, identities):
-    """Run one fresh-process scenario under the caller's existing profile mutex."""
-    require_unlocked_desktop()
-    marker = root / "_owner"
-    signature = "AuTopsy behavior tests 1"
-    shared_cache = root.parent / "_preview_media"
-    cache_owner = shared_cache / "_test_owner"
-    cache_signature = "AuTopsy preview behavior cache 1"
-    if shared_cache.exists() and (
-        not cache_owner.is_file() or cache_owner.read_text() != cache_signature
-    ):
-        raise RuntimeError(
-            "The preview test cache has another owner: " + str(shared_cache)
-        )
-    if root.exists():
-        if not marker.is_file() or marker.read_text() != signature:
-            raise RuntimeError(
-                "The test output directory has another owner: " + str(root)
-            )
-        previous_cache = root / "_preview-cache"
-        if (
-            args.case == "preview"
-            and previous_cache.is_dir()
-            and not shared_cache.exists()
-        ):
-            shutil.copytree(previous_cache, shared_cache)
-            cache_owner.write_text(cache_signature)
-        shutil.rmtree(root)
-    root.mkdir()
-    marker.write_text(signature)
+SHARED_PROJECT_CASES = frozenset({
+    "video-reverse", "video-freeze", "video-repeat", "video-text",
+    "video-caption-interchange", "video-caption-hebrew", "video-caption-warp",
+    "video-selection", "video-edges", "video-linked-edges", "video-split-edges",
+    "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits",
+    "video-compound-render", "video-crop", "video-crop-controls", "video-visibility",
+    "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links",
+    "video-track-menu",
+})
+RESET_PREFERENCES = {"/FileFormats/MusicFileImportSettingChoice": "No", "/GUI/ShowSplashScreen": "0"}
+_native_job = None
+
+
+def contain_native_children():
+    """Let Windows stop only this runner's descendants if the runner is killed.
+
+    The non-inheritable job handle stays open for the process lifetime. Closing
+    it in Python finalization could kill the runner before its exit code is
+    reported, so the kernel closes it after process termination instead.
+    """
+    global _native_job
+    if os.name != "nt" or _native_job is not None:
+        return
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [("process_time", ctypes.c_int64), ("job_time", ctypes.c_int64),
+                    ("flags", ctypes.c_uint32), ("minimum", ctypes.c_size_t),
+                    ("maximum", ctypes.c_size_t), ("active", ctypes.c_uint32),
+                    ("affinity", ctypes.c_size_t), ("priority", ctypes.c_uint32),
+                    ("scheduling", ctypes.c_uint32)]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [("basic", BasicLimits), ("io", ctypes.c_uint64 * 6),
+                    ("process_memory", ctypes.c_size_t), ("job_memory", ctypes.c_size_t),
+                    ("peak_process", ctypes.c_size_t), ("peak_job", ctypes.c_size_t)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+    kernel.CreateJobObjectW.restype = ctypes.c_void_p
+    kernel.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    kernel.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    kernel.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    job = kernel.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    limits = ExtendedLimits()
+    limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (not kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits))
+            or not kernel.AssignProcessToJobObject(job, kernel.GetCurrentProcess())):
+        error = ctypes.get_last_error()
+        kernel.CloseHandle(job)
+        raise RuntimeError(f"Cannot contain the native test process tree: Windows error {error}.")
+    _native_job = job
+
+
+def stop_owned_native_children():
+    """Retire leftover media workers before reusing this runner's profile.
+
+    This runner's private job contains no user process. Membership is checked
+    again on each opened process handle to exclude PID reuse. The controller
+    survives, so a fresh app can run remaining scenarios after a failed worker.
+    """
+    if _native_job is None:
+        return
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.QueryInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int,
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+    kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+    kernel.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    deadline = time.monotonic() + 10
+    while True:
+        capacity = 64
+        while True:
+            class ProcessList(ctypes.Structure):
+                _fields_ = [("assigned", ctypes.c_uint32), ("listed", ctypes.c_uint32),
+                            ("ids", ctypes.c_size_t * capacity)]
+
+            processes = ProcessList()
+            if kernel.QueryInformationJobObject(_native_job, 3, ctypes.byref(processes),
+                                               ctypes.sizeof(processes), None):
+                break
+            error = ctypes.get_last_error()
+            if error != 234 or capacity >= 4096:
+                raise RuntimeError(f"Cannot read owned test job members: Windows error {error}.")
+            capacity *= 2
+        pids = [pid for pid in processes.ids[:processes.listed] if pid != os.getpid()]
+        if not pids:
+            return
+        for pid in pids:
+            handle = kernel.OpenProcess(0x101001, False, pid)
+            if not handle:
+                if ctypes.get_last_error() == 87:
+                    continue  # This job member already exited.
+                raise RuntimeError(f"Cannot open owned test child {pid}: Windows error {ctypes.get_last_error()}.")
+            try:
+                member = ctypes.c_int()
+                if not kernel.IsProcessInJob(handle, _native_job, ctypes.byref(member)):
+                    raise RuntimeError(f"Cannot read job ownership for child {pid}.")
+                if not member.value:
+                    continue
+                if kernel.WaitForSingleObject(handle, 0) != 0 and not kernel.TerminateProcess(handle, 1):
+                    raise RuntimeError(f"Cannot stop owned test child {pid}: Windows error {ctypes.get_last_error()}.")
+                remaining = max(0, int((deadline - time.monotonic()) * 1000))
+                if kernel.WaitForSingleObject(handle, remaining) != 0:
+                    raise RuntimeError(f"Owned test child {pid} did not finish teardown.")
+            finally:
+                kernel.CloseHandle(handle)
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Owned test children did not retire within ten seconds.")
+
+
+def session_case_order(cases):
+    """Group compatible cases; unknown or repeated requests have no effects."""
+    if not cases or len(cases) != len(set(cases)):
+        raise ValueError("Choose a nonempty list of unique native scenarios.")
+    known = set(NATIVE_CASES) | set(MODULE_REGISTERED_NATIVE_CASES) | set(RECORDING_CASES)
+    if set(cases)-known or "fixtures" in cases:
+        raise ValueError("The session contains an unknown or headless scenario.")
+    return ([case for case in cases if case in SHARED_PROJECT_CASES]
+            + [case for case in cases if case not in SHARED_PROJECT_CASES])
+
+
+def owned_project_windows(pid):
+    """Identify project frames by their native menu, never title or position."""
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetMenu.argtypes = [ctypes.c_void_p]
+    user.GetMenu.restype = ctypes.c_void_p
+    return [int(window["handle"]) for window in assert_owned_test_display(pid)
+            if user.GetMenu(int(window["handle"]))]
+
+
+def read_history_availability(client, window):
+    """Read native menu states using current scripting IDs and translated labels.
+
+    Only the two requested fields are read from each menu row: the inherited
+    serializer can emit invalid JSON escapes in unrelated shortcut strings.
+    No command is invoked and no menu is opened to inspect its enabled state.
+    """
+    labels = {}
+    for line in client.send("GetInfo: Type=Menus Format=JSON").splitlines():
+        identity = re.search(r'"id"\s*:\s*"(Undo|Redo)"', line)
+        label = re.search(r'"label"\s*:\s*("(?:[^"\\]|\\.)*")', line)
+        if identity and label:
+            if identity[1] in labels:
+                raise RuntimeError("History commands have ambiguous menu entries.")
+            labels[identity[1]] = json.loads(label[1])
+    if set(labels) != {"Undo", "Redo"}:
+        raise RuntimeError("The native menu did not expose both history command IDs.")
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetMenu.argtypes, user.GetMenu.restype = [ctypes.c_void_p], ctypes.c_void_p
+    user.GetSubMenu.argtypes, user.GetSubMenu.restype = [ctypes.c_void_p, ctypes.c_int], ctypes.c_void_p
+    user.GetMenuItemCount.argtypes = [ctypes.c_void_p]
+    user.GetMenuStringW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_int, ctypes.c_uint]
+    user.GetMenuState.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+    result = {}
+
+    def visit(menu):
+        for index in range(user.GetMenuItemCount(menu)):
+            text = ctypes.create_unicode_buffer(512)
+            user.GetMenuStringW(menu, index, text, len(text), 0x400)
+            caption = text.value.replace("&", "").split("\t")[0]
+            for command, label in labels.items():
+                if caption == label:
+                    if command in result:
+                        raise RuntimeError("History controls have ambiguous native menu entries.")
+                    state = user.GetMenuState(menu, index, 0x400)
+                    if state == -1:
+                        raise RuntimeError("The native history menu state could not be read.")
+                    result[command] = not bool(state & 3)
+            child = user.GetSubMenu(menu, index)
+            if child:
+                visit(child)
+
+    visit(user.GetMenu(window))
+    return result
+
+
+def require_empty_project(client):
+    """Observe a new project and restore the shared scenarios' preference keys."""
+    pid = int(os.environ["AUTOPSY_OWNED_APP_PID"])
+    windows = owned_project_windows(pid)
+    if len(windows) != 1:
+        raise RuntimeError("Shared scenarios require exactly one owned project window.")
+    client.send("Stop")
+    for kind in ("Tracks", "Clips", "Labels"):
+        if client.data(f"GetInfo: Type={kind} Format=JSON"):
+            raise RuntimeError("The shared project still contains " + kind.lower())
+    if read_history_availability(client, windows[0]) != {"Undo": False, "Redo": False}:
+        raise RuntimeError("The shared project still has history or unreadable history controls.")
+    client.send("SelectTime: Start=0 End=0")
+    for name, value in RESET_PREFERENCES.items():
+        client.send(f'SetPreference: Name="{name}" Value="{value}"')
+        observed = client.send(f'GetPreference: Name="{name}"').split("BatchCommand", 1)[0].strip()
+        if observed != value:
+            raise RuntimeError("The shared preference did not reach its baseline: " + name)
+
+
+class SharedNativeProcess:
+    """Own one live app, a two-MiB log tail and its profile until retirement."""
+
+    def __init__(self, work_root, executable):
+        self.work_root, self.executable = work_root, executable
+        self.app = self.log_thread = self.debugger = None
+        self.environment = None
+        self.profile = None
+        self.current_root = None
+        self.tail = bytearray()
+        self.tail_lock = threading.Lock()
+        self.starts = 0
+
+    @contextmanager
+    def output(self, root):
+        self.current_root = root
+        (root / "_app.log").write_bytes(b"")
+        try:
+            yield self
+        finally:
+            self.flush()
+
+    def flush(self):
+        if self.current_root is not None:
+            with self.tail_lock:
+                data = bytes(self.tail)
+            (self.current_root / "_app.log").write_bytes(data)
+
+    def bind(self, app, environment, profile):
+        self.app, self.environment, self.profile = app, environment, profile
+        self.starts += 1
+        self.tail.clear()
+
+        def drain():
+            try:
+                while block := app.stdout.read1(8192):
+                    with self.tail_lock:
+                        self.tail.extend(block)
+                        if len(self.tail) > 2 * 1024 * 1024:
+                            del self.tail[:-2 * 1024 * 1024]
+            finally:
+                app.stdout.close()
+
+        self.log_thread = threading.Thread(target=drain, daemon=True)
+        self.log_thread.start()
+
+    def close(self, *, force=False):
+        """Stop this app, retain complete models, then delete its owned profile."""
+        app = self.app
+        if app is None:
+            return
+        errors = []
+        try:
+            if app.poll() is None and not force:
+                windows = owned_project_windows(app.pid)
+                if len(windows) != 1:
+                    raise RuntimeError("The shared session cannot close an ambiguous project set.")
+                user = ctypes.WinDLL("user32", use_last_error=True)
+                user.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+                if not user.PostMessageW(windows[0], 0x10, 0, 0):
+                    raise RuntimeError("Closing the owned shared test window failed.")
+                if app.wait(timeout=20):
+                    raise RuntimeError("The shared test application failed during shutdown.")
+        except Exception as error:
+            errors.append(str(error))
+        finally:
+            if app.poll() is None:
+                app.terminate()
+                app.wait(timeout=20)
+            self.app = None  # Ownership ends only after the child is known stopped.
+            if self.debugger:
+                try:
+                    self.debugger.close()
+                except Exception as error:
+                    errors.append(str(error))
+                finally:
+                    self.debugger = None
+            stop_owned_native_children()
+            if self.log_thread:
+                self.log_thread.join(timeout=10)
+                if self.log_thread.is_alive():
+                    errors.append("The owned application log did not finish.")
+            self.flush()
+            if self.profile is not None:
+                owner = self.profile / "_autopsy_tests"
+                if (self.profile.is_symlink() or self.profile.resolve() != self.profile.absolute()
+                        or not owner.is_file() or owner.read_text() != str(self.work_root.resolve())):
+                    raise RuntimeError("The shared test profile no longer has its expected owner.")
+                try:
+                    preserve_caption_models(TestMediaCache(self.work_root / "_generated-media"),
+                                            self.profile, self.executable)
+                except Exception as error:
+                    errors.append(str(error))
+                finally:
+                    shutil.rmtree(self.profile)
+                    self.profile = None
+        if errors:
+            raise RuntimeError("Shared application retirement failed: " + "; ".join(errors))
+
+
+def build_case_media(args, destination):
+    """Produce neutral inputs for one media shape; scenarios only get copies."""
     for name, channels in (
         ("tone-a.wav", 1),
         ("tone-b.wav", 1),
         ("tone-stereo.wav", 2),
     ):
-        write_tone(root / name, channels)
+        write_tone(destination / name, channels)
     if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
         run_process(
             [
@@ -294,7 +577,7 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
                 "-c:a",
                 "aac",
                 "-shortest",
-                str(root / "source.mp4"),
+                str(destination / "source.mp4"),
             ],
             timeout=60,
         )
@@ -313,92 +596,160 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
                 "mpeg4",
                 "-q:v",
                 "2",
-                str(root / "other-source.mp4"),
+                str(destination / "other-source.mp4"),
             ],
             timeout=30,
         )
     if args.case in ("preview", "transport-toolbar", "preview-navigation", "preview-controls", "video-cursor", "preview-soak"):
-        write_neutral_preview_video(args.ffmpeg, root / "source.mp4")
+        write_neutral_preview_video(args.ffmpeg, destination / "source.mp4")
+
+def prepare_case_media(args, root):
+    """Reuse exact recipe/tool bytes; application acceptance is independent."""
+    small = args.case in BEGINNER_VIDEO_CASES or args.case in (
+        "video-preview-close", "video-audio-parity", "video-audio-join-links",
+        "clip-selection", "video-clip-export", "edit-cursor-line", "video",
+        "video-selection", "video-edges", "video-linked-edges", "video-split-edges",
+        "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits",
+        "video-compound-render", "video-clipboard", "video-track-menu",
+        "video-transport", "video-visibility", "video-speed", "video-speed-storage",
+        "video-clip-storage", "video-parent-links", "media", "project-compatibility")
+    preview = args.case in ("preview", "transport-toolbar", "preview-navigation",
+                           "preview-controls", "video-cursor", "preview-soak")
+    purpose = "preview" if preview else "small-video" if small else "tones"
+    tools = {}
+    if small or preview:
+        executable = Path(shutil.which(args.ffmpeg) or args.ffmpeg).resolve(strict=True)
+        with executable.open("rb") as stream:
+            tools["ffmpeg"] = hashlib.file_digest(stream, "sha256").hexdigest()
+    inputs = {"tools": tools, "recipes": {
+        fn.__name__: hashlib.sha256(inspect.getsource(fn).encode()).hexdigest()
+        for fn in (build_case_media, write_tone, write_neutral_preview_video)}}
+    cache = TestMediaCache(root.parent / "_generated-media")
+    group = cache.materialize(purpose, inputs, lambda target: build_case_media(args, target))
+    cache.copy_to(group, root)
+
+
+def execute_case(args, root, executable, module, display, kernel, pipe, case_api, run_id, identities, shared=None):
+    """Run one fresh-process scenario under the caller's existing profile mutex."""
+    require_unlocked_desktop()
+    marker = root / "_owner"
+    signature = "AuTopsy behavior tests 1"
+    shared_cache = root.parent / "_preview_media"
+    cache_owner = shared_cache / "_test_owner"
+    cache_signature = "AuTopsy preview behavior cache 1"
+    if shared_cache.exists() and (
+        not cache_owner.is_file() or cache_owner.read_text() != cache_signature
+    ):
+        raise RuntimeError(
+            "The preview test cache has another owner: " + str(shared_cache)
+        )
+    if root.exists():
+        if not marker.is_file() or marker.read_text() != signature:
+            raise RuntimeError(
+                "The test output directory has another owner: " + str(root)
+            )
+        previous_cache = root / "_preview-cache"
+        if (
+            args.case == "preview"
+            and previous_cache.is_dir()
+            and not shared_cache.exists()
+        ):
+            shutil.copytree(previous_cache, shared_cache)
+            cache_owner.write_text(cache_signature)
+        shutil.rmtree(root)
+    root.mkdir()
+    marker.write_text(signature)
+    prepare_case_media(args, root)
     version_numbers = executable_version(executable)
+    version = ".".join(str(x) for x in version_numbers)
     profile = executable.parent / "Portable Settings"
     profile_owner = profile / "_autopsy_tests"
-    if profile.exists():
-        if not profile_owner.is_file() or profile_owner.read_text() != str(
-            args.work_root.resolve()
-        ):
-            raise RuntimeError(
-                "An unrelated Portable Settings profile exists: " + str(profile)
-            )
-        shutil.rmtree(profile)
-    profile.mkdir()
-    profile_owner.write_text(str(args.work_root.resolve()))
-    if args.case == "preview" and shared_cache.is_dir():
-        shutil.copytree(shared_cache, profile / "_video-previews")
-    audio = root / "_audio_temp"
-    audio.mkdir()
-    gui = root / "_gui_temp"
-    gui.mkdir()
-    version = ".".join(str(x) for x in version_numbers)
-    stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: DTZ006 -- matches the upstream module preference in local time
     left, top, right, bottom = display["work"]
-    width, height = min(1100, right - left - 32), min(650, bottom - top - 32)
-    placement = (
-        f"[Window]\nX={left + 16}\nY={top + 16}\nWidth={width}\nHeight={height}\n"
-        f"Normal_X={left + 16}\nNormal_Y={top + 16}\nNormal_Width={width}\nNormal_Height={height}\n"
-        "Maximized=0\nIconized=0\n"
-    )
-    capture_configuration = ""
-    if args.case in RECORDING_CASES:
-        from test_clip_actions import require_recording_device
-        device = require_recording_device()
-        capture_configuration = (f"[AudioIO]\nHost=MME\nRecordingDevice={device['name']}\n"
-            "RecordChannels=1\nLatencyCorrection=0\nSWPlaythrough=0\nDuplex=0\n")
-    (profile / "autopsy.cfg").write_text(
-        f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
-        f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
-        "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
-        f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement + capture_configuration,
-        encoding="utf-8",
-    )
-    environment = dict(
-        os.environ,
-        TEMP=str(gui),
-        TMP=str(gui),
-        PYTHONDONTWRITEBYTECODE="1",
-        AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
-        AUTOPSY_TEST_FFMPEG=args.ffmpeg,
-        AUTOPSY_TEST_DISPLAY=display["device"]
-        if args.reject_display is not True
-        else "missing-test-display",
-    )
-    if args.case == "product-updates":
-        environment.pop("AUTOPSY_TEST_UPDATES_JSON", None)
-        if os.environ.get("AUTOPSY_TEST_UPDATES_SOURCE", "fixture") == "fixture":
-            environment["AUTOPSY_TEST_UPDATES_JSON"] = str(root / "_updates.json")
-    initial_preferences = (profile / "autopsy.cfg").read_text(encoding="utf-8")
-    environment.pop("AUTOPSY_TEST_STALE_MONITOR", None)
-    if args.case == "display-guard":
-        environment["AUTOPSY_TEST_STALE_MONITOR"] = "1"
-    if args.reject_display == "transition":
-        environment["AUTOPSY_TEST_STALE_MONITOR"] = "lost"
-    if args.case in RECORDING_CASES[1:]:
-        environment["AUTOPSY_TEST_SAVE_ROOT"] = str(audio.resolve())
-    if args.case in VIDEO_RECORDING_CASES:
-        environment["AUTOPSY_TEST_VIDEO_RECORDING_INPUT"] = "generated"
+    if shared is None or shared.app is None:
+        if profile.exists():
+            if not profile_owner.is_file() or profile_owner.read_text() != str(
+                args.work_root.resolve()
+            ):
+                raise RuntimeError(
+                    "An unrelated Portable Settings profile exists: " + str(profile)
+                )
+            shutil.rmtree(profile)
+        profile.mkdir()
+        profile_owner.write_text(str(args.work_root.resolve()))
+        if args.case == "preview" and shared_cache.is_dir():
+            shutil.copytree(shared_cache, profile / "_video-previews")
+        audio = root / "_audio_temp"
+        audio.mkdir()
+        gui = root / "_gui_temp"
+        gui.mkdir()
+        stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: DTZ006 -- matches the upstream module preference in local time
+        left, top, right, bottom = display["work"]
+        width, height = min(1100, right - left - 32), min(650, bottom - top - 32)
+        placement = (
+            f"[Window]\nX={left + 16}\nY={top + 16}\nWidth={width}\nHeight={height}\n"
+            f"Normal_X={left + 16}\nNormal_Y={top + 16}\nNormal_Width={width}\nNormal_Height={height}\n"
+            "Maximized=0\nIconized=0\n"
+        )
+        capture_configuration = ""
+        if args.case in RECORDING_CASES:
+            from test_clip_actions import require_recording_device
+            device = require_recording_device()
+            capture_configuration = (f"[AudioIO]\nHost=MME\nRecordingDevice={device['name']}\n"
+                "RecordChannels=1\nLatencyCorrection=0\nSWPlaythrough=0\nDuplex=0\n")
+        (profile / "autopsy.cfg").write_text(
+            f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
+            f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
+            "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
+            f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement + capture_configuration,
+            encoding="utf-8",
+        )
+        environment = dict(
+            os.environ,
+            TEMP=str(gui),
+            TMP=str(gui),
+            PYTHONDONTWRITEBYTECODE="1",
+            AUTOPSY_BEHAVIOR_ROOT=str(args.work_root.resolve()),
+            AUTOPSY_TEST_FFMPEG=args.ffmpeg,
+            AUTOPSY_TEST_DISPLAY=display["device"]
+            if args.reject_display is not True
+            else "missing-test-display",
+        )
+        if args.case == "product-updates":
+            environment.pop("AUTOPSY_TEST_UPDATES_JSON", None)
+            if os.environ.get("AUTOPSY_TEST_UPDATES_SOURCE", "fixture") == "fixture":
+                environment["AUTOPSY_TEST_UPDATES_JSON"] = str(root / "_updates.json")
+        initial_preferences = (profile / "autopsy.cfg").read_text(encoding="utf-8")
+        environment.pop("AUTOPSY_TEST_STALE_MONITOR", None)
+        if args.case == "display-guard":
+            environment["AUTOPSY_TEST_STALE_MONITOR"] = "1"
+        if args.reject_display == "transition":
+            environment["AUTOPSY_TEST_STALE_MONITOR"] = "lost"
+        if args.case in RECORDING_CASES[1:]:
+            environment["AUTOPSY_TEST_SAVE_ROOT"] = str(audio.resolve())
+        if args.case in VIDEO_RECORDING_CASES:
+            environment["AUTOPSY_TEST_VIDEO_RECORDING_INPUT"] = "generated"
+        if shared is not None:
+            seed_caption_models(TestMediaCache(args.work_root / "_generated-media"), profile, executable)
+    else:
+        environment = shared.environment
+        assert environment is not None
     user = ctypes.WinDLL("user32", use_last_error=True)
     user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    with (root / "_app.log").open("w") as log:
-        app = subprocess.Popen(
-            [str(executable)],
-            cwd=executable.parent,
-            env=environment,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-        )
-        debugger = None
+    with (shared.output(root) if shared else (root / "_app.log").open("w")) as log:
+        if shared is not None and shared.app is not None:
+            app, debugger = shared.app, shared.debugger
+        else:
+            app = subprocess.Popen(
+                [str(executable)], cwd=executable.parent, env=environment,
+                stdout=subprocess.PIPE if shared else log, stderr=subprocess.STDOUT)
+            debugger = None
+            if shared is not None:
+                shared.bind(app, environment, profile)
         try:
-            if not args.reject_display:
+            if not args.reject_display and debugger is None:
                 debugger = NativeCrashDebugger(app, root)
+                if shared is not None:
+                    shared.debugger = debugger
             if args.reject_display:
                 started = time.monotonic()
                 status = app.wait(timeout=30)
@@ -454,8 +805,10 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
             worker_command = [
                 sys.executable,
                 str(Path(case_api.__file__)),
-                *sys.argv[1:],
+                "--executable", str(executable), "--work-root", str(args.work_root),
+                "--case", args.case, "--ffmpeg", args.ffmpeg, "--ffprobe", args.ffprobe,
                 "--worker",
+                *(["--keep-app-open"] if shared is not None else []),
             ]
             if args.interrupt_cache:
                 cache = profile / "_video-previews"
@@ -545,7 +898,14 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
                     f"stderr:\n{result.stderr or '<absent>'}"
                 )
             try:
-                status = app.wait(timeout=20)
+                if shared is not None:
+                    status = app.poll()
+                    if status is None:
+                        status = 0
+                    else:
+                        raise RuntimeError("A reusable application exited between scenarios.")
+                else:
+                    status = app.wait(timeout=20)
             except subprocess.TimeoutExpired as error:
                 raise RuntimeError(
                     "Owned app did not exit; " + startup_window_messages(app.pid)
@@ -553,6 +913,7 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
             if status:
                 if debugger:
                     debugger.close()
+                stop_owned_native_children()
                 log.flush()
                 trace = root / "_native-debugger.log"
                 raise RuntimeError(f"The owned app exited with status {status}.\n"
@@ -594,6 +955,8 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
                 "version": version.strip(),
                 "test_display": display,
                 "pre_show_count": len(shows),
+                "session": {"pid": app.pid, "shared": shared is not None,
+                            "process_starts": shared.starts if shared else 1},
                 "input": source_identity,
                 **identities,
             }
@@ -604,31 +967,88 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
                 record["observations"] = json.loads(observations.read_text())
             return record
         finally:
-            if app.poll() is None:
-                app.terminate()
-                app.wait(timeout=20)
-            if debugger:
-                debugger.close()
-            if args.case in RECORDING_CASES:
-                remove_private_capture_audio(root, process_stopped=app.poll() is not None)
-            if profile_owner.is_file() and profile_owner.read_text() == str(
-                args.work_root.resolve()
-            ):
-                cache = profile / "_video-previews"
-                if args.case == "preview" and cache.is_dir():
-                    if shared_cache.exists():
-                        shutil.rmtree(shared_cache)
-                    shutil.copytree(cache, shared_cache)
-                    cache_owner.write_text(cache_signature)
-                shutil.rmtree(profile)
+            if shared is None:
+                if app.poll() is None:
+                    app.terminate()
+                    app.wait(timeout=20)
+                if debugger:
+                    debugger.close()
+                stop_owned_native_children()
+                if args.case in RECORDING_CASES:
+                    remove_private_capture_audio(root, process_stopped=app.poll() is not None)
+                if profile_owner.is_file() and profile_owner.read_text() == str(
+                    args.work_root.resolve()
+                ):
+                    cache = profile / "_video-previews"
+                    if args.case == "preview" and cache.is_dir():
+                        if shared_cache.exists():
+                            shutil.rmtree(shared_cache)
+                        shutil.copytree(cache, shared_cache)
+                        cache_owner.write_text(cache_signature)
+                    shutil.rmtree(profile)
 
 
+
+
+def run_case_batch(args, work_root, case_api, read_case_inputs, execute_case_work,
+                   create_shared=SharedNativeProcess):
+    """Keep per-case acceptance while retiring a failed session before continuing.
+
+    Only scenario requests are ordered here. A new call reads current inputs and
+    immutable acceptance; this object never restores a workflow progress log.
+    """
+    cases = session_case_order(args.cases) if args.cases else [args.case]
+    work_root.mkdir(parents=True, exist_ok=True)
+    shared = None
+    failed = False
+    try:
+        for name in cases:
+            current = copy.copy(args)
+            current.case = name
+            reusable = bool(args.cases and name in SHARED_PROJECT_CASES)
+            if not reusable and shared is not None:
+                shared.close()
+                shared = None
+            if reusable and shared is None:
+                shared = create_shared(work_root, args.executable)
+            case_root = work_root / ("_" + name)
+
+            def inputs(current=current, reusable=reusable):
+                result = read_case_inputs(current)
+                if reusable:
+                    result["execution_scope"]["project_isolation"] = "shared-empty-project.v1"
+                return result
+
+            def execute(run_id, identities, current=current, case_root=case_root, shared=shared):
+                return execute_case_work(current, case_root, run_id, identities, shared)
+
+            try:
+                if name in ("project-compatibility", "track-groups", "video-clip-mute",
+                            "collect-media", "video-fades", "video-embedding", "video-pictures"):
+                    result = case_api.run_project_compatibility_checks(work_root, name, inputs,
+                        execute, case_root, args.test_display, args.ffmpeg)
+                else:
+                    result = case_api.run_native_check(work_root, name, inputs, execute)
+                print(json.dumps(result), flush=True)
+            except Exception as error:
+                failed = True
+                print(json.dumps({"case": name, "result": "failed", "error": str(error)}), flush=True)
+                if shared is not None:
+                    shared.close(force=True)
+                    shared = None
+                if not args.cases:
+                    raise
+    finally:
+        if shared is not None:
+            shared.close(force=sys.exc_info()[0] is not None)
+    return 1 if failed else 0
 
 
 def run_requested_cases(args, root, case_api):
     """Resolve the private Windows boundary and apply the case's receipt owner."""
     if os.name != "nt":
         raise RuntimeError("The scripting integration cases require Windows.")
+    contain_native_children()
     executable = args.executable.resolve(strict=True)
     module = executable.parent / "modules/mod-script-pipe.dll"
     require_test_display_guard(module)
@@ -641,33 +1061,41 @@ def run_requested_cases(args, root, case_api):
     # All cases share the native app's pipe/profile boundary; refuse concurrent
     # callers before touching either, including separate manual CTest runs.
     mutex = kernel.CreateMutexW(None, True, "Local\\AuTopsyBehaviorTests")
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
     if not mutex or ctypes.get_last_error() == 183:
+        if mutex:
+            kernel.CloseHandle(mutex)
         raise RuntimeError("Another AuTopsy behavior-test runner is active.")
-    pipe = r"\\.\pipe\AuTopsyTestToSrvPipe"
-    if kernel.WaitNamedPipeW(pipe, 1) or ctypes.get_last_error() not in (2,):
-        raise RuntimeError("An AuTopsy scripting session is already active.")
-    root.parent.mkdir(parents=True, exist_ok=True)
-    def execute(run_id, identities):
-        return execute_isolated_case(args, root, executable, module, display, kernel, pipe,
-            case_api, run_id, identities)
+    previous_display = os.environ.get("AUTOPSY_TEST_DISPLAY")
+    os.environ["AUTOPSY_TEST_DISPLAY"] = display["device"]
+    try:
+        pipe = r"\\.\pipe\AuTopsyTestToSrvPipe"
+        if kernel.WaitNamedPipeW(pipe, 1) or ctypes.get_last_error() not in (2,):
+            raise RuntimeError("An AuTopsy scripting session is already active.")
+        root.parent.mkdir(parents=True, exist_ok=True)
+        args.executable = executable
+        args.test_display = display
 
-    if args.reject_display or args.interrupt_cache:
-        case_api.retain_behavior_result(root.parent)
-        execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display, case_api))
-        if args.reject_display:
-            # The same negative journey also loses an already bound display;
-            # it must expire before the first Show rather than wait forever.
-            args.reject_display = "transition"
-            root = root.with_name(root.name + "_transition")
-            execute(uuid.uuid4().hex, native_test_inputs(args, executable, module, display, case_api))
-        return
-    def read_inputs():
-        return native_test_inputs(args, executable, module, display, case_api)
+        def read_inputs(current):
+            return native_test_inputs(current, executable, module, display, case_api)
 
-    if args.case in ("project-compatibility", "track-groups", "video-clip-mute", "collect-media", "video-fades", "video-embedding", "video-pictures"):
-        result = case_api.run_project_compatibility_checks(
-            root.parent, args.case, read_inputs, execute, root, display, args.ffmpeg)
-    else:
-        result = case_api.run_native_check(root.parent, args.case, read_inputs, execute)
-    print(json.dumps(result))
+        def execute(current, case_root, run_id, identities, shared):
+            return execute_case(current, case_root, executable, module, display, kernel, pipe,
+                                case_api, run_id, identities, shared)
+
+        if args.reject_display or args.interrupt_cache:
+            case_api.retain_behavior_result(root.parent)
+            execute(args, root, uuid.uuid4().hex, read_inputs(args), None)
+            if args.reject_display:
+                args.reject_display = "transition"
+                root = root.with_name(root.name + "_transition")
+                execute(args, root, uuid.uuid4().hex, read_inputs(args), None)
+            return 0
+        return run_case_batch(args, root.parent, case_api, read_inputs, execute)
+    finally:
+        kernel.CloseHandle(mutex)
+        if previous_display is None:
+            os.environ.pop("AUTOPSY_TEST_DISPLAY", None)
+        else:
+            os.environ["AUTOPSY_TEST_DISPLAY"] = previous_display
 

@@ -177,6 +177,12 @@ inherited scripting examples retain their upstream conventions.
 The shared test harness in `scripts/piped-work/run_fork_test_harness.py` owns
 child-process handling, display confinement, media fixtures and GUI gestures;
 `test_fork_features.py` dispatches the feature scenarios and owns result records.
+`run_native_test_sessions.py` owns the native process/profile and batches
+compatible editing scenarios in one app. Each scenario starts with a new empty
+project and keeps its own result. A failed reset retires the process; startup,
+capture, recovery, cold-download and multi-project cases stay isolated.
+`prepare_test_media.py` reuses bounded neutral-media/model caches while giving
+each scenario independent input copies. See the [test runner notes](scripts/piped-work/README.txt).
 `test_video_clip_edits.py` owns focused split-seam, Heal/Join/Separate,
 video track Mute/Solo, individual clip picture mute and multi-source
 rendering/relinking cases. `test_video_transport.py` owns preview-window helpers,
@@ -214,8 +220,9 @@ media and the owned test process.
 Preview tests generate their own neutral 16-second colour-pattern video and
 tone; personal video inputs are not accepted. `fork-fixtures` checks that media
 without opening AuTopsy.
-The native case catalogue belongs to `test_fork_features.py`; CMake reads it
-through `--list-native-cases`, so adding a scenario does not rebuild the editor.
+The native case catalogue belongs to `run_native_test_sessions.py`; CMake reads
+it through `test_fork_features.py --list-native-cases`, so adding a scenario does
+not rebuild the editor.
 `fork-video-vfr-export` checks real alternating frame durations with independent
 flash/click cues, split seams, crop and repeated decoded exports.
 `fork-video-encoder-boundaries` checks failed requests without overwriting an
