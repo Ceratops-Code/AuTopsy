@@ -87,8 +87,12 @@ def export_picture(client, root, ffmpeg, ffprobe, name, seconds):
 
 
 def check_video_generator(client, root, ffmpeg, ffprobe, case):
-    client.file("ImportVideo", create_colour_video(root, ffmpeg))
-    initial = client.data("GetVideoClips")["clips"][0]
+    source = create_colour_video(root, ffmpeg)
+    client.file("ImportVideo", source)
+    imported = [clip for clip in client.data("GetVideoClips")["clips"]
+                if clip["source"] and Path(clip["source"]).resolve() == source.resolve()]
+    assert len(imported) == 1, ("Expected one imported colour fixture", imported)
+    initial = imported[0]
     track, clip = initial["track"], initial["id"]
     audio = read_audio_project_state(client.data)
     if case in CAPTION_CASES:
