@@ -78,6 +78,7 @@ from test_preview_controls import (
 )
 from test_product_updates import check_product_updates
 from test_track_groups import check_track_groups
+from test_video_captions import CAPTION_CASES, caption_test_inputs
 from test_video_clip_edits import (
     check_audio_join_links,
     check_split_video_edges,
@@ -91,7 +92,6 @@ from test_video_clip_edits import (
     check_video_visibility,
 )
 from test_video_export_timing import check_video_export_timing
-from test_video_captions import CAPTION_CASES, caption_test_inputs
 from test_video_generators import GENERATOR_CASES, check_video_generator
 from test_video_recording import (
     VIDEO_RECORDING_CASES,
