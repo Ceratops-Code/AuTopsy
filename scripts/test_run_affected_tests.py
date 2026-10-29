@@ -19,8 +19,8 @@ from unittest.mock import Mock, patch
 import run_affected_tests as runner
 
 sys.path.insert(0, str(Path(__file__).parent / "piped-work"))
-import test_fork_features as native
 import run_native_test_sessions as sessions
+import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
@@ -495,7 +495,7 @@ class SelectionTests(unittest.TestCase):
                 with patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
                      patch.object(native, "worker", side_effect=AssertionError("opened a worker")), \
                      patch.object(native, "connected_test_displays", side_effect=AssertionError("opened the desktop")), \
-                     patch.object(native.subprocess, "Popen", side_effect=AssertionError("started a process")), \
+                     patch.object(sessions.subprocess, "Popen", side_effect=AssertionError("started a process")), \
                      redirect_stdout(output):
                     native.main()
                 names = output.getvalue().strip().split(";")
@@ -519,7 +519,7 @@ class SelectionTests(unittest.TestCase):
         for _ in range(2):
             with self.assertRaisesRegex(RuntimeError, "one registration owner.*fork-track-groups"):
                 runner.select_installer_tests([], catalogue)
-        with patch.object(native, "NATIVE_CASES", (*native.NATIVE_CASES, "track-groups")), \
+        with patch.object(sessions, "NATIVE_CASES", (*sessions.NATIVE_CASES, "track-groups")), \
              patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
              redirect_stdout(io.StringIO()) as output, patch.object(sys, "stderr", io.StringIO()) as error:
             with self.assertRaises(SystemExit):

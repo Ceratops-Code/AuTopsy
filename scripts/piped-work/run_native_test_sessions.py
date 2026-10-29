@@ -20,15 +20,26 @@ from datetime import datetime
 from pathlib import Path
 
 from run_audacity_consumer import (
-    executable_version, read_audio_project_state, read_compatibility_fixture_inputs,
-    run_process, select_audio_project_tracks, startup_window_messages,
+    executable_version,
+    read_audio_project_state,
+    read_compatibility_fixture_inputs,
+    run_process,
+    select_audio_project_tracks,
+    startup_window_messages,
 )
 from run_fork_test_harness import (
-    NativeCrashDebugger, assert_owned_test_display, connected_test_displays, require_test_display_guard,
-    run_behavior_worker, select_test_display,
-    write_neutral_preview_video, write_tone,
+    NativeCrashDebugger,
+    assert_owned_test_display,
+    connected_test_displays,
+    require_test_display_guard,
+    run_behavior_worker,
+    select_test_display,
+    write_neutral_preview_video,
+    write_tone,
 )
 from test_beginner_edits import BEGINNER_VIDEO_CASES
+from test_video_captions import CAPTION_CASES, caption_test_inputs
+from test_video_generators import GENERATOR_CASES
 from test_video_recording import VIDEO_RECORDING_CASES
 
 
@@ -70,7 +81,7 @@ def native_test_inputs(args, executable, module, display, case_api):
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
                      "video-clip-storage", "video-parent-links", "video-embedding", "video-embedding-controls", "video-crop", "video-crop-controls", "transport-toolbar", "preview-navigation"):
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
-    if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line", *case_api.RECORDING_CASES):
+    if args.case in ("clip-actions", "video-clip-export", "edit-cursor-line", *RECORDING_CASES):
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
     if args.case == "track-groups":
@@ -79,12 +90,12 @@ def native_test_inputs(args, executable, module, display, case_api):
         inputs["product_updates_sha256"] = sha(here / "test_product_updates.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
         inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
-    if args.case in case_api.GENERATOR_CASES:
+    if args.case in GENERATOR_CASES:
         inputs["video_generators_sha256"] = sha(here / "test_video_generators.py")
         inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
-    if args.case in case_api.CAPTION_CASES:
-        inputs.update(case_api.caption_test_inputs(args.case, executable))
-    if args.case in VIDEO_case_api.RECORDING_CASES:
+    if args.case in CAPTION_CASES:
+        inputs.update(caption_test_inputs(args.case, executable))
+    if args.case in VIDEO_RECORDING_CASES:
         inputs["video_recording_sha256"] = sha(here / "test_video_recording.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
         inputs["beginner_edits_sha256"] = sha(here / "test_beginner_edits.py")
@@ -112,7 +123,7 @@ def native_test_inputs(args, executable, module, display, case_api):
         if source not in ("fixture", "github"):
             raise RuntimeError("Choose fixture or github for the update test's request source.")
         inputs["execution_scope"]["updates_source"] = source
-    if args.case in case_api.RECORDING_CASES:
+    if args.case in RECORDING_CASES:
         from test_clip_actions import require_recording_device
         inputs["execution_scope"]["recording_device"] = require_recording_device()
     if args.case == "video-encoder-boundaries":
@@ -337,7 +348,7 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
         "Maximized=0\nIconized=0\n"
     )
     capture_configuration = ""
-    if args.case in case_api.RECORDING_CASES:
+    if args.case in RECORDING_CASES:
         from test_clip_actions import require_recording_device
         device = require_recording_device()
         capture_configuration = (f"[AudioIO]\nHost=MME\nRecordingDevice={device['name']}\n"
@@ -370,7 +381,7 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
         environment["AUTOPSY_TEST_STALE_MONITOR"] = "1"
     if args.reject_display == "transition":
         environment["AUTOPSY_TEST_STALE_MONITOR"] = "lost"
-    if args.case in case_api.RECORDING_CASES[1:]:
+    if args.case in RECORDING_CASES[1:]:
         environment["AUTOPSY_TEST_SAVE_ROOT"] = str(audio.resolve())
     if args.case in VIDEO_RECORDING_CASES:
         environment["AUTOPSY_TEST_VIDEO_RECORDING_INPUT"] = "generated"
@@ -492,7 +503,7 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
                     output, errors = operation.communicate(timeout=10)
                     (root / "_commands.log").write_text(output, encoding="utf-8")
                     (root / "_errors.log").write_text(errors, encoding="utf-8")
-            if args.case in case_api.RECORDING_CASES[1:]:
+            if args.case in RECORDING_CASES[1:]:
                 from test_clip_actions import run_recording_save_faults
 
                 def restart_recording_app(fault_enabled):
@@ -598,7 +609,7 @@ def execute_isolated_case(args, root, executable, module, display, kernel, pipe,
                 app.wait(timeout=20)
             if debugger:
                 debugger.close()
-            if args.case in case_api.RECORDING_CASES:
+            if args.case in RECORDING_CASES:
                 remove_private_capture_audio(root, process_stopped=app.poll() is not None)
             if profile_owner.is_file() and profile_owner.read_text() == str(
                 args.work_root.resolve()

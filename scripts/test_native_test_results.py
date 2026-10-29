@@ -1,26 +1,18 @@
 """Behavior cases for impact selection and immutable, bounded result ownership."""
 from __future__ import annotations
 
-import io
-import itertools
 import json
 import os
-import re
-import subprocess
 import sys
-import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock, patch
-
-import run_affected_tests as runner
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent / "piped-work"))
-import test_fork_features as native
 import run_native_test_sessions as sessions
+import test_fork_features as native
 
 
 class NativeReceiptTests(unittest.TestCase):
@@ -382,7 +374,7 @@ class NativeReceiptTests(unittest.TestCase):
         second = sessions.native_test_inputs(args, executable, module, {"device": "second"}, native)
         self.assertNotEqual(first, second)
         self.assertNotEqual(second, sessions.native_test_inputs(
-            args, executable, module, {"device": "another"}))
+            args, executable, module, {"device": "another"}, native))
 
 
 

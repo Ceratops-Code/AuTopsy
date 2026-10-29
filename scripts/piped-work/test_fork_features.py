@@ -13,32 +13,24 @@ before showing them; the runner refuses modules without that contract.
 import argparse
 import ctypes
 import hashlib
-import inspect
 import json
 import os
-import platform
 import re
 import shutil
-import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 import run_native_test_sessions as sessions
-
 from run_audacity_consumer import (
     check_portable_audacity_projects,
-    executable_version,
     read_audio_project_state,
     read_compatibility_fixture_inputs,
     run_process,
     select_audio_project_tracks,
-    startup_window_messages,
 )
 from run_fork_test_harness import (
-    NativeCrashDebugger,
     ScriptClient,
     assert_owned_test_display,
     capture_owned_project,
@@ -51,15 +43,10 @@ from run_fork_test_harness import (
     operate_owned_video_track,
     painted_video_tracks,
     ready_video_preview,
-    require_test_display_guard,
-    run_behavior_worker,
     save_reopen,
     select_test_display,
-    write_neutral_preview_video,
-    write_tone,
 )
 from test_beginner_edits import (
-    BEGINNER_VIDEO_CASES,
     check_clip_properties,
     check_clip_snapping,
     check_collect_media,
@@ -80,7 +67,6 @@ from test_preview_controls import (
 )
 from test_product_updates import check_product_updates
 from test_track_groups import check_track_groups
-from test_video_captions import CAPTION_CASES, caption_test_inputs
 from test_video_clip_edits import (
     check_audio_join_links,
     check_split_video_edges,
@@ -96,7 +82,6 @@ from test_video_clip_edits import (
 from test_video_export_timing import check_video_export_timing
 from test_video_generators import GENERATOR_CASES, check_video_generator
 from test_video_recording import (
-    VIDEO_RECORDING_CASES,
     check_video_recording,
     check_video_recording_controls,
     check_video_recording_failures,
@@ -1383,8 +1368,8 @@ def main():
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--work-root", type=Path)
     selection = parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument("--case", choices=(*NATIVE_CASES, *MODULE_REGISTERED_NATIVE_CASES,
-                                             *RECORDING_CASES, "display-policy", "worker-lifecycle"))
+    selection.add_argument("--case", choices=(*sessions.NATIVE_CASES, *sessions.MODULE_REGISTERED_NATIVE_CASES,
+                                             *sessions.RECORDING_CASES, "display-policy", "worker-lifecycle"))
     selection.add_argument("--list-native-cases", action="store_true",
                            help="Print video's centrally registered CTest cases without opening an application.")
     selection.add_argument("--list-recording-devices", action="store_true",
@@ -1407,15 +1392,15 @@ def main():
         print(json.dumps(read_recording_devices()))
         return
     if args.list_native_cases:
-        if set(NATIVE_CASES) & set(MODULE_REGISTERED_NATIVE_CASES) or len(NATIVE_CASES) != len(set(NATIVE_CASES)):
+        if set(sessions.NATIVE_CASES) & set(sessions.MODULE_REGISTERED_NATIVE_CASES) or len(sessions.NATIVE_CASES) != len(set(sessions.NATIVE_CASES)):
             parser.error("Native cases need different registration owners and unique central names.")
-        cases = (*NATIVE_CASES, *(RECORDING_CASES if os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE") else ()))
+        cases = (*sessions.NATIVE_CASES, *(sessions.RECORDING_CASES if os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE") else ()))
         print(";".join(cases))
         return
     if args.case == "preview-soak":
         from test_preview_controls import preview_soak_seconds
         preview_soak_seconds()
-    if args.case in RECORDING_CASES:
+    if args.case in sessions.RECORDING_CASES:
         from test_clip_actions import require_recording_device
         require_recording_device()
     if args.case == "display-policy":

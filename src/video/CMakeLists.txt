@@ -88,6 +88,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
          -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work" -p test_prepare_audacity_consumer.py)
       set_tests_properties(fork-audacity-consumer-cache PROPERTIES TIMEOUT 180
          ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_consumer-tests")
+      add_test(NAME native-test-results COMMAND uv run --project
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
+         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" -p test_native_test_results.py)
+      set_tests_properties(native-test-results PROPERTIES TIMEOUT 180
+         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_selection-tests")
       add_test(NAME affected-test-selection COMMAND uv run --project
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
          -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" -p test_run_affected_tests.py)
