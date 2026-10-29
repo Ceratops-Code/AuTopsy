@@ -578,7 +578,7 @@ class SelectionTests(unittest.TestCase):
                                "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
                                "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
                                "fork-video-recording-controls", "fork-video-embedding", "fork-video-embedding-controls",
-                               "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures", "fork-video-text", "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew"}
+                               "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures", "fork-video-text", "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew", "fork-video-caption-warp"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
@@ -758,7 +758,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.names(["src/video/TestVideoEdits.cpp"]), {"video-edits"})
         self.assertEqual(self.names(["src/video/EditCaptionCues.cpp"]), {"video-captions"})
         self.assertEqual(self.names(["src/video/TestVideoCaptions.cpp"]), {"video-captions"})
-        catalogue = [{"name": name} for name in (*runner.INSTALLER_BASELINE_TESTS, "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew")]
+        catalogue = [{"name": name} for name in (*runner.INSTALLER_BASELINE_TESTS, "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew", "fork-video-caption-warp")]
         self.assertEqual(set(runner.select_installer_tests(["src/video/GenerateVideoCaptions.cpp"], catalogue)), {row["name"] for row in catalogue})
 
     def test_shared_headers_and_test_runtime_expand_only_declared_scope(self) -> None:

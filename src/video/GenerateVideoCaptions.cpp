@@ -16,6 +16,8 @@
 #include "WaveClip.h"
 #include "Export.h"
 #include "ExportPluginRegistry.h"
+#include "MixerOptions.h"
+#include "Envelope.h"
 #include "Uuid.h"
 #include "CommandContext.h"
 #include "MenuRegistry.h"
@@ -220,6 +222,7 @@ void GenerateCaptions(AudacityProject &project, Track *track, const std::string 
 {
    ClipActions::MediaDialogCommandGuard commands;
    const auto source = GetSourceRange(project, track);
+   const MixerOptions::Warp audioClock{&project};
    if (TrackList::Get(project).Any<WaveTrack>().empty())
       throw std::runtime_error("The project needs an audio track containing the speech to caption.");
    CaptionWorkspace workspace;
@@ -264,7 +267,11 @@ void GenerateCaptions(AudacityProject &project, Track *track, const std::string 
          _("Generate Captions"), _("Recognizing speech locally. You can cancel without changing the project."),
          &ignored, VideoExport::VideoTool::Transcriber)) throw VideoPreview::PreviewPreparationCancelled{};
    const auto cues = ReadCaptionCues(ReadSubtitle(output+".srt"), FileFormat::Srt);
-   AddCaptionBatch(project, source.parent, PlaceCaptionCues(cues, source.from, source.from, source.to));
+   // Use the same project warp provider as ExportPluginHelpers::CreateMixer.
+   // Recognition reports elapsed WAV seconds; captions belong to project time.
+   AddCaptionBatch(project, source.parent, MapRecognitionCues(cues, source.from, source.to,
+      [&](double elapsed) { return audioClock.envelope
+         ? audioClock.envelope->SolveIntegralOfInverse(source.from, elapsed) : source.from+elapsed; }));
 }
 struct CaptionOptions { std::string model{"base"}, language{"auto"}; };
 bool ChooseCaptionOptions(AudacityProject &project, CaptionOptions &options)

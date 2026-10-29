@@ -1,6 +1,7 @@
 #include "EditCaptionCues.h"
 #include "JoinVideoClips.h"
 #include <catch2/catch.hpp>
+#include <limits>
 
 using namespace VideoCaptions;
 
@@ -86,5 +87,21 @@ TEST_CASE("Joined caption export retains word order through reverse and omits mu
       REQUIRE(VideoTimeline::ReverseVideoClip(timeline, timeline.clips.front().id));
       cues = ReadTimelineCaptions(timeline); REQUIRE(cues.size() == 2); REQUIRE(cues[0].text == "Two");
       timeline.clips.front().muted = true; REQUIRE(ReadTimelineCaptions(timeline).empty());
+   }
+}
+TEST_CASE("Recognition follows fast, slow and changing project clocks before clipping", "[video-captions]")
+{
+   const std::vector<Cue> cues{{1000, 2500, "First"}, {16000, 19000, "Late"}};
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto fast = MapRecognitionCues(cues, 12, 22, [](double t) { return 12+2*t; });
+      REQUIRE(fast.size() == 1); REQUIRE(fast[0].startMs == 14000); REQUIRE(fast[0].endMs == 17000);
+      auto slow = MapRecognitionCues(cues, 12, 22, [](double t) { return 12+.5*t; });
+      REQUIRE(slow.size() == 2); REQUIRE(slow[1].startMs == 20000); REQUIRE(slow[1].endMs == 21500);
+      auto changing = MapRecognitionCues(cues, 12, 22, [](double t) { return 12+t+.1*t*t; });
+      REQUIRE(changing.size() == 1); REQUIRE(changing[0].startMs == 13100); REQUIRE(changing[0].endMs == 15125);
+      REQUIRE_THROWS(MapRecognitionCues(cues, 12, 22, {}));
+      REQUIRE_THROWS(MapRecognitionCues(cues, 12, 22, [](double t) { return 22-t; }));
+      REQUIRE_THROWS(MapRecognitionCues(cues, 12, 22, [](double) { return std::numeric_limits<double>::quiet_NaN(); }));
+      REQUIRE(cues[0].startMs == 1000); REQUIRE(cues[1].endMs == 19000);
    }
 }

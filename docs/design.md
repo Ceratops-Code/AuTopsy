@@ -266,7 +266,9 @@ Audacity-linked plugin because no Audacity binary interface is needed.
 Desired state is a complete editable caption track, or no project effect. A
 download failure, malformed transcript, empty result, invalid font/layout or
 cancelled preparation cannot publish a partial row. SRT cue times are shifted
-by the frozen project start and bounded by the mixed window. A host-free plan
+through the mixer's public project-warp provider and native inverse-envelope
+mapping, then bounded by the frozen project window. This restores project time
+for constant or changing Time Tracks without copying the upstream warp engine. A host-free plan
 combines overlapping cues into adjacent clips containing all active text.
 Before publication, wxWidgets wraps each cue at Unicode word boundaries using
 the renderer's pixel font. A common font size is reduced only when needed to fit
@@ -298,8 +300,8 @@ log is retained. User-exported subtitle files remain user-owned. Existing export
 workspace ownership also covers interrupted subtitle writes beside destinations.
 
 Caption behavior belongs to the named `video-captions` portable tests and the
-native `fork-video-caption-interchange`, `fork-video-caption-english` and
-`fork-video-caption-hebrew` journeys; the affected-test map selects them through
+native `fork-video-caption-interchange`, `fork-video-caption-english`,
+`fork-video-caption-hebrew` and `fork-video-caption-warp` journeys; the affected-test map selects them through
 SDLC against the newest release at the chosen qualification level or higher.
 Multilingual text preservation is distinct from recognition accuracy. The native
 journey uses generated English speech and a short, CC BY 4.0 Hebrew astronomy

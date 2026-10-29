@@ -2,6 +2,7 @@
 #pragma once
 #include "EditVideoTimeline.h"
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,10 @@ std::string WriteCaptionCues(const std::vector<Cue> &cues, FileFormat format);
 std::vector<Cue> CombineCaptionOverlaps(const std::vector<Cue> &cues);
 std::vector<Cue> PlaceCaptionCues(const std::vector<Cue> &cues, double offset,
    double from, double to);
+// Convert elapsed recognition boundaries through the frozen native audio clock.
+// Reject an invalid mapping before returning any clips; retain project bounds.
+std::vector<Cue> MapRecognitionCues(const std::vector<Cue> &cues, double from, double to,
+   const std::function<double(double)> &projectTimeForElapsed);
 VideoTimeline::Timeline PlanCaptionClips(const std::vector<Cue> &cues,
    int width, int height, const VideoEditing::VideoTextAppearance &appearance = {});
 // Uses rendered content boundaries, preserving joins, cuts, speed and reverse.

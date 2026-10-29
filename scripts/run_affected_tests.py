@@ -148,15 +148,15 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
-    (("video-caption-interchange", "video-caption-english", "video-caption-hebrew"), (
+    (("video-caption-interchange", "video-caption-english", "video-caption-hebrew", "video-caption-warp"), (
         "src/video/EditCaptionCues.*", "src/video/GenerateVideoCaptions.*", "scripts/piped-work/test_video_captions.py")),
-    (("video-caption-english", "video-caption-hebrew"), ("src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake")),
+    (("video-caption-english", "video-caption-hebrew", "video-caption-warp"), ("src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake")),
     (("video-caption-hebrew",), ("tests/fixtures/captions/*",)),
     (("product-updates",), ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*",
         "resources/autopsy-release.json", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "src/menus/HelpMenus.cpp",
         "scripts/piped-work/test_product_updates.py")),
     (("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text",
-        "video-caption-interchange", "video-caption-english", "video-caption-hebrew"), (
+        "video-caption-interchange", "video-caption-english", "video-caption-hebrew", "video-caption-warp"), (
         "src/video/EditVideoContent.*", "src/video/EditVideoTimeline.*", "src/video/PrepareGeneratedVideo.*",
         "src/video/PrepareVideoEffects.*", "src/video/PlanVideoTransitions.*", "src/video/CreateVideoTrack.*",
         "src/video/EditVideoComposition.*", "src/video/ShowVideoTrack.*", "src/video/ShowVideoPreview.cpp",

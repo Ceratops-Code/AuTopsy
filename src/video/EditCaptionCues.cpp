@@ -1,5 +1,7 @@
 #include "EditCaptionCues.h"
 #include "RenderVideoComposition.h"
+#include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <locale>
 #include <map>
@@ -216,6 +218,24 @@ std::vector<Cue> PlaceCaptionCues(const std::vector<Cue> &cues, double offset, d
    for (auto cue : cues) {
       RequireCue(cue); cue.startMs = std::max(first, cue.startMs+delta); cue.endMs = std::min(last, cue.endMs+delta);
       if (cue.endMs > cue.startMs) { RequireCue(cue); result.push_back(std::move(cue)); }
+   }
+   return CombineCaptionOverlaps(result);
+}
+std::vector<Cue> MapRecognitionCues(const std::vector<Cue> &cues, double from, double to,
+   const std::function<double(double)> &projectTimeForElapsed)
+{
+   PlaceCaptionCues({}, 0, from, to); // Shared project range contract.
+   if (!projectTimeForElapsed) throw std::runtime_error("The caption audio clock is unavailable.");
+   std::vector<Cue> result;
+   for (const auto &cue : cues) {
+      RequireCue(cue);
+      const auto start = projectTimeForElapsed(cue.startMs/1000.0);
+      const auto end = projectTimeForElapsed(cue.endMs/1000.0);
+      if (!std::isfinite(start) || !std::isfinite(end) || end < start)
+         throw std::runtime_error("The caption audio clock returned an invalid time range.");
+      Cue placed{std::llround(std::clamp(start, from, to)*1000),
+         std::llround(std::clamp(end, from, to)*1000), cue.text};
+      if (placed.endMs > placed.startMs) { RequireCue(placed); result.push_back(std::move(placed)); }
    }
    return CombineCaptionOverlaps(result);
 }
