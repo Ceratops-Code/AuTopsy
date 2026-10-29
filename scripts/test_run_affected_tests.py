@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch
 import run_affected_tests as runner
 
 sys.path.insert(0, str(Path(__file__).parent / "piped-work"))
-import run_native_test_sessions as sessions
+import run_native_test_sessions as native_sessions
 import test_fork_features as native
 
 
@@ -119,10 +119,10 @@ class SelectionTests(unittest.TestCase):
                 sessions.WTSQuerySessionInformationW.side_effect = query
                 for _ in range(2):
                     if (level, session, state, flags, size) == (1, 7, 0, 1, 24):
-                        sessions.require_unlocked_desktop(kernel, sessions)
+                        native_sessions.require_unlocked_desktop(kernel, sessions)
                     else:
                         with self.assertRaisesRegex(RuntimeError, "unlock Windows|incomplete"):
-                            sessions.require_unlocked_desktop(kernel, sessions)
+                            native_sessions.require_unlocked_desktop(kernel, sessions)
                 self.assertEqual(sessions.WTSFreeMemory.call_count, 2)
 
     def test_gui_session_query_failure_stops_without_freeing_an_unowned_buffer(self) -> None:
@@ -135,7 +135,7 @@ class SelectionTests(unittest.TestCase):
             for _ in range(2):
                 with patch.object(ctypes, "get_last_error", return_value=5, create=True), \
                         self.assertRaisesRegex(RuntimeError, "Windows error 5"):
-                    sessions.require_unlocked_desktop(kernel, sessions)
+                    native_sessions.require_unlocked_desktop(kernel, sessions)
             sessions.WTSFreeMemory.assert_not_called()
             self.assertEqual(sessions.WTSQuerySessionInformationW.call_count, 2 if identify else 0)
 
@@ -495,7 +495,7 @@ class SelectionTests(unittest.TestCase):
                 with patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
                      patch.object(native, "worker", side_effect=AssertionError("opened a worker")), \
                      patch.object(native, "connected_test_displays", side_effect=AssertionError("opened the desktop")), \
-                     patch.object(sessions.subprocess, "Popen", side_effect=AssertionError("started a process")), \
+                     patch.object(native_sessions.subprocess, "Popen", side_effect=AssertionError("started a process")), \
                      redirect_stdout(output):
                     native.main()
                 names = output.getvalue().strip().split(";")
@@ -519,7 +519,7 @@ class SelectionTests(unittest.TestCase):
         for _ in range(2):
             with self.assertRaisesRegex(RuntimeError, "one registration owner.*fork-track-groups"):
                 runner.select_installer_tests([], catalogue)
-        with patch.object(sessions, "NATIVE_CASES", (*sessions.NATIVE_CASES, "track-groups")), \
+        with patch.object(native_sessions, "NATIVE_CASES", (*native_sessions.NATIVE_CASES, "track-groups")), \
              patch.object(sys, "argv", ["test_fork_features.py", "--list-native-cases"]), \
              redirect_stdout(io.StringIO()) as output, patch.object(sys, "stderr", io.StringIO()) as error:
             with self.assertRaises(SystemExit):
@@ -547,10 +547,10 @@ class SelectionTests(unittest.TestCase):
                     raise OSError("interrupted capture cleanup")
 
                 with patch.object(native.shutil, "rmtree", interrupted), self.assertRaises(OSError):
-                    sessions.remove_private_capture_audio(root, process_stopped=True)
+                    native_sessions.remove_private_capture_audio(root, process_stopped=True)
                 self.assertEqual(audio.exists(), boundary == "before")
                 for _ in range(2):
-                    sessions.remove_private_capture_audio(root, process_stopped=True)
+                    native_sessions.remove_private_capture_audio(root, process_stopped=True)
                 self.assertFalse(audio.exists())
                 self.assertEqual(keep.read_bytes(), b"generated fixture")
                 self.assertTrue((root / "_owner").is_file())
@@ -565,10 +565,10 @@ class SelectionTests(unittest.TestCase):
             marker = root / "_owner"
             marker.write_text("AuTopsy behavior tests 1")
             with self.assertRaisesRegex(RuntimeError, "live"):
-                sessions.remove_private_capture_audio(root, process_stopped=False)
+                native_sessions.remove_private_capture_audio(root, process_stopped=False)
             marker.write_text("another owner")
             with self.assertRaisesRegex(RuntimeError, "owner"):
-                sessions.remove_private_capture_audio(root, process_stopped=True)
+                native_sessions.remove_private_capture_audio(root, process_stopped=True)
             self.assertEqual(keep.read_bytes(), b"must remain")
 
     @staticmethod

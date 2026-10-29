@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +18,13 @@ import test_fork_features as native
 
 class NativeReceiptTests(unittest.TestCase):
     root: Path
-    setUp = ReceiptTests.setUp
+    def setUp(self) -> None:
+        parent = os.environ.get("AUTOPSY_TEST_TEMP_ROOT")
+        if not parent:
+            self.fail("The owning CTest entry must supply AUTOPSY_TEST_TEMP_ROOT.")
+        temporary = tempfile.TemporaryDirectory(prefix="_native-results-", dir=parent)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
 
     def inputs(self) -> dict[str, Any]:
         return {"executable_sha256": "app", "check_sha256": "check",
