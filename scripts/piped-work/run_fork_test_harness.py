@@ -604,7 +604,7 @@ class ScriptClient:
     def __init__(self):
         import pipeclient
 
-        self.client = pipeclient.PipeClient()
+        self.client = pipeclient.PipeClient(enc="utf-8")
 
     def send(self, command, success=True):
         assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]))
