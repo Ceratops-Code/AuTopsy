@@ -10,7 +10,9 @@ class AudacityProject;
 class wxWindow;
 namespace VideoExport {
 void CleanAbandonedWorkspace();
-enum class VideoTool { Encoder, Probe };
+enum class VideoTool { Encoder, Probe, Transcriber };
+// Uses the existing leased, destination-volume staging and atomic publication.
+void WriteMediaTextFile(const wxString &destination, const std::string &text, bool overwrite);
 std::optional<std::pair<int, int>> ReadVideoSourcePictureSize(const wxString &source, wxWindow *parent);
 // Shared bounded child-process adapter. The caller owns its output directory;
 // cancellation returns false and closing AuTopsy terminates the child process.

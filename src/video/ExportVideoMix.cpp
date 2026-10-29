@@ -2,6 +2,7 @@
 #include "RenderVideoComposition.h"
 #include "PlanVideoExport.h"
 #include "PrepareVideoEffects.h"
+#include "PrepareCaptionModels.h"
 #include "Export.h"
 #include "ExportPluginRegistry.h"
 #include "Prefs.h"
@@ -205,7 +206,7 @@ std::string DescribeProcessOutput(const std::string &text)
 
 // The process is placed in a kill-on-close job before it can run. Cancellation,
 // exceptions and termination of AuTopsy cannot leave an encoder running.
-class FfmpegProcess final {
+class BundledMediaProcess final {
    NativeHandle mJob, mProcess, mOutputRead, mErrorRead;
    NativeHandle mInputWrite;
    std::unique_ptr<void, CloseRecordingFile> mRecordingFile;
@@ -214,7 +215,7 @@ class FfmpegProcess final {
 public:
    std::wstring invocation;
    std::string output, errors;
-   explicit FfmpegProcess(const std::vector<std::wstring> &arguments, size_t outputLimit = 16384,
+   explicit BundledMediaProcess(const std::vector<std::wstring> &arguments, size_t outputLimit = 16384,
       const std::wstring &recordingPath = {})
       : mOutputLimit(outputLimit)
    {
@@ -291,7 +292,7 @@ public:
          throw WindowsError("Assigning the FFmpeg process job");
       }
    }
-   ~FfmpegProcess()
+   ~BundledMediaProcess()
    {
       mJob.reset();
       if (mProcess) WaitForSingleObject(mProcess.get(), INFINITE);
@@ -355,10 +356,9 @@ public:
       DWORD exit{};
       if (!GetExitCodeProcess(mProcess.get(), &exit)) throw WindowsError("Reading the FFmpeg exit status");
       if (exit != 0)
-         throw std::runtime_error("FFmpeg operation failed (exit " + std::to_string(exit) + ").\nCommand: " +
+         throw std::runtime_error("Media tool operation failed (exit " + std::to_string(exit) + ").\nCommand: " +
             Utf8(wxString(invocation)) + "\nstdout:\n" + (mRecordingFile ? "  <streamed to recording>" : DescribeProcessOutput(output)) +
-            "\nstderr:\n" + DescribeProcessOutput(errors) +
-            "\nIf this video codec cannot be stored in MP4, try MKV.");
+            "\nstderr:\n" + DescribeProcessOutput(errors));
       if (mOutputLimit != 16384 && mOutputOverflow)
          throw std::runtime_error("The decoded picture exceeds the media tool's bounded output buffer.");
       return true;
@@ -372,7 +372,7 @@ std::optional<std::pair<int, int>> ReadExportPictureSize(const fs::path &source,
    const auto probe = wxFileName(wxStandardPaths::Get().GetExecutablePath())
       .GetPathWithSep() + "ffprobe.exe";
    if (!wxFileExists(probe)) throw std::runtime_error("The bundled ffprobe.exe is missing. Reinstall AuTopsy.");
-   FfmpegProcess process{{probe.ToStdWstring(), L"-v", L"error", L"-select_streams", L"v:0",
+   BundledMediaProcess process{{probe.ToStdWstring(), L"-v", L"error", L"-select_streams", L"v:0",
       L"-show_entries", L"stream=width,height:stream_side_data=rotation:stream_tags=rotate",
       L"-of", L"json", source.wstring()}};
    if (!process.Wait(parent, _("Reading Video"), _("Reading original picture dimensions..."))) return {};
@@ -405,6 +405,7 @@ std::optional<std::pair<int, int>> ReadVideoSourcePictureSize(const wxString &so
 // Called when the project attachments start, and before every export.
 void CleanAbandonedWorkspace()
 {
+   VideoCaptions::CleanCaptionWorkspace();
    const auto issue = CleanWorkspace();
    if (!issue.empty()) wxLogWarning("%s", issue);
 }
@@ -412,16 +413,40 @@ void CleanAbandonedWorkspace()
 bool RunBundledVideoTool(const std::vector<wxString> &arguments, wxWindow *parent,
    const wxString &title, const wxString &status, std::string *output, VideoTool tool, size_t maximumOutputBytes)
 {
-   const auto name = tool == VideoTool::Probe ? "ffprobe.exe" : "ffmpeg.exe";
+   const auto name = tool == VideoTool::Transcriber ? "autopsy-whisper.exe" :
+      tool == VideoTool::Probe ? "ffprobe.exe" : "ffmpeg.exe";
    const auto executable = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPathWithSep() + name;
    if (!wxFileExists(executable))
       throw std::runtime_error(std::string{"The bundled "} + name + " is missing. Reinstall AuTopsy.");
    std::vector<std::wstring> native{executable.ToStdWstring()};
    for (const auto &argument : arguments) native.push_back(argument.ToStdWstring());
-   FfmpegProcess process{native, maximumOutputBytes};
+   BundledMediaProcess process{native, maximumOutputBytes};
    if (!process.Wait(parent, title, status)) return false;
    if (output) *output = std::move(process.output);
    return true;
+}
+
+void WriteMediaTextFile(const wxString &destination, const std::string &text, bool overwrite)
+{
+   const auto target = fs::absolute(fs::path(destination.ToStdWstring()));
+   if (fs::is_regular_file(target)) {
+      if (fs::file_size(target) == text.size()) {
+         std::ifstream input(target, std::ios::binary);
+         const std::string current{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+         if (!input.bad() && current == text) return;
+      }
+   }
+   if (target.filename().empty() || !fs::is_directory(target.parent_path()) ||
+       (fs::exists(target) && (!overwrite || !fs::is_regular_file(target))))
+      throw std::runtime_error("Choose a writable subtitle filename and confirm replacement of an existing file.");
+   ExportWorkspace workspace{target};
+   const auto pending = workspace.path/L"_captions.txt";
+   std::ofstream output(pending, std::ios::binary|std::ios::trunc);
+   output.write(text.data(), std::streamsize(text.size())); output.close();
+   if (!output) throw std::runtime_error("Cannot write the subtitle file. The previous export is unchanged.");
+   if (!MoveFileExW(pending.c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH|
+         (overwrite ? MOVEFILE_REPLACE_EXISTING : 0)))
+      throw WindowsError("Publishing the subtitle file");
 }
 
 void RecordBundledVideoInput(const std::vector<wxString> &arguments,
@@ -432,7 +457,7 @@ void RecordBundledVideoInput(const std::vector<wxString> &arguments,
    std::vector<std::wstring> native{executable.ToStdWstring()};
    for (const auto &argument : arguments) native.push_back(argument.ToStdWstring());
    try {
-      FfmpegProcess process{native, 16384, destination.ToStdWstring()};
+      BundledMediaProcess process{native, 16384, destination.ToStdWstring()};
       process.Wait(parent, _("Record Video"), _("Recording video. Stop and Add places it at the edit cursor."));
    }
    catch (const std::exception &error) {
@@ -615,7 +640,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTim
    if (extension == ".mp4") { arguments.push_back(L"-movflags"); arguments.push_back(L"+faststart"); }
    arguments.push_back(result.wstring());
    {
-      FfmpegProcess encoder{ arguments };
+      BundledMediaProcess encoder{ arguments };
       if (!encoder.Wait(parent)) return false;
    }
    if (!fs::is_regular_file(result) || fs::file_size(result) == 0)

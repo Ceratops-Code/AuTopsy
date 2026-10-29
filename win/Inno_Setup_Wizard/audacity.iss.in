@@ -89,6 +89,7 @@ Source: ".\FirstTimeModel.ini"; DestDir: "{app}"; DestName: "FirstTime.ini"; Per
 
 Source: "Additional\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Package\*.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "Package\whisper-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 ; Manual, which should be got from the manual wiki using ..\scripts\mw2html_audacity\wiki2htm.bat
 @MANUAL@

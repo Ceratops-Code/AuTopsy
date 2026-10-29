@@ -44,6 +44,8 @@ COMMON_INPUTS = (
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/RenderVideoComposition.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
+    CheckGroup("video-captions", ("src/video/EditCaptionCues.*", "src/video/TestVideoCaptions.cpp") + TIMELINE_INPUTS,
+        "video-captions-test"),
     CheckGroup("media-collection", ("src/media/CollectMediaFiles.*", "src/media/TestMediaCollection.cpp"),
         "media-collection-test"),
     CheckGroup("media-clip-selection", ("src/clip-groups/SelectMediaClips.h",
@@ -93,6 +95,7 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/video/GenerateVideoCaptions.*", "src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake",
     "src/update/CheckProductUpdates.*", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "resources/autopsy-release.json",
     "scripts/piped-work/test_product_updates.py",
     "src/recording/RecordVideoInput.*", "scripts/piped-work/test_video_recording.py",
@@ -145,6 +148,8 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("video-captions",), ("src/video/EditCaptionCues.*", "src/video/GenerateVideoCaptions.*",
+        "src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake", "tests/fixtures/captions/*")),
     (("product-updates",), ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*",
         "resources/autopsy-release.json", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "src/menus/HelpMenus.cpp",
         "scripts/piped-work/test_product_updates.py")),

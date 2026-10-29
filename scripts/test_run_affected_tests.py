@@ -736,10 +736,14 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.names(["src/video/EvaluateVideoTimeline.cpp"]), {"video-composition"})
         self.assertEqual(self.names(["src/video/PlanVideoEdits.h"]), {"video-edits", "video-composition"})
         self.assertEqual(self.names(["src/video/TestVideoEdits.cpp"]), {"video-edits"})
+        self.assertEqual(self.names(["src/video/EditCaptionCues.cpp"]), {"video-captions"})
+        self.assertEqual(self.names(["src/video/TestVideoCaptions.cpp"]), {"video-captions"})
+        catalogue = [{"name": name} for name in (*runner.INSTALLER_BASELINE_TESTS, "fork-video-captions")]
+        self.assertIn("fork-video-captions", runner.select_installer_tests(["src/video/GenerateVideoCaptions.cpp"], catalogue))
 
     def test_shared_headers_and_test_runtime_expand_only_declared_scope(self) -> None:
         self.assertEqual(self.names(["src/video/EditVideoTimeline.h"]),
-                         {"video-playback", "video-edits", "video-composition"})
+                         {"video-playback", "video-edits", "video-composition", "video-captions"})
         self.assertEqual(self.names(["scripts/uv.lock"]), {group.name for group in runner.GROUPS})
         self.assertEqual(self.names(["README.md", "docs/design.md"]), set())
 

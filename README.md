@@ -368,7 +368,35 @@ percentage of the caption box height. Line breaks are supported; text must fit
 the box. The rectangle applies to its whole track. Separate joined captions
 before editing their individual wording. Preview and export use the same
 rendered text; another computer needs the selected font installed.
-Subtitle-file interchange and per-word formatting remain backlog items.
+Per-word formatting remains a backlog item.
+
+**Tracks > Captions > Generate Captions...** turns speech in the selected clip
+or selected portion into editable caption clips on one track. It is also in the
+audio and video clip menus. Choose automatic language detection or a language
+code such as **he**, **en** or **ru**, and Fast, Balanced or Accurate quality.
+The multilingual model downloads once (74, 141 or 465 MiB). Recognition then runs
+locally using the bundled [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+worker; audio is never uploaded. Video uses the audible project mix over its
+current time range; an audio clip uses its own track, including edits and speed.
+Cancel leaves the project unchanged. A completed batch uses one Undo step;
+repeating the same batch does not duplicate it. Review the wording, especially
+names and Hebrew, using **Edit Text Overlay...**. Accuracy depends on the model
+and recording; it is not a substitute for proofreading.
+
+**Tracks > Captions > Import SRT / VTT...** accepts UTF-8 subtitles. The import
+offset adds seconds to the file's timecodes; 0 keeps project timecodes.
+Overlapping cues become consecutive clips containing both speakers' text.
+Subtitle presentation tags become plain text; each clip uses one editable style.
+Focus the caption track and choose **Export SRT / VTT...** to save its current
+timing, including moves, cuts, joins and speed changes. Muted clips are omitted.
+Subtitle export preserves wording and timing; its format does not carry the
+preview's fonts, colours or picture placement.
+
+Models belong to `_captions` beneath AuTopsy's settings directory (including
+Portable Settings). Keep them for offline use. Temporary recognition audio,
+transcripts and incomplete downloads are deleted after the job and on the next
+startup after interruption; an exclusive lease protects another running job.
+The bundled engine includes its MIT notice in `whisper-LICENSE.txt`.
 
 Each video track has visible **Mute** and **Solo** buttons, also available in
 its track menu. They affect picture in both preview and export; the separate

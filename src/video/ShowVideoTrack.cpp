@@ -1,6 +1,7 @@
 // Native TrackPanel adapters. The host owns scrolling, sizing, focus, track
 // order and Undo. There is no separate video panel or copied track list.
 #include "ShowVideoTrack.h"
+#include "GenerateVideoCaptions.h"
 #include <wx/log.h>
 #include "PrepareVideoPreview.h"
 #include "CreateVideoTrack.h"
@@ -681,6 +682,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(22, _("Freeze Frame...")); menu.Enable(22, clipId != 0);
          menu.Append(23, _("Repeat Picture...")); menu.Enable(23, clipId != 0);
           menu.Append(24, _("Add Text Overlay...")); menu.Enable(24, clipId != 0);
+           menu.Append(26, _("Generate Captions...")); menu.Enable(26, clipId != 0);
           const auto textClip = std::find_if(track->Timeline().clips.begin(), track->Timeline().clips.end(),
              [clipId](const auto &clip) { return clip.id == clipId; });
           if (textClip != track->Timeline().clips.end() && FindEditableVideoTextContent(*textClip))
@@ -732,6 +734,8 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
             ClipActions::ShowVideoClipExport(*project, *track, clipId, parent);
           else if (choice == 24 || choice == 25)
              VideoEditing::ShowVideoTextOverlayDialog(*project, *track, clipId, parent, clickTime, choice == 25);
+          else if (choice == 26)
+             VideoCaptions::ShowGenerateCaptions(*project, track.get());
           else if (choice >= 21 && choice <= 23) {
             const VideoEditing::VideoClipPictureAction actions[]{VideoEditing::VideoClipPictureAction::Reverse,
                VideoEditing::VideoClipPictureAction::Freeze, VideoEditing::VideoClipPictureAction::Repeat};
