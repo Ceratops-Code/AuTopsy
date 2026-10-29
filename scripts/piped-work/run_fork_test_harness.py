@@ -180,7 +180,8 @@ def run_behavior_worker(command, environment, app, root, *, timeout_seconds=240,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=environment,
+        encoding="utf-8", errors="backslashreplace",
+        env={**(os.environ if environment is None else environment), "PYTHONIOENCODING": "utf-8"},
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     deadline, stopped_at = time.monotonic() + timeout_seconds, None
@@ -540,8 +541,8 @@ def check_behavior_worker_lifecycle(work_root):
                 command = [
                     sys.executable,
                     "-c",
-                    "import sys,time;print('worker output',flush=True);"
-                    "print('worker errors',file=sys.stderr,flush=True);"
+                    "import sys,time;print('worker output \\u05e9\\u05dc\\u05d5\\u05dd',flush=True);"
+                    "print('worker errors \\u05e9\\u05dc\\u05d5\\u05dd',file=sys.stderr,flush=True);"
                     "from pathlib import Path;Path(sys.argv[1]).write_text('ready');time.sleep("
                     + ("0" if boundary == "normal" else "10")
                     + ")",
@@ -567,15 +568,15 @@ def check_behavior_worker_lifecycle(work_root):
                         else:
                             assert "status 197" in str(error), str(error)
                             assert (
-                                "worker output" in (root / "_commands.log").read_text()
+                                "worker output \u05e9\u05dc\u05d5\u05dd" in (root / "_commands.log").read_text(encoding="utf-8")
                             )
-                            assert "worker errors" in (root / "_errors.log").read_text()
+                            assert "worker errors \u05e9\u05dc\u05d5\u05dd" in (root / "_errors.log").read_text(encoding="utf-8")
                             assert "owned app failure evidence" in str(error)
                     else:
                         assert boundary == "normal" and result.returncode == 0
                         assert (
-                            "worker output" in result.stdout
-                            and "worker errors" in result.stderr
+                            "worker output \u05e9\u05dc\u05d5\u05dd" in result.stdout
+                            and "worker errors \u05e9\u05dc\u05d5\u05dd" in result.stderr
                         )
                     assert time.monotonic() - started < 5, (
                         "Child failure did not stop the worker promptly."
@@ -604,7 +605,7 @@ class ScriptClient:
     def __init__(self):
         import pipeclient
 
-        self.client = pipeclient.PipeClient()
+        self.client = pipeclient.PipeClient(enc="utf-8")
 
     def send(self, command, success=True):
         assert_owned_test_display(int(os.environ["AUTOPSY_OWNED_APP_PID"]))

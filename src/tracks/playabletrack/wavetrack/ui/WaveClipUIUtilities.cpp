@@ -97,6 +97,9 @@ WaveClipUIUtilities::GetWaveClipMenuItems()
       { L"AudioClipProperties", XO("Clip Properties...") },
       { L"CloseAudioClipGap", XO("Close Gap Before Clip") },
       { L"ExportAudioClip", XO("Export Clip...") },
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+      { L"GenerateCaptions", XO("Generate Captions...") },
+#endif
    };
    ;
 }

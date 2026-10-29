@@ -78,6 +78,7 @@ from test_preview_controls import (
 )
 from test_product_updates import check_product_updates
 from test_track_groups import check_track_groups
+from test_video_captions import CAPTION_CASES, caption_test_inputs
 from test_video_clip_edits import (
     check_audio_join_links,
     check_split_video_edges,
@@ -1249,6 +1250,8 @@ def native_test_inputs(args, executable, module, display):
     if args.case in GENERATOR_CASES:
         inputs["video_generators_sha256"] = sha(here / "test_video_generators.py")
         inputs["video_transport_sha256"] = sha(here / "test_video_transport.py")
+    if args.case in CAPTION_CASES:
+        inputs.update(caption_test_inputs(args.case, executable))
     if args.case in VIDEO_RECORDING_CASES:
         inputs["video_recording_sha256"] = sha(here / "test_video_recording.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")

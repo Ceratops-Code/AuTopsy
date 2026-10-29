@@ -100,9 +100,11 @@ class PreviewInput:
 def check_preview_quality(client, root, ffmpeg, ffprobe):
     """Every profile opens its actual decode dimensions; repeats reuse its cache."""
     source = root / "_quality-source.mp4"
+    # Keep playback live across the native message's 15-second bound. A four-
+    # second movie can end normally while a requested quality becomes ready.
     run_process([ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
-                 "color=c=blue:s=1920x1080:r=60:d=4", "-f", "lavfi", "-i",
-                 "sine=frequency=440:sample_rate=48000:duration=4", "-c:v", "libx264",
+                 "color=c=blue:s=1920x1080:r=60:d=24", "-f", "lavfi", "-i",
+                 "sine=frequency=440:sample_rate=48000:duration=24", "-c:v", "libx264",
                  "-preset", "ultrafast", "-crf", "30", "-c:a", "aac", source], timeout=60)
     client.file("ImportVideo", source)
     client.send("SelectTime: Start=1.25 End=1.25")

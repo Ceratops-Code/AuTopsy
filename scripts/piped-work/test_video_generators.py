@@ -14,9 +14,10 @@ from run_fork_test_harness import (
     ready_video_preview, run_process, save_reopen,
 )
 from test_clip_actions import with_native_dialog
+from test_video_captions import CAPTION_CASES, check_video_caption
 from test_video_transport import expect_preview_crop_pixels
 
-GENERATOR_CASES = ("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text")
+GENERATOR_CASES = ("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text", *CAPTION_CASES)
 
 
 def create_colour_video(root, ffmpeg):
@@ -86,10 +87,16 @@ def export_picture(client, root, ffmpeg, ffprobe, name, seconds):
 
 
 def check_video_generator(client, root, ffmpeg, ffprobe, case):
-    client.file("ImportVideo", create_colour_video(root, ffmpeg))
-    initial = client.data("GetVideoClips")["clips"][0]
+    source = create_colour_video(root, ffmpeg)
+    client.file("ImportVideo", source)
+    imported = [clip for clip in client.data("GetVideoClips")["clips"]
+                if clip["source"] and Path(clip["source"]).resolve() == source.resolve()]
+    assert len(imported) == 1, ("Expected one imported colour fixture", imported)
+    initial = imported[0]
     track, clip = initial["track"], initial["id"]
     audio = read_audio_project_state(client.data)
+    if case in CAPTION_CASES:
+        return check_video_caption(client, root, ffmpeg, ffprobe, case, initial, audio)
     if case == "video-pictures":
         return check_video_pictures(client, root, ffmpeg, ffprobe, initial, audio)
     if case == "video-text":

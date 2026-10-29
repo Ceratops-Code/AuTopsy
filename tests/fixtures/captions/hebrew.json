@@ -1,0 +1,15 @@
+{
+  "dataset": "google/fleurs",
+  "revision": "70bb2e84b976b7e960aa89f1c648e09c59f894dd",
+  "source": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/he_il/audio/test.tar.gz",
+  "member": "test/12611137999256020927.wav",
+  "id": "1874",
+  "transcription": "היו אנשים שחשבו שהוא צודק אך הרבה אנשים האמינו שההפך הוא הנכון; שמערכת השמש נעה מסביב לכדור הארץ, כולל השמש (ואף כוכבים אחרים).",
+  "license": "CC-BY-4.0",
+  "sha256": "8cd60fc00b1b692d39b137fdb5e4eed4c901e2b4c6c5b207e7bcf081a40b3931",
+  "bytes": 587578,
+  "samples": 146880,
+  "attribution": "FLEURS contributors, Google Research",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "changes": "None; original WAV recording."
+}

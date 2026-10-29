@@ -231,13 +231,14 @@ void RequireTextTrack(AudacityProject &project, const AuTopsyVideoTrack &track)
       throw std::runtime_error("The video track was removed.");
 }
 std::shared_ptr<const PreparedVideoComposition> PrepareAddedTextTrack(AudacityProject &project,
-   AuTopsyVideoTrack &parent, const VideoTimeline::Timeline &candidate)
+   AuTopsyVideoTrack *parent, const VideoTimeline::Timeline &candidate)
 {
    std::vector<VideoTimeline::VideoTimelineLayer> input;
    for (auto *track : VideoTimeline::ProjectVideoTracks(project)) {
       input.push_back({&track->Timeline(), {!track->VideoVisible(), track->VideoSolo()}});
-      if (track == &parent) input.push_back({&candidate, {false, false}});
+      if (track == parent) input.push_back({&candidate, {false, false}});
    }
+   if (!parent) input.push_back({&candidate, {false, false}});
    std::vector<const VideoTimeline::Timeline*> all;
    for (const auto &layer : input) all.push_back(layer.timeline);
    PrepareVideoTextLayouts(all, candidate.placement.id, &ProjectWindow::Get(project));
@@ -245,6 +246,24 @@ std::shared_ptr<const PreparedVideoComposition> PrepareAddedTextTrack(AudacityPr
       std::max(VideoTimeline::GetProjectVideoDuration(project), candidate.End()),
       {0, 0, 540, 30, false}, &ProjectWindow::Get(project));
 }
+}
+
+std::shared_ptr<AuTopsyVideoTrack> AddProjectVideoTextTrack(AudacityProject &project,
+   AuTopsyVideoTrack *parent, VideoTimeline::Timeline candidate, const wxString &name)
+{
+   ClipActions::MediaDialogCommandGuard commands;
+   if (ProjectAudioIO::Get(project).IsAudioActive())
+      throw std::runtime_error("Stop playback or recording before adding captions.");
+   if (parent) RequireTextTrack(project, *parent);
+   VideoTimeline::RequireWellFormedTimeline(candidate);
+   auto prepared = PrepareAddedTextTrack(project, parent, candidate);
+   auto track = VideoTimeline::CreateProjectVideoTrack(project, parent, false, false,
+      std::move(candidate), name);
+   try { ProjectHistory::Get(project).PushState(XO("Added text overlays"), XO("Text Overlays")); }
+   catch (...) { TrackList::Get(project).Remove(*track); throw; }
+   AdoptPreparedVideoEffects(project, std::move(prepared));
+   Viewport::Get(project).ShowTrack(*track); Viewport::Get(project).HandleResize();
+   return track;
 }
 
 std::shared_ptr<AuTopsyVideoTrack> AddProjectVideoTextOverlay(AudacityProject &project,
@@ -276,14 +295,7 @@ std::shared_ptr<AuTopsyVideoTrack> AddProjectVideoTextOverlay(AudacityProject &p
    candidate.sourceDuration = settings.seconds;
    // Fonts, layout, source reads and cancellable rendering all finish before
    // inserting the row. One history entry owns the complete visible effect.
-   auto prepared = PrepareAddedTextTrack(project, parent, candidate);
-   auto track = VideoTimeline::CreateProjectVideoTrack(project, &parent, false, false,
-      std::move(candidate), _("Text Overlays"));
-   try { ProjectHistory::Get(project).PushState(XO("Added text overlay"), XO("Text Overlay")); }
-   catch (...) { TrackList::Get(project).Remove(*track); throw; }
-   AdoptPreparedVideoEffects(project, std::move(prepared));
-   Viewport::Get(project).ShowTrack(*track); Viewport::Get(project).HandleResize();
-   return track;
+   return AddProjectVideoTextTrack(project, &parent, std::move(candidate), _("Text Overlays"));
 }
 
 bool ChangeProjectVideoTextOverlay(AudacityProject &project, AuTopsyVideoTrack &track,

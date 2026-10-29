@@ -23,6 +23,40 @@ import test_fork_features as native
 
 
 class SelectionTests(unittest.TestCase):
+    def test_caption_fixtures_keep_identity_when_tracks_move_and_reject_ambiguity(self) -> None:
+        from test_video_captions import require_audio_fixture_track
+
+        speech = {"kind": "wave", "name": "speech"}
+        noise = {"kind": "wave", "name": "unrelated"}
+        label = {"kind": "label", "name": "speech"}
+        for _ in range(2):
+            for tracks, expected in (([speech], 0), ([label, speech], 1), ([speech, noise], 0)):
+                client = SimpleNamespace(data=Mock(return_value=tracks))
+                self.assertEqual(require_audio_fixture_track(client, "speech"), expected)
+            for tracks in ([], [noise], [label], [speech, dict(speech)]):
+                with self.subTest(tracks=tracks), self.assertRaises(AssertionError):
+                    require_audio_fixture_track(SimpleNamespace(data=Mock(return_value=tracks)), "speech")
+
+    def test_scripting_transport_round_trips_english_and_hebrew(self) -> None:
+        import pipeclient
+        import run_fork_test_harness as harness
+        for text in ("Green dinosaur", "שלום עולם"):
+            response = text + "\nBatchCommand finished: OK\n\n"
+            def open_pipe(_path, mode, response=response, **options):
+                return io.TextIOWrapper(io.BytesIO(response.encode("utf-8") if mode == "r" else b""),
+                    encoding=options.get("encoding", "cp1252"), newline="")
+            with patch.multiple(pipeclient.PipeClient, _shared_state={}, reply_ready=type(pipeclient.PipeClient.reply_ready)(), reader_pipe_broken=type(pipeclient.PipeClient.reader_pipe_broken)()), \
+                    patch.object(pipeclient.PipeClient, "_write_thread_start"), \
+                    patch.object(pipeclient.PipeClient, "_read_thread_start"), patch("builtins.open", open_pipe), redirect_stdout(io.StringIO()):
+                client = harness.ScriptClient()
+                client.client._write_pipe_open()
+                client.client.write(text)
+                writer: Any = client.client._write_pipe
+                self.assertIn(text, writer.buffer.getvalue().decode("utf-8"))
+                client.client._reader()
+                self.assertIn(text, client.client.read())
+                writer.close()
+
     def test_embedded_picture_regions_allow_blended_edges_without_accepting_other_colours(self) -> None:
         from test_video_transport import preview_colours_match
 
@@ -558,7 +592,7 @@ class SelectionTests(unittest.TestCase):
                                "fork-video-cursor", "fork-video-transport", "fork-preview-soak", "fork-video-preview-close",
                                "fork-video-recording", "fork-video-recording-stop", "fork-video-recording-failures",
                                "fork-video-recording-controls", "fork-video-embedding", "fork-video-embedding-controls",
-                               "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures", "fork-video-text"}
+                               "fork-video-reverse", "fork-video-freeze", "fork-video-repeat", "fork-video-pictures", "fork-video-text", "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew", "fork-video-caption-warp"}
         self.assertEqual(set(runner.select_installer_tests(["src/video/ShowVideoPreview.cpp"], catalogue)), expected)
         self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
@@ -736,10 +770,14 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.names(["src/video/EvaluateVideoTimeline.cpp"]), {"video-composition"})
         self.assertEqual(self.names(["src/video/PlanVideoEdits.h"]), {"video-edits", "video-composition"})
         self.assertEqual(self.names(["src/video/TestVideoEdits.cpp"]), {"video-edits"})
+        self.assertEqual(self.names(["src/video/EditCaptionCues.cpp"]), {"video-captions"})
+        self.assertEqual(self.names(["src/video/TestVideoCaptions.cpp"]), {"video-captions"})
+        catalogue = [{"name": name} for name in (*runner.INSTALLER_BASELINE_TESTS, "fork-video-caption-interchange", "fork-video-caption-english", "fork-video-caption-hebrew", "fork-video-caption-warp")]
+        self.assertEqual(set(runner.select_installer_tests(["src/video/GenerateVideoCaptions.cpp"], catalogue)), {row["name"] for row in catalogue})
 
     def test_shared_headers_and_test_runtime_expand_only_declared_scope(self) -> None:
         self.assertEqual(self.names(["src/video/EditVideoTimeline.h"]),
-                         {"video-playback", "video-edits", "video-composition"})
+                         {"video-playback", "video-edits", "video-composition", "video-captions"})
         self.assertEqual(self.names(["scripts/uv.lock"]), {group.name for group in runner.GROUPS})
         self.assertEqual(self.names(["README.md", "docs/design.md"]), set())
 

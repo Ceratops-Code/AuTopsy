@@ -3,6 +3,8 @@ set(autopsy_video_playback_test_sources EditVideoContent.cpp RenderVideoComposit
 set(autopsy_video_edits_test_sources EditVideoContent.cpp RenderVideoComposition.cpp JoinVideoClips.cpp PlanVideoEdits.cpp TestVideoEdits.cpp)
 set(autopsy_video_composition_test_sources EditVideoContent.cpp JoinVideoClips.cpp PlanVideoEdits.cpp
    EvaluateVideoTimeline.cpp RenderVideoComposition.cpp PlanVideoExport.cpp PlanVideoTransitions.cpp TestVideoComposition.cpp)
+set(autopsy_video_captions_test_sources EditCaptionCues.cpp EditVideoContent.cpp
+   RenderVideoComposition.cpp JoinVideoClips.cpp TestVideoCaptions.cpp)
 
 #[[
 AuTopsy video tracks and synchronized preview. The SDK is an external libmpv development
@@ -61,6 +63,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    target_compile_features(video-composition-test PRIVATE cxx_std_17)
    target_link_libraries(video-composition-test PRIVATE Catch2::Catch2)
    catch_discover_tests(video-composition-test TEST_PREFIX "video-composition::" PROPERTIES TIMEOUT 30)
+   add_executable(video-captions-test ${autopsy_video_captions_test_sources} ../../tests/Catch2Main.cpp)
+   target_compile_features(video-captions-test PRIVATE cxx_std_17)
+   target_link_libraries(video-captions-test PRIVATE Catch2::Catch2)
+   catch_discover_tests(video-captions-test TEST_PREFIX "video-captions::" PROPERTIES TIMEOUT 30)
    add_executable(product-branding-core-test
       ../../libraries/lib-strings/tests/TestProductBranding.cpp ../../tests/Catch2Main.cpp)
    target_compile_features(product-branding-core-test PRIVATE cxx_std_17)
@@ -141,6 +147,8 @@ if(NOT EXISTS "${audacity_video_ffmpeg_runtime}/LICENSE.txt")
 endif()
 
 target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVideoClips.cpp JoinVideoClips.h
+   EditCaptionCues.cpp EditCaptionCues.h GenerateVideoCaptions.cpp GenerateVideoCaptions.h
+   PrepareCaptionModels.cpp PrepareCaptionModels.h
    ../media/CollectMediaFiles.cpp ../media/CollectMediaFiles.h
    ../media/CollectProjectMedia.cpp ../media/CollectProjectMedia.h
    ShowVideoPreview.cpp SyncVideoPlayback.h ChoosePreviewQuality.h PlayVideoMedia.cpp PlayVideoMedia.h
@@ -160,6 +168,7 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    ../clip-groups/EditClipMarkers.cpp ../clip-groups/EditClipMarkers.h)
 target_include_directories(Audacity PRIVATE "${audacity_video_mpv_include}")
 target_link_libraries(Audacity PRIVATE bcrypt winhttp)
+include("${CMAKE_CURRENT_SOURCE_DIR}/BuildSpeechEngine.cmake")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/autopsy-release.json" _autopsy_release_metadata)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
    "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/autopsy-release.json")
@@ -183,6 +192,7 @@ set_property(SOURCE
      "${CMAKE_CURRENT_SOURCE_DIR}/../clip-groups/EditClipPlacement.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveTrackAffordanceControls.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/playabletrack/wavetrack/ui/WaveClipUIUtilities.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/CommonTrackControls.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tracks/ui/BackgroundCell.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../ProjectFileManager.cpp"
@@ -216,6 +226,7 @@ add_unit_test(
 )
 add_unit_test(NAME video-edits SOURCES ${autopsy_video_edits_test_sources})
 add_unit_test(NAME video-composition SOURCES ${autopsy_video_composition_test_sources})
+add_unit_test(NAME video-captions SOURCES ${autopsy_video_captions_test_sources})
 add_unit_test(NAME media-clip-selection SOURCES ../clip-groups/TestMediaClipSelection.cpp)
 if(TARGET video-playback-test)
    add_test(NAME video-timeline COMMAND video-playback-test "[video-timeline]")

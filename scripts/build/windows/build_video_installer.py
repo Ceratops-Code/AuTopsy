@@ -103,7 +103,7 @@ def run_command(arguments: list[str], source: Path, diagnostics: Path, *,
     print("Running " + subprocess.list2cmdline(arguments), flush=True)
     try:
         ensure_process_tree_cleanup()
-        result = subprocess.run(arguments, cwd=source, text=True, capture_output=True, check=False,
+        result = subprocess.run(arguments, cwd=source, text=True, encoding="utf-8", errors="backslashreplace", capture_output=True, check=False,
                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except (OSError, RuntimeError) as error:
         record = {"operation": operation, "target": target or str(source),

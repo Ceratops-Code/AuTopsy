@@ -44,6 +44,8 @@ COMMON_INPUTS = (
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/RenderVideoComposition.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
+    CheckGroup("video-captions", ("src/video/EditCaptionCues.*", "src/video/TestVideoCaptions.cpp") + TIMELINE_INPUTS,
+        "video-captions-test"),
     CheckGroup("media-collection", ("src/media/CollectMediaFiles.*", "src/media/TestMediaCollection.cpp"),
         "media-collection-test"),
     CheckGroup("media-clip-selection", ("src/clip-groups/SelectMediaClips.h",
@@ -81,7 +83,7 @@ GROUPS = (
         "scripts/piped-work/test_fork_features.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
         "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py", "scripts/piped-work/test_preview_controls.py",
-        "scripts/piped-work/test_video_generators.py", "scripts/piped-work/test_product_updates.py")) ,
+        "scripts/piped-work/test_video_generators.py", "scripts/piped-work/test_video_captions.py", "scripts/piped-work/test_product_updates.py")) ,
     CheckGroup("fork-audacity-consumer-runtime", (
         "scripts/piped-work/run_audacity_consumer.py",
         "scripts/piped-work/test_run_audacity_consumer.py",
@@ -93,13 +95,14 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/video/GenerateVideoCaptions.*", "src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake",
     "src/update/CheckProductUpdates.*", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "resources/autopsy-release.json",
     "scripts/piped-work/test_product_updates.py",
     "src/recording/RecordVideoInput.*", "scripts/piped-work/test_video_recording.py",
     "libraries/lib-project-file-io/ProjectFileIO.cpp",
     "src/recording/CreateCursorCapture.*",
     "src/video/PrepareVideoEffects.*", "src/video/PrepareGeneratedVideo.*", "src/video/EditVideoFades.*",
-    "scripts/piped-work/test_video_generators.py",
+    "scripts/piped-work/test_video_generators.py", "scripts/piped-work/test_video_captions.py",
     "src/media/CollectProjectMedia.*",
     "scripts/piped-work/test_beginner_edits.py",
     "src/tracks/playabletrack/wavetrack/ui/WaveClipAdjustBorderHandle.cpp",
@@ -145,10 +148,15 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("video-caption-interchange", "video-caption-english", "video-caption-hebrew", "video-caption-warp"), (
+        "src/video/EditCaptionCues.*", "src/video/GenerateVideoCaptions.*", "scripts/piped-work/test_video_captions.py")),
+    (("video-caption-english", "video-caption-hebrew", "video-caption-warp"), ("src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake")),
+    (("video-caption-hebrew",), ("tests/fixtures/captions/*",)),
     (("product-updates",), ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*",
         "resources/autopsy-release.json", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "src/menus/HelpMenus.cpp",
         "scripts/piped-work/test_product_updates.py")),
-    (("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text"), (
+    (("video-reverse", "video-freeze", "video-repeat", "video-pictures", "video-text",
+        "video-caption-interchange", "video-caption-english", "video-caption-hebrew", "video-caption-warp"), (
         "src/video/EditVideoContent.*", "src/video/EditVideoTimeline.*", "src/video/PrepareGeneratedVideo.*",
         "src/video/PrepareVideoEffects.*", "src/video/PlanVideoTransitions.*", "src/video/CreateVideoTrack.*",
         "src/video/EditVideoComposition.*", "src/video/ShowVideoTrack.*", "src/video/ShowVideoPreview.cpp",

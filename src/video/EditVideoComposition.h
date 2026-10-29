@@ -5,7 +5,12 @@ class wxString;
 class AudacityProject;
 class AuTopsyVideoTrack;
 class wxWindow;
+namespace VideoTimeline { struct Timeline; }
 namespace VideoEditing {
+// Complete text-track publication shared by manual overlays and caption batches.
+// Preparation may fail or be cancelled; neither case inserts a partial row.
+std::shared_ptr<AuTopsyVideoTrack> AddProjectVideoTextTrack(AudacityProject &project,
+   AuTopsyVideoTrack *parent, VideoTimeline::Timeline candidate, const wxString &name);
 struct VideoTextOverlaySettings {
    std::string text;
    VideoTextAppearance appearance;

@@ -108,6 +108,7 @@ flowchart LR
   App -->|"read only"| Media["External files: user media"]
   App -->|"project save / reopen"| Project["External files: AUP3 projects"]
   App -->|"local decode and encode"| Tools["External components: mpv and FFmpeg"]
+  App -->|"explicit pinned model download, no audio upload"| Models["External system: Hugging Face model repository"]
   Maintainer["Person: maintainer"] -->|"review and publish"| GitHub["External system: GitHub"]
   GitHub -->|"installer download"| Editor
 ```
@@ -176,10 +177,13 @@ flowchart TB
   Eval -->|"same render plan"| Export["Component: export adapter"]
   Preview -->|"local frames"| Decoder["Component: mpv / FFmpeg"]
   Export -->|"local encoding"| Decoder
+  Captions["Component: caption adapter"] -->|"render edited speech window"| Host
+  Captions -->|"local WAV and timed subtitles"| Speech["External process: whisper.cpp worker"]
+  Captions -->|"owned cue plan"| Kernel
 ```
 
 **Component view â€” AuTopsy editing process.** Boxes are components within the
-desktop process, except FFmpeg child processes. Arrows show dependency/data flow.
+desktop process, except FFmpeg and whisper.cpp child processes. Arrows show dependency/data flow.
 The kernel has no native UI, XML, mpv or audio-object dependencies. Native track
 objects own the authoritative current states; the kernel does not own a second
 mutable copy of the project. Render plans and assembled snapshots are derived.
@@ -206,6 +210,11 @@ mutable copy of the project. Render plans and assembled snapshots are derived.
 | `src/video/PlanVideoTransitions.h/.cpp` | Host-free opacity layers and shared frame intervals | Fades and overlaps on the same project clock as ordinary cuts |
 | `src/video/PrepareVideoEffects.h/.cpp` | Derived transition spans and project-scoped leases | Cancellable FFmpeg work shared by preview and original-quality export |
 | `src/video/PrepareGeneratedVideo.h/.cpp` | Derived frame windows for reverse, freeze, images, title cards and transparent text | Bounded reverse buffers and leased cache entries, shared by preview/export/crop |
+| `src/video/EditCaptionCues.h/.cpp` | Host-free SRT/WebVTT cues, overlap handling and text-clip plans | Current project timing, millisecond interchange and complete drafts before publication |
+| `src/video/GenerateVideoCaptions.h/.cpp` | Caption dialogs, commands and native mixing adapter | Freeze source range, run local recognition, publish one editable text track |
+| `src/video/PrepareCaptionModels.h/.cpp` | Pinned model catalogue, HTTPS download and leased work directory | One current weight file per quality, bounded download, cancellation and orphan cleanup |
+| `src/video/BuildSpeechEngine.cmake` | Pinned MIT whisper.cpp CPU worker | Build independently of the Audacity module ABI and copy its executable and licence into the installer |
+| `src/video/TestVideoCaptions.cpp` | Dedicated subtitle/timing behavior cases | Multilingual interchange, overlap, rejected drafts and retained editing clocks |
 | `src/update/ChooseProductUpdate.h` and `CheckProductUpdates.h/.cpp` | Host-free release policy and Windows request/UI boundary | Numeric release ordering, explicit network opt-in, fixed repository links and no installer execution |
 | `src/video/EditVideoFades.h/.cpp` | Fade/crossfade dialog, commands and history | Candidate preparation before publishing an edit |
 | `src/video/ShowVideoCrop.h/.cpp` | Visual crop handles and numeric fields | A private draft until Apply, with no temporary screenshot file |
@@ -234,6 +243,72 @@ including pause, or its edit cursor while stopped. It calls the native viewport
 scroll operation without changing zoom, selection, content or history.
 Later responsibility-based extraction can move rendering into
 `RenderVideoFrames.h/.cpp` after separate path approval.
+
+### Local caption generation and subtitle interchange
+
+The current implementation adds an isolated, CPU-only whisper.cpp worker and
+uses native WAV mixing as the sole audio timing authority. A selected video
+requests its audible project mix; an audio clip requests its own selected track.
+The source range is captured before any progress dialog and is limited to six
+hours per job. The WAV is 16 kHz mono PCM, already reflecting trim, offsets,
+effects and speed. Exact silence is rejected before downloading a model.
+
+The explicit Generate command chooses multilingual tiny, base or small weights
+and a language or automatic detection. `BuildSpeechEngine.cmake` pins the worker
+source archive by commit and SHA-256; `PrepareCaptionModels.cpp` pins each model
+to an immutable model-repository revision, byte count and SHA-256. Windows HTTPS
+runs off the GUI thread with bounded request timeouts; audio never enters a
+network request. The existing bounded media-process adapter starts the worker
+without a shell, captures bounded error output and terminates its process job
+on cancellation or application exit. A new process is preferred over Intel's
+Audacity-linked plugin because no Audacity binary interface is needed.
+
+Desired state is a complete editable caption track, or no project effect. A
+download failure, malformed transcript, empty result, invalid font/layout or
+cancelled preparation cannot publish a partial row. SRT cue times are shifted
+through the mixer's public project-warp provider and native inverse-envelope
+mapping, then bounded by the frozen project window. This restores project time
+for constant or changing Time Tracks without copying the upstream warp engine. A host-free plan
+combines overlapping cues into adjacent clips containing all active text.
+Before publication, wxWidgets wraps each cue at Unicode word boundaries using
+the renderer's pixel font. A common font size is reduced only when needed to fit
+the full batch, retaining every word. Cancel is consumed at audio preparation
+and worker completion before a batch can be accepted.
+Only after preparation succeeds does the native adapter insert the track and
+record one Undo state; a history failure removes the inserted row. An identical
+existing visible batch with the same parent is a no-op. Text clips use the
+existing optional video XML, renderer, editing contracts and parent identities;
+no new project schema or separate caption database is introduced.
+
+SRT/WebVTT import accepts UTF-8, BOM and CRLF, retains wording and millisecond
+times, and omits presentation tags. Standalone WebVTT headers, cue identifiers,
+settings and NOTE/STYLE/REGION blocks are supported; streaming timestamp maps
+are rejected rather than silently shifting content. The GUI offers an import
+offset. Export reads retained text through splits, joins, trim, move, speed,
+reverse and freeze, omits muted clips, and writes one complete UTF-8 file using
+the existing destination-volume export workspace and atomic rename. Font,
+colour and picture placement remain project state rather than subtitle metadata.
+
+`_captions` under `FileNames::DataDir()` owns model storage, the `_lease` lock,
+exact `_QUALITY.part` downloads and the `_work` directory. Portable Settings
+therefore isolates desktop-test media and models from the user's settings.
+The exclusive OS lease prevents live cross-process cleanup. Startup and each
+fresh job remove abandoned `_work` and incomplete downloads; normal completion,
+cancellation and failure remove them immediately. Each quality retains only its
+current hash-named model. No transcript, audio, progress checkpoint or diagnostic
+log is retained. User-exported subtitle files remain user-owned. Existing export
+workspace ownership also covers interrupted subtitle writes beside destinations.
+
+Caption behavior belongs to the named `video-captions` portable tests and the
+native `fork-video-caption-interchange`, `fork-video-caption-english`,
+`fork-video-caption-hebrew` and `fork-video-caption-warp` journeys; the affected-test map selects them through
+SDLC against the newest release at the chosen qualification level or higher.
+Multilingual text preservation is distinct from recognition accuracy. The native
+journey uses generated English speech and a short, CC BY 4.0 Hebrew astronomy
+recording from Google FLEURS; its source, unchanged-audio notice and attribution
+live in `tests/fixtures/captions/hebrew.json`. Native receipts include the worker
+and fixture identities. Broader Hebrew accuracy and long-job throughput remain
+quality work rather than guarantees inferred from these short samples.
 
 ### Beginner editing, picture transitions and portable projects
 
@@ -1139,6 +1214,8 @@ flowchart LR
   App -->|"read / save"| Projects["Store: user projects"]
   App -->|"read"| Originals["Store: original media"]
   App -->|"leased derived files"| Cache["Store: local preview cache"]
+  App -->|"local recognition input and output"| Worker["Application: bundled whisper.cpp CPU worker"]
+  Worker -->|"read immutable weights"| Weights["Store: local caption model cache"]
 ```
 
 **Container/store view â€” build to local editing.** Boxes name applications and
