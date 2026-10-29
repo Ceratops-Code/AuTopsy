@@ -97,6 +97,8 @@ def check_caption_interchange(client, root, ffmpeg, ffprobe, original, audio):
     assert client.data("GetVideoClips") == result, "Wrapped captions duplicated on repeat."
     client.send("Undo"); assert client.data("GetVideoClips") == snapshot
     client.send("Redo"); assert client.data("GetVideoClips") == result
+    save_reopen(client, root / "_wrapped-captions.aup3")
+    assert client.data("GetVideoClips") == result
 
 
 def check_caption_english(client, root, ffmpeg, ffprobe, original, audio):
