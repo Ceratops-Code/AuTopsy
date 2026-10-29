@@ -31,9 +31,9 @@ class SelectionTests(unittest.TestCase):
             def open_pipe(_path, mode, response=response, **options):
                 return io.TextIOWrapper(io.BytesIO(response.encode("utf-8") if mode == "r" else b""),
                     encoding=options.get("encoding", "cp1252"), newline="")
-            with patch.object(pipeclient.PipeClient, "_shared_state", {}), \
+            with patch.multiple(pipeclient.PipeClient, _shared_state={}, reply_ready=type(pipeclient.PipeClient.reply_ready)(), reader_pipe_broken=type(pipeclient.PipeClient.reader_pipe_broken)()), \
                     patch.object(pipeclient.PipeClient, "_write_thread_start"), \
-                    patch.object(pipeclient.PipeClient, "_read_thread_start"), patch("builtins.open", open_pipe):
+                    patch.object(pipeclient.PipeClient, "_read_thread_start"), patch("builtins.open", open_pipe), redirect_stdout(io.StringIO()):
                 client = harness.ScriptClient()
                 client.client._write_pipe_open()
                 client.client.write(text)
