@@ -11,11 +11,12 @@
 #include "Viewport.h"
 #include "commands/AudacityCommand.h"
 #include "commands/LoadCommands.h"
+#include <wx/button.h>
 #include <wx/dialog.h>
 #include <wx/msgdlg.h>
 #include <wx/sizer.h>
-#include <wx/spinctrl.h>
 #include <wx/stattext.h>
+#include <wx/textctrl.h>
 
 namespace VideoEditing {
 bool ChangeVideoPictureSource(AudacityProject &project, AuTopsyVideoTrack &track,
@@ -52,14 +53,31 @@ void ShowVideoPictureSlip(AudacityProject &project, AuTopsyVideoTrack &track,
    explanation->Wrap(430); layout->Add(explanation, 0, wxALL, 10);
    layout->Add(new wxStaticText(&dialog, wxID_ANY,
       wxString::Format(_("Picture source start (seconds): 0 to %.6f"), maximum)), 0, wxLEFT | wxRIGHT, 10);
-   auto *start = new wxSpinCtrlDouble(&dialog, wxID_ANY, {}, wxDefaultPosition, wxSize(220, -1),
-      wxSP_ARROW_KEYS, 0, maximum, found->sourceStart, 1 / fps);
-   start->SetDigits(6); start->SetName(_("Picture source start"));
-   layout->Add(start, 0, wxALL, 10);
+   // Read the actual text on OK. A spin control can retain its previous cached
+   // number until focus leaves the editor, including keyboard/default-button OK.
+   auto *start = new wxTextCtrl(&dialog, wxID_ANY, wxString::Format("%.6f", found->sourceStart),
+      wxDefaultPosition, wxSize(220, -1));
+   start->SetName(_("Picture source start"));
+   auto *fields = new wxBoxSizer(wxHORIZONTAL); fields->Add(start, 1, wxRIGHT, 8);
+   for (const int direction : {-1, 1}) {
+      auto *step = new wxButton(&dialog, wxID_ANY, direction < 0 ? _("-1 frame") : _("+1 frame"));
+      fields->Add(step, 0, wxRIGHT, 4);
+      step->Bind(wxEVT_BUTTON, [=](wxCommandEvent &) {
+         double value{};
+         if (start->GetValue().ToDouble(&value) && std::isfinite(value))
+            start->SetValue(wxString::Format("%.6f", std::clamp(std::round(value * fps + direction) / fps, 0.0, maximum)));
+      });
+   }
+   layout->Add(fields, 0, wxEXPAND | wxALL, 10);
    layout->Add(dialog.CreateButtonSizer(wxOK | wxCANCEL), 0, wxALL | wxALIGN_RIGHT, 10);
    dialog.SetSizerAndFit(layout);
    dialog.Bind(wxEVT_BUTTON, [&](wxCommandEvent &) {
-      try { ChangeVideoPictureSource(project, track, clipId, start->GetValue()); dialog.EndModal(wxID_OK); }
+      try {
+         double value{};
+         if (!start->GetValue().ToDouble(&value) || !std::isfinite(value))
+            throw std::runtime_error("Enter a finite picture source start in seconds.");
+         ChangeVideoPictureSource(project, track, clipId, value); dialog.EndModal(wxID_OK);
+      }
       catch (const VideoPreview::PreviewPreparationCancelled &) {}
       catch (const std::exception &error) { wxMessageBox(wxString::FromUTF8(error.what()), _("Slip Picture"), wxOK | wxICON_ERROR, &dialog); }
    }, wxID_OK);
