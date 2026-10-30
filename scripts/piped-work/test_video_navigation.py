@@ -71,11 +71,18 @@ def check_picture_slip(client, root, ffmpeg):
         client.send(f'SetVideoClipBounds: Track={track} Id="{identifier}" Start=1.25 End=2.75')
         linked = client.data("GetLinkedMediaClips")
         # AAC's padded imported endpoint may differ from picture by a fraction
-        # of a frame. A linked trim changes both edges by the same delta.
+        # of a frame. Picture cuts snap to whole source frames; sound must move
+        # by those actual edge deltas, rather than the unsnapped request.
         assert len(linked) == len(linked_before)
+        picture_before = next(part for part in linked_before if part["kind"] == "video")
+        picture_after = next(part for part in linked if part["kind"] == "video")
+        assert abs(picture_after["start"] - 1.25) <= 1 / 60 + .0001
+        assert abs(picture_after["end"] - 2.75) <= 1 / 60 + .0001
+        left = picture_after["start"] - picture_before["start"]
+        right = picture_after["end"] - picture_before["end"]
         for part, original in zip(linked, linked_before, strict=True):
-            assert abs(part["start"] - original["start"] - .25) < .0001, part
-            assert abs(part["end"] - original["end"] + .25) < .0001, part
+            assert abs(part["start"] - original["start"] - left) < .0001, part
+            assert abs(part["end"] - original["end"] - right) < .0001, part
         client.send("Undo")
         assert model(client) == slipped
     client.send("FitV")
