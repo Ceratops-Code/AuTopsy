@@ -42,7 +42,14 @@ def check_picture_slip(client, root, ffmpeg):
     client.send("Redo")
     assert model(client) == slipped
     for source in (-1, 3):
-        client.send(f'SetVideoClipSlip: Track={track} Id="{identifier}" SourceStart={source}', success=False)
+        def operation():
+            return client.send(f'SetVideoClipSlip: Track={track} Id="{identifier}" SourceStart={source}', success=False)
+        if source < 0:
+            # Native parameter-range errors use an OK dialog before Apply.
+            with_native_dialog(operation, "SetVideoClipSlip",
+                lambda windows, dialog: windows.click(windows.button(dialog, "OK")))
+        else:
+            operation()
         assert model(client) == slipped
     client.send(f'SetVideoClipSlip: Track={track} Id="999999" SourceStart=1', success=False)
     assert model(client) == slipped
@@ -56,10 +63,16 @@ def check_picture_slip(client, root, ffmpeg):
     encoded_sound = array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(exported),
         "-map", "0:a:0", "-ar", "8000", "-ac", "1", "-f", "f32le", "pipe:1"], timeout=30))
     assert len(encoded_sound) >= 15900 and max(abs(x) for x in encoded_sound) > .01
+    linked_before = client.data("GetLinkedMediaClips")
     for repeat in range(2):
         client.send(f'SetVideoClipBounds: Track={track} Id="{identifier}" Start=1.25 End=2.75')
         linked = client.data("GetLinkedMediaClips")
-        assert all(abs(part["start"] - 1.25) < .0001 and abs(part["end"] - 2.75) < .0001 for part in linked), linked
+        # AAC's padded imported endpoint may differ from picture by a fraction
+        # of a frame. A linked trim changes both edges by the same delta.
+        assert len(linked) == len(linked_before)
+        for part, original in zip(linked, linked_before, strict=True):
+            assert abs(part["start"] - original["start"] - .25) < .0001, part
+            assert abs(part["end"] - original["end"] + .25) < .0001, part
         client.send("Undo")
         assert model(client) == slipped
     client.send("FitV")
