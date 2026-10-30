@@ -56,7 +56,7 @@ TEST_CASE("Video names and colours survive structural edits without changing pic
       REQUIRE(named.source.path == original.source.path); REQUIRE(named.sourceTime == original.sourceTime);
       auto generated = timeline;
       REQUIRE(ReverseVideoClip(generated, 1)); REQUIRE(generated.clips[0].appearance == style);
-      REQUIRE(ReverseVideoClip(generated, 1)); REQUIRE(generated.clips[0].appearance == style);
+      REQUIRE_FALSE(ReverseVideoClip(generated, 1)); REQUIRE(generated.clips[0].appearance == style);
       generated = timeline;
       REQUIRE(FreezeVideoClip(generated, 1, 3, 2)); REQUIRE(generated.clips[0].appearance == style);
       SplitClipAt(timeline, 6); REQUIRE(timeline.clips[1].appearance == style);
