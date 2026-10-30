@@ -69,7 +69,8 @@ GROUPS = (
         "src/video/SyncVideoPlayback.h", "src/video/ChoosePreviewQuality.h", "src/video/ChooseVideoExport.h",
         "src/video/RelinkVideoMedia.h", "src/video/TestVideoPlayback.cpp"), "video-playback-test"),
     CheckGroup("video-edits", TIMELINE_INPUTS + (
-        "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp", "src/clip-groups/PlanClipPlacement.h"), "video-edits-test"),
+         "src/video/PlanVideoEdits.*", "src/video/TestVideoEdits.cpp", "src/clip-groups/PlanClipPlacement.h",
+         "src/clip-groups/NavigateClipFlags.h"), "video-edits-test"),
     CheckGroup("video-composition", TIMELINE_INPUTS + (
         "src/video/PlanVideoEdits.*", "src/video/EvaluateVideoTimeline.*", "src/video/RenderVideoComposition.*",
         "src/video/PlanVideoExport.*", "src/video/PlanVideoTransitions.*",
@@ -101,6 +102,7 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/video/SlipVideoPicture.*", "scripts/piped-work/test_video_navigation.py",
     "src/video/EditVideoClipAppearance.*", "src/clip-groups/ApplyRippleDeletion.*",
     "src/clip-groups/PlanRippleDeletion.h", "scripts/piped-work/test_clip_workflows.py",
     "src/video/GenerateVideoCaptions.*", "src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake",
@@ -156,6 +158,11 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("video-slip",), ("src/video/SlipVideoPicture.*", "src/video/EditVideoTimeline.h",
+        "src/video/EditVideoContent.*", "src/video/CreateVideoTrack.*", "src/video/JoinVideoClips.*",
+        "src/video/ShowVideoTrack.*", "src/clip-groups/LinkMediaClips.*", "scripts/piped-work/test_video_navigation.py")),
+    (("clip-flag-navigation",), ("src/clip-groups/NavigateClipFlags.h", "src/clip-groups/EditClipMarkers.*",
+        "src/video/CreateVideoTrack.*", "src/video/SlipVideoPicture.*", "scripts/piped-work/test_video_navigation.py")),
     (("video-range-export",), ("src/video/EditVideoTimeline.h", "src/video/ShowVideoPreview.cpp",
         "src/video/ChooseVideoExport.*", "src/video/ExportVideoMix.*", "src/video/PrepareVideoEffects.*",
         "scripts/piped-work/test_clip_workflows.py")),

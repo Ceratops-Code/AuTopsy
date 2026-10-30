@@ -82,6 +82,7 @@ from test_video_clip_edits import (
 )
 from test_video_export_timing import check_video_export_timing
 from test_video_generators import GENERATOR_CASES, check_video_generator
+from test_video_navigation import NAVIGATION_CASES, check_video_navigation
 from test_video_recording import (
     check_video_recording,
     check_video_recording_controls,
@@ -1045,6 +1046,8 @@ def worker(args, root):
         check_video_fades(client, root, args.ffmpeg, args.ffprobe)
     elif args.case in CLIP_WORKFLOW_CASES:
         check_clip_workflow(client, root, args.ffmpeg, args.ffprobe, args.case)
+    elif args.case in NAVIGATION_CASES:
+        check_video_navigation(client, root, args.ffmpeg, args.case)
     elif args.case in GENERATOR_CASES:
         check_video_generator(client, root, args.ffmpeg, args.ffprobe, args.case)
     elif args.case in ("video-embedding", "video-embedding-controls"):
@@ -1257,7 +1260,7 @@ def native_work_scope(inputs):
     check_fields = {"check_sha256", "harness_sha256", "pipe_client_sha256", "shared_process_checks",
         "clip_edits_sha256", "clip_actions_sha256", "track_groups_sha256", "clip_selection_sha256",
         "beginner_edits_sha256", "export_timing_sha256", "preview_controls_sha256", "video_transport_sha256",
-        "video_recording_sha256", "session_checks_sha256", "fixture_checks_sha256"}
+        "video_recording_sha256", "video_navigation_sha256", "session_checks_sha256", "fixture_checks_sha256"}
     return {name: value for name, value in inputs.items() if name not in check_fields}
 
 

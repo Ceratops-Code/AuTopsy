@@ -110,6 +110,9 @@ struct Clip {
    // cannot be replaced with a single linear ramp without changing the picture.
    std::vector<VideoEditing::VideoOpacityRamp> opacityModifiers;
    VideoEditing::VideoClipAppearance appearance;
+   // Soundtrack source coordinates remain independent of picture-only slips.
+   // Added to sourceStart only by the media-link adapter, never the renderer.
+   double audioSourceOffset{};
    double End() const { return start + duration; }
    double ContentTimeAtProjectTime(double at) const { return sourceStart + (at - start) * playbackRate; }
    double ProjectTimeAtContentTime(double at) const { return start + (at - sourceStart) / playbackRate; }

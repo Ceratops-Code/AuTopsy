@@ -116,6 +116,8 @@ void Check(const Clip &clip, const MediaSource &fallback, size_t depth, size_t &
        clip.ContentTimeAtProjectTime(clip.End()) > duration + 1e-7)
       throw std::runtime_error("A video content window is outside its retained footage.");
    ClipMarkers::RequireUsableMarkers(clip.markers);
+   if (!std::isfinite(clip.audioSourceOffset) || std::abs(clip.audioSourceOffset) > 100000000)
+      throw std::runtime_error("A video clip has an invalid soundtrack source offset.");
    VideoEditing::RequireUsableVideoClipAppearance(clip.appearance);
    VideoEditing::RequireUsableVideoOpacityRamps(clip.opacityModifiers);
    const auto &opacity = clip.opacity;
@@ -211,14 +213,15 @@ void Windows(const Clip &clip, double origin, double scale, double from, double 
    // Join's ordinary parent alias must not duplicate a child's soundtrack.
    if (!clip.linkGroup.empty() && !childGroups.count(clip.linkGroup)) {
       const auto duration = clip.content ? clip.content->duration : clip.media.duration;
-      out.push_back({clip.linkGroup, left, right, begin - clip.sourceStart * scale / clip.playbackRate,
-         begin + (duration - clip.sourceStart) * scale / clip.playbackRate,
+      const auto soundStart = clip.sourceStart + clip.audioSourceOffset;
+      out.push_back({clip.linkGroup, left, right, begin - soundStart * scale / clip.playbackRate,
+         begin + (duration - soundStart) * scale / clip.playbackRate,
          clip.playbackRate / scale, clip.content != nullptr});
    }
    if (clip.content) {
       const auto offset = clip.content->operation == VideoClipContent::Operation::Sequence ? 0.0 : clip.content->audioContentOffset;
       for (const auto &part : clip.content->parts)
-         Windows(part, begin - (clip.sourceStart + offset) * scale / clip.playbackRate,
+         Windows(part, begin - (clip.sourceStart + clip.audioSourceOffset + offset) * scale / clip.playbackRate,
             scale / clip.playbackRate, left, right, out);
    }
 }
@@ -344,6 +347,7 @@ void RemapVideoContentLinks(Clip &clip, const std::vector<std::pair<std::string,
 }
 bool SameVideoContent(const Clip &a, const Clip &b)
 {
+   if (a.audioSourceOffset != b.audioSourceOffset) return false;
    if (!(a.appearance == b.appearance)) return false;
    if (a.muted != b.muted || a.timingLocked != b.timingLocked || !(a.opacity == b.opacity) || a.opacityModifiers != b.opacityModifiers || !(a.crop == b.crop) || a.playbackRate != b.playbackRate || (!a.content && !b.content && !SameSource(a.media, b.media)) ||
        a.markers.size() != b.markers.size()) return false;
@@ -408,7 +412,7 @@ std::shared_ptr<VideoClipContent> RetainGeneratorInput(const Clip &clip, const M
 {
    auto result = std::make_shared<VideoClipContent>();
    result->frameRate = std::min(1000.0, VideoContentFrameRate(clip, fallback) * clip.playbackRate);
-   auto part = clip; part.start = 0; part.sourceStart = 0; part.muted = false; part.crop = {};
+   auto part = clip; part.start = 0; part.sourceStart = 0; part.audioSourceOffset = 0; part.muted = false; part.crop = {};
    part.duration = VideoContentDuration(clip, fallback) / clip.playbackRate;
    part.media = Source(clip, fallback);
    result->duration = part.duration;
@@ -457,7 +461,7 @@ bool ReverseVideoClip(Timeline &timeline, uint64_t id)
       result.opacityModifiers.push_back({content->duration - ramp.end / rate,
          content->duration - ramp.start / rate, !ramp.increasing});
    result.sourceStart = std::max(0.0, content->duration - original.sourceStart / original.playbackRate - original.duration);
-   content->audioContentOffset = original.sourceStart / original.playbackRate - result.sourceStart;
+   content->audioContentOffset = (original.sourceStart + original.audioSourceOffset) / original.playbackRate - result.sourceStart;
    for (auto marker : original.markers) {
       marker.position = content->duration - marker.position / original.playbackRate;
       result.markers.push_back(std::move(marker));
@@ -486,7 +490,7 @@ bool FreezeVideoClip(Timeline &timeline, uint64_t id, double at, double seconds)
    auto content = RetainGeneratorInput(original, SourceFor(timeline, original));
    content->heldTime = original.sourceStart / original.playbackRate + at - original.start;
    content->operation = VideoClipContent::Operation::Freeze;
-   content->audioContentOffset = original.sourceStart / original.playbackRate;
+   content->audioContentOffset = (original.sourceStart + original.audioSourceOffset) / original.playbackRate;
    content->duration = seconds;
    auto result = GeneratorClip(original, content); result.duration = seconds;
    for (auto marker : original.markers) {

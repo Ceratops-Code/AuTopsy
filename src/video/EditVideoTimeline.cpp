@@ -682,6 +682,7 @@ public:
                out.StartObject(); out.Key("id"); out.Uint64(clip.id); out.Key("track"); out.Int(index);
                out.Key("start"); out.Double(clip.start); out.Key("end"); out.Double(clip.End());
                out.Key("sourceStart"); out.Double(clip.sourceStart); out.Key("duration"); out.Double(clip.duration);
+               out.Key("audioSourceOffset"); out.Double(clip.audioSourceOffset);
                 out.Key("playbackRate"); out.Double(clip.playbackRate);
                out.Key("muted"); out.Bool(clip.muted);
                out.Key("name"); out.String(clip.appearance.name.c_str());

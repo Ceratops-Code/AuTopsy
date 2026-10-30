@@ -8,6 +8,7 @@
 #include "EditVideoFades.h"
 #include "EditVideoComposition.h"
 #include "EditVideoClipAppearance.h"
+#include "SlipVideoPicture.h"
 #include "PlanVideoEdits.h"
 #include "../clip-groups/LinkMediaClips.h"
 #include "../clip-groups/GroupAudioClips.h"
@@ -701,6 +702,7 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          menu.Append(17, _("Crossfade from Video Below...")); menu.Enable(17, clipId != 0);
          menu.Append(14, _("Clip Properties...")); menu.Enable(14, clipId != 0);
           menu.Append(27, _("Clip Name and Colour...")); menu.Enable(27, clipId != 0);
+         menu.Append(29, _("Slip Picture...")); menu.Enable(29, clipId != 0);
          menu.Append(15, _("Close Gap Before Clip")); menu.Enable(15, clipId != 0);
          menu.AppendCheckItem(13, _("Mute Clip")); menu.Enable(13, clipId != 0);
          for (const auto &clip : track->Timeline().clips)
@@ -753,6 +755,8 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          }
          else if (choice == 27)
             VideoEditing::ShowVideoClipAppearanceDialog(*project, *track, clipId, parent);
+         else if (choice == 29)
+            VideoEditing::ShowVideoPictureSlip(*project, *track, clipId, parent);
          else if (choice == 19)
             VideoEditing::ShowVideoTrackEmbeddingDialog(*project, *track, parent);
          else if (choice == 20) {
