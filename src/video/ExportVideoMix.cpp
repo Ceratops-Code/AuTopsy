@@ -11,6 +11,7 @@
 #include "Prefs.h"
 #include "MemoryX.h"
 #include <sndfile.h>
+#include <wx/file.h>
 #include <wx/filefn.h>
 #include <wx/filename.h>
 #include <wx/log.h>
@@ -195,8 +196,12 @@ bool WriteProjectAudioRange(AudacityProject &project, const fs::path &path,
    SF_INFO info{}; info.channels = 2; info.samplerate = int(Rate);
    // RF64 keeps the same WAV/float decoder contract without a 4 GB size limit.
    info.format = SF_FORMAT_RF64 | SF_FORMAT_FLOAT;
+   wxFile output{wxString(path.wstring()), wxFile::write};
+   if (!output.IsOpened()) throw std::runtime_error("Could not create the video export's audio intermediate.");
    SFFile file;
-   file.reset(SFCall<SNDFILE*>(sf_wchar_open, path.c_str(), SFM_WRITE, &info));
+   // Match the native audio export's Unicode-safe descriptor boundary. The
+   // wxFile keeps ownership until libsndfile has finished its container header.
+   file.reset(SFCall<SNDFILE*>(sf_open_fd, output.fd(), SFM_WRITE, &info, SF_FALSE));
    if (!file) throw std::runtime_error("Could not create the video export's audio intermediate.");
    std::vector<float> block(BlockFrames * 2);
    MixProgress progress{parent};
@@ -215,6 +220,7 @@ bool WriteProjectAudioRange(AudacityProject &project, const fs::path &path,
       if (progress.IsCancelled()) return false;
    }
    if (file.close() != 0) throw std::runtime_error("Could not finish the video export's audio intermediate.");
+   if (!output.Close()) throw std::runtime_error("Could not close the video export's audio intermediate.");
    return true;
 }
 
