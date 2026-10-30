@@ -17,11 +17,11 @@
 namespace ClipGroups {
 bool DeleteMediaRangeClosingGap(AudacityProject &project, bool wholeProject)
 {
-   MediaDialogCommandGuard commands;
+   ClipActions::MediaDialogCommandGuard commands;
    if (ProjectAudioIO::Get(project).IsAudioActive()) throw std::runtime_error("Stop playback before ripple deletion.");
    auto &tracks = TrackList::Get(project);
    auto &selection = ViewInfo::Get(project).selectedRegion;
-   const auto previous = selection;
+   const SelectedRegion previous = selection;
    try {
       VideoTimeline::SelectVideoClipForDeletion(project);
       if (selection.isPoint()) { selection = previous; return false; }

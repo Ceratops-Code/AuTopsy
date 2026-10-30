@@ -51,7 +51,7 @@ void ShowVideoClipAppearanceDialog(AudacityProject &project, AuTopsyVideoTrack &
    auto *automatic = new wxCheckBox{&dialog, wxID_ANY, _("Use default clip colour")};
    automatic->SetValue(current.rgb < 0); layout->Add(automatic, 0, wxALL, 10);
    const auto rgb = current.rgb < 0 ? 0x39698f : current.rgb;
-   auto *colour = new wxColourPickerCtrl{&dialog, wxID_ANY, wxColour{(rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255}};
+   auto *colour = new wxColourPickerCtrl{&dialog, wxID_ANY, wxColour((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255)};
    colour->SetName(_("Video clip colour")); colour->Enable(!automatic->GetValue());
    automatic->Bind(wxEVT_CHECKBOX, [=](wxCommandEvent &) { colour->Enable(!automatic->GetValue()); });
    layout->Add(colour, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);

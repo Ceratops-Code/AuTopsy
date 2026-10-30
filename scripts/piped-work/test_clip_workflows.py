@@ -197,7 +197,9 @@ def check_linked_ripple_delete(client, root):
             locked = model(client)
             select(client, anchor, 1, 2)
             selection = client.data("GetInfo: Type=Selection Format=JSON")
-            client.send("RippleDelete", success=False)
+            # Native menu dispatch reports that it handled the command; its
+            # error response and unchanged model prove the edit was rejected.
+            assert "Unlock" in client.send("RippleDelete")
             assert_unchanged(client, locked, selection)
             client.send("Undo")
             assert model(client) == original
