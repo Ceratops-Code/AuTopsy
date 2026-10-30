@@ -10,7 +10,7 @@ import threading
 import time
 from typing import TypedDict
 
-from run_audacity_consumer import read_audio_project_state, select_audio_project_tracks
+from run_audacity_consumer import read_audio_project_state, select_audio_project_tracks, startup_window_messages
 from run_fork_test_harness import save_reopen
 
 
@@ -116,9 +116,15 @@ def click_group_toggle(client, group_id, cancel=False):
     # owner supplies physical input, idle/focus checks and display containment.
     assert int(native["videoTrackPanelHandle"]) == int(info["panelHandle"])
     native["videoTrackRows"] = [{"index": group["index"], "toggle": group["toggle"]}]
-    operate_owned_video_track(client, native["viewStart"], track=group["index"],
-                              gesture="drag" if cancel else "click", area="toggle",
-                              cancel=cancel, painted=native)
+    try:
+        operate_owned_video_track(client, native["viewStart"], track=group["index"],
+                                  gesture="drag" if cancel else "click", area="toggle",
+                                  cancel=cancel, painted=native)
+    except RuntimeError as error:
+        # Capture the actual owned modal/overlay before the private process is
+        # retired. Pane enabledness alone cannot identify its blocking cause.
+        raise RuntimeError(str(error) + "\n" + startup_window_messages(
+            int(os.environ["AUTOPSY_OWNED_APP_PID"]), visible_only=True)) from error
 
 
 def check_track_groups(client, root):
