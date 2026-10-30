@@ -107,6 +107,18 @@ To locate a moved source, stop playback, choose **File > Relink Video Media...**
 select the old source and then its replacement file. Clip positions, trims and
 links are retained; the already imported audio remains independently editable.
 
+Right-click a trimmed video clip and choose **Slip Picture...** to change its
+picture source start without moving the clip, changing its length or shifting
+linked audio. Trim first to leave spare footage. Values snap to source frames;
+picture flags and fades follow the footage. Unlink the soundtrack before using
+Separate on a slipped joined clip whose picture and audio cuts differ.
+
+Use **Edit > Clips > Clip Flags...** to search audio and video flags, jump
+without changing zoom, rename or delete them. The list normally shows visible
+flags; its checkbox also exposes flags retained outside trimmed clip edges.
+**Previous Clip Flag** and **Next Clip Flag** are also available there and can
+be assigned keyboard shortcuts in Preferences. Edits use ordinary Undo/Redo.
+
 Projects use standard **`.aup3`** storage. The focused compatibility test opens
 AuTopsy projects in unmodified Audacity **3.7.8** and **3.7.9**, checking audio
 clips and labels while video tracks are skipped, then stock save/copy/reopen.

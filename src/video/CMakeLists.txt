@@ -171,6 +171,7 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    PrepareGeneratedVideo.cpp PrepareGeneratedVideo.h
    ../update/CheckProductUpdates.cpp ../update/CheckProductUpdates.h ../update/ChooseProductUpdate.h
    EditVideoFades.cpp EditVideoFades.h
+   SlipVideoPicture.cpp SlipVideoPicture.h ../clip-groups/NavigateClipFlags.h
    PlanVideoExport.cpp PlanVideoExport.h
    PlanVideoTransitions.cpp PlanVideoTransitions.h
    PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h

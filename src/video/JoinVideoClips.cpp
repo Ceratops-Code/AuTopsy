@@ -129,6 +129,11 @@ static bool SeparateOneLevel(Timeline &timeline, double from, double to)
          changed.clips.push_back(clip); continue;
       }
       any = true;
+      // A slipped compound can have different picture and soundtrack cuts.
+      // Flattening it would assign sound to the wrong source piece. Retain the
+      // compound until the user explicitly unlinks the independently edited sound.
+      if (std::abs(clip.audioSourceOffset) > 1e-7 && !VideoContentLinkGroups(clip).empty())
+         throw std::runtime_error("Unlink the soundtrack before separating a slipped joined clip; its picture and audio cuts differ.");
       const auto windowEnd = clip.ContentTimeAtProjectTime(clip.End());
       if (std::none_of(clip.content->parts.begin(), clip.content->parts.end(), [&](const auto &part) {
             return part.start < windowEnd - 1e-7 && part.End() > clip.sourceStart + 1e-7; }))

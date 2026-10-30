@@ -252,6 +252,7 @@ bool AuTopsyVideoTrack::HandleXMLTag(const std::string_view &tag, const Attribut
       if (!ReadOptionalAttribute(attributes, "videoTimingLocked", locked) || locked < 0 || locked > 1) return false;
       clip.timingLocked = locked != 0;
       if (!ReadAttribute(attributes, "id", clip.id) || !ReadAttribute(attributes, "start", clip.start) ||
+           !ReadOptionalAttribute(attributes, "videoAudioSourceOffset", clip.audioSourceOffset) ||
           !ReadAttribute(attributes, "sourceStart", clip.sourceStart) ||
           !ReadAttribute(attributes, "videoDuration", clip.duration) ||
           !ReadOptionalAttribute(attributes, "videoRate", clip.playbackRate) ||
@@ -391,6 +392,7 @@ void AuTopsyVideoTrack::WriteXML(XMLWriter &writer) const
       if (!clip.markers.empty()) writer.WriteAttr("clipMarkers", wxString::FromUTF8(ClipMarkers::EncodeMarkers(clip.markers)));
       writer.WriteAttr("start", clip.start, 17); writer.WriteAttr("sourceStart", clip.sourceStart, 17);
       writer.WriteAttr("videoDuration", clip.duration, 17);
+       if (clip.audioSourceOffset != 0) writer.WriteAttr("videoAudioSourceOffset", clip.audioSourceOffset, 17);
       if (clip.muted) writer.WriteAttr("videoMuted", 1);
       if (clip.timingLocked) writer.WriteAttr("videoTimingLocked", 1);
       if (!clip.opacityModifiers.empty()) writer.WriteAttr("videoOpacityRamps",

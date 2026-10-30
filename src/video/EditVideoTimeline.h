@@ -327,6 +327,30 @@ inline bool TrimVideoClip(Timeline &timeline, uint64_t id, double start, double 
    return true;
 }
 
+// Select a different retained picture window without changing project placement
+// or the linked soundtrack's source map. Repeated absolute requests are no-ops.
+inline bool SlipVideoClip(Timeline &timeline, uint64_t id, double sourceStart)
+{
+   RequireWellFormedTimeline(timeline);
+   auto candidate = timeline;
+   const auto found = std::find_if(candidate.clips.begin(), candidate.clips.end(),
+      [id](const auto &clip) { return clip.id == id; });
+   if (found == candidate.clips.end()) throw std::runtime_error("The video clip was removed.");
+   if (found->timingLocked) throw std::runtime_error("Unlock the clip before slipping its picture.");
+   if (!std::isfinite(sourceStart)) throw std::runtime_error("Choose a finite picture source start.");
+   const auto source = SourceFor(candidate, *found);
+   const auto rate = VideoContentFrameRate(*found, source);
+   sourceStart = std::round(sourceStart * rate) / rate;
+   const auto maximum = VideoContentDuration(*found, source) - found->duration * found->playbackRate;
+   if (sourceStart < 0 || sourceStart > maximum + 1e-7)
+      throw std::runtime_error("The slipped picture must fit inside the retained footage. Trim the clip to leave source handles first.");
+   sourceStart = std::clamp(sourceStart, 0.0, std::max(0.0, maximum));
+   if (std::abs(sourceStart - found->sourceStart) < 1e-9) return false;
+   found->audioSourceOffset += found->sourceStart - sourceStart;
+   found->sourceStart = sourceStart;
+   RequireWellFormedTimeline(candidate); timeline = std::move(candidate); return true;
+}
+
 // Pointer gestures stop at available source frames and neighboring clips.
 // The strict range-edit command still reports invalid requested bounds.
 inline bool DragVideoClipEdge(Timeline &timeline, uint64_t id, bool left, double at)

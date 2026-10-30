@@ -3,10 +3,107 @@
 #include "JoinVideoClips.h"
 #include "RelinkVideoMedia.h"
 #include "../clip-groups/PlanClipPlacement.h"
+#include "../clip-groups/NavigateClipFlags.h"
 #include <catch2/catch.hpp>
 #include <limits>
 
 using namespace VideoEditing;
+
+TEST_CASE("Picture slips retain placement and the independent soundtrack clock", "[video-edits][picture-slip]")
+{
+   using namespace VideoTimeline;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      auto timeline = CreateVideoTimeline("source.mp4", 12, 30);
+      timeline.clips[0].media = SourceFor(timeline, timeline.clips[0]);
+      timeline.clips[0].linkGroup = std::string(32, 'd');
+      timeline.clips[0].markers.push_back({std::string(32, 'a'), 4, "Picture flag"});
+      REQUIRE(TrimVideoClip(timeline, 1, 2, 8));
+      const auto before = timeline;
+      const auto oldWindows = VideoContentLinkWindows(timeline.clips[0]);
+      REQUIRE(SlipVideoClip(timeline, 1, 3));
+      const auto &clip = timeline.clips[0];
+      REQUIRE(clip.start == 2); REQUIRE(clip.duration == 6); REQUIRE(clip.sourceStart == 3);
+      REQUIRE(clip.audioSourceOffset == -1); REQUIRE(clip.playbackRate == 1);
+      REQUIRE(clip.ProjectTimeAtContentTime(clip.markers[0].position) == 3);
+      REQUIRE(SampleVideoContent(clip, SourceFor(timeline, clip), clip.ContentTimeAtProjectTime(2.5)).sourceTime == 3.5);
+      const auto afterWindows = VideoContentLinkWindows(clip);
+      REQUIRE(afterWindows.size() == oldWindows.size());
+      REQUIRE(afterWindows[0].start == oldWindows[0].start); REQUIRE(afterWindows[0].end == oldWindows[0].end);
+      REQUIRE(afterWindows[0].sourceOrigin == oldWindows[0].sourceOrigin);
+      REQUIRE(afterWindows[0].sourceEnd == oldWindows[0].sourceEnd);
+      REQUIRE_FALSE(SlipVideoClip(timeline, 1, 3));
+      const auto accepted = timeline;
+      for (const auto at : {-1.0, 7.0, std::numeric_limits<double>::quiet_NaN()}) {
+         REQUIRE_THROWS(SlipVideoClip(timeline, 1, at));
+         REQUIRE(timeline.clips[0].sourceStart == accepted.clips[0].sourceStart);
+         REQUIRE(timeline.clips[0].audioSourceOffset == accepted.clips[0].audioSourceOffset);
+      }
+      REQUIRE_THROWS(SlipVideoClip(timeline, 999, 2));
+      timeline.clips[0].timingLocked = true;
+      REQUIRE_THROWS(SlipVideoClip(timeline, 1, 2)); timeline.clips[0].timingLocked = false;
+      REQUIRE(TrimVideoClip(timeline, 1, 3, 7));
+      const auto trimmed = VideoContentLinkWindows(timeline.clips[0]);
+      REQUIRE(trimmed[0].sourceOrigin == oldWindows[0].sourceOrigin);
+      REQUIRE(TrimVideoClip(timeline, 1, 2, 8));
+      REQUIRE(SlipVideoClip(timeline, 1, 2));
+      REQUIRE(timeline.clips[0].audioSourceOffset == 0);
+      REQUIRE(timeline.clips[0].sourceStart == before.clips[0].sourceStart);
+      REQUIRE(SlipVideoClip(timeline, 1, 2.021));
+      REQUIRE(timeline.clips[0].sourceStart == Approx(2 + 1.0 / 30));
+      REQUIRE(VideoContentLinkWindows(timeline.clips[0])[0].sourceOrigin == Approx(oldWindows[0].sourceOrigin));
+   }
+}
+TEST_CASE("Slipped compound and generated pictures keep forward sound through later edits", "[video-edits][picture-slip]")
+{
+   using namespace VideoTimeline;
+   auto joined = CreateVideoTimeline("source.mp4", 12, 30);
+   SplitClipAt(joined, 6); joined.clips[0].linkGroup = std::string(32, 'a'); joined.clips[1].linkGroup = std::string(32, 'b');
+   REQUIRE(JoinVideoClips(joined, 0, 12));
+   REQUIRE(TrimVideoClip(joined, 1, 2, 8));
+   const auto original = VideoContentLinkWindows(joined.clips[0]);
+   REQUIRE(SlipVideoClip(joined, 1, 4));
+   const auto windows = VideoContentLinkWindows(joined.clips[0]);
+   REQUIRE(windows.size() == original.size());
+   for (size_t i{}; i < windows.size(); ++i) {
+      REQUIRE(windows[i].group == original[i].group); REQUIRE(windows[i].start == original[i].start);
+      REQUIRE(windows[i].end == original[i].end); REQUIRE(windows[i].sourceOrigin == original[i].sourceOrigin);
+   }
+   auto reverse = joined;
+   REQUIRE(ReverseVideoClip(reverse, 1));
+   const auto reversed = VideoContentLinkWindows(reverse.clips[0]);
+   REQUIRE(reversed.size() == original.size());
+   for (size_t i{}; i < reversed.size(); ++i) {
+      REQUIRE(reversed[i].sourceOrigin == original[i].sourceOrigin); REQUIRE(reversed[i].start == original[i].start);
+   }
+   const auto oldContent = joined.clips[0].content;
+   REQUIRE_THROWS(SeparateVideoClips(joined, 2, 8));
+   REQUIRE(joined.clips.size() == 1); REQUIRE(joined.clips[0].content == oldContent);
+   RemapVideoContentLinks(joined.clips[0], {{std::string(32, 'a'), ""}, {std::string(32, 'b'), ""}});
+   REQUIRE(SeparateVideoClips(joined, 2, 8)); REQUIRE_FALSE(SeparateVideoClips(joined, 2, 8));
+   auto leaf = CreateVideoTimeline("source.mp4", 12, 30);
+   leaf.clips[0].media = SourceFor(leaf, leaf.clips[0]);
+   leaf.clips[0].linkGroup = std::string(32, 'e'); REQUIRE(TrimVideoClip(leaf, 1, 2, 8));
+   REQUIRE(SlipVideoClip(leaf, 1, 4));
+   auto held = leaf; REQUIRE(FreezeVideoClip(held, 1, 3, 2));
+   REQUIRE(VideoContentLinkWindows(held.clips[0])[0].sourceOrigin == 0);
+   REQUIRE(ReverseVideoClip(leaf, 1)); REQUIRE(VideoContentLinkWindows(leaf.clips[0])[0].sourceOrigin == 0);
+}
+TEST_CASE("Clip flag navigation orders occurrences and excludes hidden source flags", "[video-edits][clip-flags]")
+{
+   using namespace ClipMarkers;
+   for (int repeat{}; repeat < 2; ++repeat) {
+      const std::vector<FlagLocation> flags{{4, 3, true}, {2, 1, true}, {1, 1, true}, {3, 2, false}, {5, -2, false}};
+      const auto ordered = OrderClipFlags(flags);
+      REQUIRE(ordered[0].occurrence == 5); REQUIRE(ordered[1].occurrence == 1);
+      REQUIRE(AdjacentClipFlag(flags, 0, true) == 1); REQUIRE(AdjacentClipFlag(flags, 1, true) == 4);
+      REQUIRE(AdjacentClipFlag(flags, 3, false) == 2); REQUIRE_FALSE(AdjacentClipFlag(flags, 3, true));
+      REQUIRE_FALSE(AdjacentClipFlag(flags, 1, false)); REQUIRE_FALSE(AdjacentClipFlag({}, 0, true));
+      REQUIRE_THROWS(OrderClipFlags({{1, 1, true}, {1, 2, true}}));
+      REQUIRE_THROWS(OrderClipFlags({{0, 0, true}}));
+      REQUIRE_THROWS(OrderClipFlags({{1, std::numeric_limits<double>::quiet_NaN(), true}}));
+      REQUIRE_THROWS(AdjacentClipFlag(flags, std::numeric_limits<double>::infinity(), true));
+   }
+}
 
 TEST_CASE("Range export rebases every layer while retaining content clocks and source protection", "[video-edits][range-export]")
 {

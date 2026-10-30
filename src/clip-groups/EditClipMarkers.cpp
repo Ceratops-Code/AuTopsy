@@ -1,4 +1,6 @@
 #include "EditClipMarkers.h"
+#include "NavigateClipFlags.h"
+#include "GuardMediaDialogs.h"
 #include "GroupAudioClips.h"
 #include "../video/CreateVideoTrack.h"
 #include "WaveClip.h"
@@ -10,6 +12,8 @@
 #include "ProjectWindow.h"
 #include "ViewInfo.h"
 #include "Viewport.h"
+#include "TrackFocus.h"
+#include "SelectUtilities.h"
 #include "CommandContext.h"
 #include "MenuRegistry.h"
 #include "SettingsVisitor.h"
@@ -22,6 +26,16 @@
 #include <wx/choicdlg.h>
 #include <wx/textdlg.h>
 #include <wx/dc.h>
+#include <wx/button.h>
+#include <wx/checkbox.h>
+#include <wx/dialog.h>
+#include <wx/listctrl.h>
+#include <wx/msgdlg.h>
+#include <wx/sizer.h>
+#include <wx/stattext.h>
+#include <wx/textctrl.h>
+#include <map>
+#include <tuple>
 namespace {
 struct MarkerAttachment final : WaveClipListener {
    std::vector<ClipMarkers::Marker> markers;
@@ -98,6 +112,187 @@ bool Store(AudacityProject &project, ClipRef clip, std::vector<ClipMarkers::Mark
    }
    Viewport::Get(project).Redraw(); return true;
 }
+// These identities live only for a navigator invocation. Commands are held by
+// the modal guard; actions still find the current native object before editing.
+struct FlagTarget { ClipRef clip; std::string id; uint64_t key{}; };
+ClipRef CurrentClip(AudacityProject &project, const ClipRef &target)
+{
+   for (auto clip : Clips(project))
+      if (clip.track == target.track && clip.audio == target.audio && clip.id == target.id) return clip;
+   throw std::runtime_error("The flagged clip was removed. Reopen the flag navigator.");
+}
+ClipMarkers::Marker CurrentMarker(const ClipRef &clip, const std::string &id)
+{
+   for (const auto &marker : clip.markers) if (marker.id == id) return marker;
+   throw std::runtime_error("The clip flag was removed.");
+}
+void JumpToFlag(AudacityProject &project, const FlagTarget &target)
+{
+   const auto clip = CurrentClip(project, target.clip);
+   const auto marker = CurrentMarker(clip, target.id);
+   const auto time = ClipMarkers::ProjectMarkerTime(marker, clip.origin, clip.speed);
+   if (time < clip.start || time >= clip.end)
+      throw std::runtime_error("This flag is outside the clip's visible part. Untrim the clip to jump to it.");
+   SelectUtilities::SelectNone(project); clip.track->SetSelected(true);
+   TrackFocus::Get(project).Set(clip.track, true);
+   ViewInfo::Get(project).selectedRegion.setTimes(time, time);
+   Viewport::Get(project).ScrollIntoView(time); Viewport::Get(project).Redraw();
+}
+bool RenameFlag(AudacityProject &project, const FlagTarget &target, const wxString &text)
+{
+   auto clip = CurrentClip(project, target.clip);
+   auto marker = CurrentMarker(clip, target.id);
+   const auto utf8 = text.ToUTF8(); marker.text.assign(utf8.data(), utf8.length());
+   auto changed = clip.markers;
+   if (!ClipMarkers::PutMarker(changed, std::move(marker))) return false;
+   return Store(project, std::move(clip), std::move(changed), false);
+}
+void ShowFlagNavigator(AudacityProject &project)
+{
+   ClipActions::MediaDialogCommandGuard commands;
+   wxDialog dialog(&ProjectWindow::Get(project), wxID_ANY, _("Clip Flags"), wxDefaultPosition,
+      wxSize(760, 440), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+   auto *layout = new wxBoxSizer(wxVERTICAL);
+   auto *search = new wxTextCtrl(&dialog, wxID_ANY);
+   search->SetName(_("Search clip flags")); search->SetHint(_("Search flag, track or clip name"));
+   layout->Add(search, 0, wxEXPAND | wxALL, 8);
+   auto *hidden = new wxCheckBox(&dialog, wxID_ANY, _("Include flags outside trimmed clip edges"));
+   layout->Add(hidden, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+   auto *list = new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+      wxLC_REPORT | wxLC_SINGLE_SEL);
+   list->SetName(_("Clip flag list"));
+   list->InsertColumn(0, _("Time"), wxLIST_FORMAT_LEFT, 100);
+   list->InsertColumn(1, _("Track"), wxLIST_FORMAT_LEFT, 155);
+   list->InsertColumn(2, _("Clip"), wxLIST_FORMAT_LEFT, 155);
+   list->InsertColumn(3, _("Flag"), wxLIST_FORMAT_LEFT, 230);
+   list->InsertColumn(4, _("State"), wxLIST_FORMAT_LEFT, 90);
+   layout->Add(list, 1, wxEXPAND | wxLEFT | wxRIGHT, 8);
+   auto *status = new wxStaticText(&dialog, wxID_ANY, _("Flags follow their clips. Jump keeps the current zoom."));
+   layout->Add(status, 0, wxALL, 8);
+   auto *buttons = new wxBoxSizer(wxHORIZONTAL);
+   const auto button = [&](const wxString &label) {
+      auto *value = new wxButton(&dialog, wxID_ANY, label); buttons->Add(value, 0, wxRIGHT, 6); return value;
+   };
+   auto *previous = button(_("Previous")), *next = button(_("Next")), *jump = button(_("Jump"));
+   auto *rename = button(_("Rename...")), *remove = button(_("Delete Flag"));
+   buttons->AddStretchSpacer(); buttons->Add(new wxButton(&dialog, wxID_CANCEL, _("Close")));
+   layout->Add(buttons, 0, wxEXPAND | wxALL, 8); dialog.SetSizer(layout);
+   // Object-address tokens are adapter-local and never persisted or displayed.
+   using Identity = std::tuple<uintptr_t, uintptr_t, uint64_t, std::string>;
+   std::map<Identity, uint64_t> keys;
+   std::map<uint64_t, FlagTarget> targets;
+   std::vector<ClipMarkers::FlagLocation> locations;
+   const auto selectedKey = [&]() -> uint64_t {
+      const auto row = list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+      return row < 0 ? 0 : list->GetItemData(row);
+   };
+   const auto updateButtons = [&]() {
+      const auto key = selectedKey(); const auto found = targets.find(key);
+      rename->Enable(found != targets.end()); remove->Enable(found != targets.end());
+      jump->Enable(found != targets.end() && std::any_of(locations.begin(), locations.end(),
+         [key](const auto &flag) { return flag.occurrence == key && flag.visible; }));
+      const auto cursor = ViewInfo::Get(project).selectedRegion.t0();
+      previous->Enable(ClipMarkers::AdjacentClipFlag(locations, cursor, false).has_value());
+      next->Enable(ClipMarkers::AdjacentClipFlag(locations, cursor, true).has_value());
+   };
+   const auto refresh = [&]() {
+      const auto selected = selectedKey();
+      list->Freeze(); list->DeleteAllItems(); targets.clear(); locations.clear();
+      const auto query = search->GetValue().Lower();
+      struct Row { wxString track, clip, text; };
+      std::map<uint64_t, Row> rows;
+      for (const auto &clip : Clips(project)) for (const auto &marker : clip.markers) {
+         const auto time = ClipMarkers::ProjectMarkerTime(marker, clip.origin, clip.speed);
+         const bool visible = time >= clip.start && time < clip.end;
+         if (!visible && !hidden->GetValue()) continue;
+         const auto trackName = wxString::Format("%zu. %s", clip.trackIndex + 1, clip.track->GetName());
+         const auto clipName = clip.audio ? clip.audio->GetName() :
+            (clip.video->Timeline().clips.at(clip.clipIndex).appearance.name.empty() ? _("Video clip") :
+               wxString::FromUTF8(clip.video->Timeline().clips.at(clip.clipIndex).appearance.name));
+         const auto text = wxString::FromUTF8(marker.text);
+         if (!(trackName + " " + clipName + " " + text).Lower().Contains(query)) continue;
+         const Identity identity{reinterpret_cast<uintptr_t>(clip.track), reinterpret_cast<uintptr_t>(clip.audio), clip.id, marker.id};
+         const auto key = keys.emplace(identity, keys.size() + 1).first->second;
+         targets.emplace(key, FlagTarget{clip, marker.id, key});
+         rows.emplace(key, Row{trackName, clipName, text}); locations.push_back({key, time, visible});
+      }
+      locations = ClipMarkers::OrderClipFlags(std::move(locations));
+      for (const auto &location : locations) {
+         const auto &row = rows.at(location.occurrence);
+         const auto index = list->InsertItem(list->GetItemCount(), wxString::Format("%.3f s", location.time));
+         list->SetItem(index, 1, row.track); list->SetItem(index, 2, row.clip); list->SetItem(index, 3, row.text);
+         list->SetItem(index, 4, location.visible ? _("Visible") : _("Trimmed out"));
+         list->SetItemData(index, static_cast<long>(location.occurrence));
+         if (location.occurrence == selected) list->SetItemState(index, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
+      }
+      if (!selectedKey() && list->GetItemCount()) list->SetItemState(0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
+      list->Thaw(); updateButtons();
+   };
+   const auto act = [&](const auto &operation) {
+      try { operation(); }
+      catch (const std::exception &error) { wxMessageBox(wxString::FromUTF8(error.what()), _("Clip Flags"), wxOK | wxICON_ERROR, &dialog); }
+   };
+   const auto jumpSelected = [&]() { act([&] {
+      const auto found = targets.find(selectedKey()); if (found == targets.end()) return;
+      JumpToFlag(project, found->second); updateButtons();
+   }); };
+   search->Bind(wxEVT_TEXT, [&](wxCommandEvent &) { refresh(); });
+   hidden->Bind(wxEVT_CHECKBOX, [&](wxCommandEvent &) { refresh(); });
+   list->Bind(wxEVT_LIST_ITEM_SELECTED, [&](wxListEvent &) { updateButtons(); });
+   list->Bind(wxEVT_LIST_ITEM_ACTIVATED, [&](wxListEvent &) { jumpSelected(); });
+   jump->Bind(wxEVT_BUTTON, [&](wxCommandEvent &) { jumpSelected(); });
+   rename->Bind(wxEVT_BUTTON, [&](wxCommandEvent &) { act([&] {
+      const auto found = targets.find(selectedKey()); if (found == targets.end()) return;
+      const auto target = found->second;
+      const auto marker = CurrentMarker(CurrentClip(project, target.clip), target.id);
+      wxTextEntryDialog edit(&dialog, _("Flag label"), _("Rename Clip Flag"), wxString::FromUTF8(marker.text));
+      if (edit.ShowModal() == wxID_OK) { RenameFlag(project, target, edit.GetValue()); refresh(); }
+   }); });
+   remove->Bind(wxEVT_BUTTON, [&](wxCommandEvent &) { act([&] {
+      const auto found = targets.find(selectedKey()); if (found == targets.end()) return;
+      auto clip = CurrentClip(project, found->second.clip); auto markers = clip.markers;
+      const auto id = found->second.id;
+      markers.erase(std::remove_if(markers.begin(), markers.end(), [&](const auto &m) { return m.id == id; }), markers.end());
+      if (markers.size() != clip.markers.size()) Store(project, std::move(clip), std::move(markers), true);
+      refresh();
+   }); });
+   for (auto *control : {previous, next}) control->Bind(wxEVT_BUTTON, [&, control](wxCommandEvent &) { act([&] {
+      const auto key = ClipMarkers::AdjacentClipFlag(locations, ViewInfo::Get(project).selectedRegion.t0(), control == next);
+      if (!key) return;
+      for (long i{}; i < list->GetItemCount(); ++i) if (list->GetItemData(i) == *key) {
+         list->SetItemState(i, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED); list->EnsureVisible(i); break;
+      }
+      JumpToFlag(project, targets.at(*key)); updateButtons();
+   }); });
+   refresh(); dialog.ShowModal();
+}
+class ShowClipFlagsCommand final : public AudacityCommand {
+public:
+   static const ComponentInterfaceSymbol Symbol;
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override { return XO("Find, jump to, rename and delete clip flags."); }
+   bool Apply(const CommandContext &context) override { ShowFlagNavigator(context.project); return true; }
+};
+const ComponentInterfaceSymbol ShowClipFlagsCommand::Symbol{XO("ShowClipFlags")};
+BuiltinCommandsModule::Registration<ShowClipFlagsCommand> sShowFlags;
+template<bool Forward> class AdjacentClipFlagCommand final : public AudacityCommand {
+public:
+   inline static const ComponentInterfaceSymbol Symbol{Forward ? XO("NextClipFlag") : XO("PreviousClipFlag")};
+   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
+   TranslatableString GetDescription() const override { return XO("Jump to a visible clip flag without changing zoom."); }
+   bool Apply(const CommandContext &context) override {
+      std::map<uint64_t, FlagTarget> targets; std::vector<ClipMarkers::FlagLocation> flags;
+      for (const auto &clip : Clips(context.project)) for (const auto &marker : clip.markers) {
+         const auto key = targets.size() + 1;
+         const auto time = ClipMarkers::ProjectMarkerTime(marker, clip.origin, clip.speed);
+         targets.emplace(key, FlagTarget{clip, marker.id, key}); flags.push_back({key, time, time >= clip.start && time < clip.end});
+      }
+      const auto key = ClipMarkers::AdjacentClipFlag(flags, ViewInfo::Get(context.project).selectedRegion.t0(), Forward);
+      if (key) JumpToFlag(context.project, targets.at(*key)); return true;
+   }
+};
+BuiltinCommandsModule::Registration<AdjacentClipFlagCommand<true>> sNextFlag;
+BuiltinCommandsModule::Registration<AdjacentClipFlagCommand<false>> sPreviousFlag;
 class AddClipMarkerCommand final : public AudacityCommand {
    int mTrack{-1};
    double mAt{-1};
@@ -236,6 +431,9 @@ BuiltinCommandsModule::Registration<GetClipMarkersCommand> sGetMarkers;
 using namespace MenuRegistry;
 AttachedItem sMarkerMenu{
    Section("ClipFlags",
+      Command("ShowClipFlags", XXO("Clip Flags..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+      Command("PreviousClipFlag", XXO("Previous Clip Flag"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+      Command("NextClipFlag", XXO("Next Clip Flag"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("AddClipMarker", XXO("Add Clip Flag..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("RemoveClipMarker", XXO("Remove Clip Flag..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag())),
    wxT("Edit/Other/Clip")

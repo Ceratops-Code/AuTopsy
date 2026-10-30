@@ -378,6 +378,49 @@ only its own interrupted staging; it does not infer steps from an execution log.
 
 ### Selected-range export, clip appearance and coordinated ripple deletion
 
+Picture-only slip editing is owned by `EditVideoTimeline.h`; the native
+`SlipVideoPicture.cpp` adapter prepares cancellable effects before publishing
+one ordinary history state. The desired state is an absolute, frame-aligned
+picture source start with unchanged placement, duration, rate and native audio.
+Missing targets, locked clips, active transport and out-of-source windows reject
+the request without publishing a candidate. Repeating the same absolute request
+adds no history. Cancelling the dialog or effect preparation leaves live state
+unchanged. A history failure restores the original timeline.
+
+The optional `videoAudioSourceOffset` attribute separates soundtrack lookup from
+the picture's `sourceStart`. Slips add the inverse source delta, so subsequent
+linked trims and speed changes retain the original forward sound clock. Reverse
+and Freeze project this clock into their retained generator input. Ordinary
+split/copy/move retain the value. Picture flags and opacity anchors remain in
+picture-content coordinates and follow slipped footage; audio flags stay put.
+Slipped joined content can have different picture and soundtrack cuts, so
+Separate rejects it while soundtrack links remain, rather than assigning sound
+to the wrong newly separated piece. Explicit Unlink permits picture separation.
+Old projects default the new optional field to zero; stock Audacity skips video
+as before. No new cache, log or external media output is produced by a slip.
+
+The clip-flag navigator reuses the existing optional audio/video marker storage.
+`NavigateClipFlags.h` owns ordered occurrence navigation independently of native
+tracks. `EditClipMarkers.cpp` owns the modal searchable list and native actions.
+Its temporary occurrence keys identify native clip objects plus marker IDs,
+including copied clips with identical marker IDs; display rows and track numbers
+are labels, not editing identities. Each action finds the current object again.
+The modal guard holds other commands until closing the list, and all occurrence
+keys disappear then. Rename/Delete use one native history state with rollback
+on history failure. Closing, searching or toggling hidden flags changes no
+project content. Jump preserves zoom and reveals the flagged clip and cursor.
+Previous/Next skip trimmed-out flags, exclude the current time and never wrap;
+the list permits individual selection of coincident flags. Hidden flags can be
+renamed or deleted but cannot be jumped to until untrimmed. Empty results disable
+all unavailable actions. The navigator produces no persistent output.
+
+`video-edits` exercises source bounds, no-op repeats, soundtrack clocks and flag
+ordering without the host. Native `video-slip` and `clip-flag-navigation` cover
+real menus, cancellation, linked trims, picture/audio output, history and saved
+projects. Their generated projects and media belong to the existing bounded
+native-case directories; normal case cleanup removes them. Changing either
+feature selects these named cases through `scripts/run_affected_tests.py`.
+
 The desired export state is one file whose time zero corresponds to the chosen
 project range start, containing the same visible composition and audible mix.
 `PlanVideoRangeExport` in `EditVideoTimeline.h` snapshots every visible layer,
