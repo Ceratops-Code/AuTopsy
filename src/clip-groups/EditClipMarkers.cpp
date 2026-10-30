@@ -114,11 +114,16 @@ bool Store(AudacityProject &project, ClipRef clip, std::vector<ClipMarkers::Mark
 }
 // These identities live only for a navigator invocation. Commands are held by
 // the modal guard; actions still find the current native object before editing.
-struct FlagTarget { ClipRef clip; std::string id; uint64_t key{}; };
-ClipRef CurrentClip(AudacityProject &project, const ClipRef &target)
+struct FlagTarget {
+   Track *track{}; WaveClip *audio{}; uint64_t clipId{};
+   std::string id; uint64_t key{};
+   FlagTarget(const ClipRef &clip, std::string markerId, uint64_t occurrence)
+      : track(clip.track), audio(clip.audio), clipId(clip.id), id(std::move(markerId)), key(occurrence) {}
+};
+ClipRef CurrentClip(AudacityProject &project, const FlagTarget &target)
 {
    for (auto clip : Clips(project))
-      if (clip.track == target.track && clip.audio == target.audio && clip.id == target.id) return clip;
+      if (clip.track == target.track && clip.audio == target.audio && clip.id == target.clipId) return clip;
    throw std::runtime_error("The flagged clip was removed. Reopen the flag navigator.");
 }
 ClipMarkers::Marker CurrentMarker(const ClipRef &clip, const std::string &id)
@@ -128,19 +133,19 @@ ClipMarkers::Marker CurrentMarker(const ClipRef &clip, const std::string &id)
 }
 void JumpToFlag(AudacityProject &project, const FlagTarget &target)
 {
-   const auto clip = CurrentClip(project, target.clip);
+   const auto clip = CurrentClip(project, target);
    const auto marker = CurrentMarker(clip, target.id);
    const auto time = ClipMarkers::ProjectMarkerTime(marker, clip.origin, clip.speed);
    if (time < clip.start || time >= clip.end)
       throw std::runtime_error("This flag is outside the clip's visible part. Untrim the clip to jump to it.");
    SelectUtilities::SelectNone(project); clip.track->SetSelected(true);
-   TrackFocus::Get(project).Set(clip.track, true);
+   TrackFocus::Get(project).Set(clip.track, false);
    ViewInfo::Get(project).selectedRegion.setTimes(time, time);
    Viewport::Get(project).ScrollIntoView(time); Viewport::Get(project).Redraw();
 }
 bool RenameFlag(AudacityProject &project, const FlagTarget &target, const wxString &text)
 {
-   auto clip = CurrentClip(project, target.clip);
+   auto clip = CurrentClip(project, target);
    auto marker = CurrentMarker(clip, target.id);
    const auto utf8 = text.ToUTF8(); marker.text.assign(utf8.data(), utf8.length());
    auto changed = clip.markers;
@@ -244,13 +249,13 @@ void ShowFlagNavigator(AudacityProject &project)
    rename->Bind(wxEVT_BUTTON, [&](wxCommandEvent &) { act([&] {
       const auto found = targets.find(selectedKey()); if (found == targets.end()) return;
       const auto target = found->second;
-      const auto marker = CurrentMarker(CurrentClip(project, target.clip), target.id);
+      const auto marker = CurrentMarker(CurrentClip(project, target), target.id);
       wxTextEntryDialog edit(&dialog, _("Flag label"), _("Rename Clip Flag"), wxString::FromUTF8(marker.text));
       if (edit.ShowModal() == wxID_OK) { RenameFlag(project, target, edit.GetValue()); refresh(); }
    }); });
    remove->Bind(wxEVT_BUTTON, [&](wxCommandEvent &) { act([&] {
       const auto found = targets.find(selectedKey()); if (found == targets.end()) return;
-      auto clip = CurrentClip(project, found->second.clip); auto markers = clip.markers;
+      auto clip = CurrentClip(project, found->second); auto markers = clip.markers;
       const auto id = found->second.id;
       markers.erase(std::remove_if(markers.begin(), markers.end(), [&](const auto &m) { return m.id == id; }), markers.end());
       if (markers.size() != clip.markers.size()) Store(project, std::move(clip), std::move(markers), true);
@@ -275,24 +280,17 @@ public:
 };
 const ComponentInterfaceSymbol ShowClipFlagsCommand::Symbol{XO("ShowClipFlags")};
 BuiltinCommandsModule::Registration<ShowClipFlagsCommand> sShowFlags;
-template<bool Forward> class AdjacentClipFlagCommand final : public AudacityCommand {
-public:
-   inline static const ComponentInterfaceSymbol Symbol{Forward ? XO("NextClipFlag") : XO("PreviousClipFlag")};
-   ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
-   TranslatableString GetDescription() const override { return XO("Jump to a visible clip flag without changing zoom."); }
-   bool Apply(const CommandContext &context) override {
+void NavigateProjectFlag(AudacityProject &project, bool forward)
+{
       std::map<uint64_t, FlagTarget> targets; std::vector<ClipMarkers::FlagLocation> flags;
-      for (const auto &clip : Clips(context.project)) for (const auto &marker : clip.markers) {
+      for (const auto &clip : Clips(project)) for (const auto &marker : clip.markers) {
          const auto key = targets.size() + 1;
          const auto time = ClipMarkers::ProjectMarkerTime(marker, clip.origin, clip.speed);
          targets.emplace(key, FlagTarget{clip, marker.id, key}); flags.push_back({key, time, time >= clip.start && time < clip.end});
       }
-      const auto key = ClipMarkers::AdjacentClipFlag(flags, ViewInfo::Get(context.project).selectedRegion.t0(), Forward);
-      if (key) JumpToFlag(context.project, targets.at(*key)); return true;
-   }
-};
-BuiltinCommandsModule::Registration<AdjacentClipFlagCommand<true>> sNextFlag;
-BuiltinCommandsModule::Registration<AdjacentClipFlagCommand<false>> sPreviousFlag;
+      const auto key = ClipMarkers::AdjacentClipFlag(flags, ViewInfo::Get(project).selectedRegion.t0(), forward);
+      if (key) JumpToFlag(project, targets.at(*key));
+}
 class AddClipMarkerCommand final : public AudacityCommand {
    int mTrack{-1};
    double mAt{-1};
@@ -432,8 +430,10 @@ using namespace MenuRegistry;
 AttachedItem sMarkerMenu{
    Section("ClipFlags",
       Command("ShowClipFlags", XXO("Clip Flags..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
-      Command("PreviousClipFlag", XXO("Previous Clip Flag"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
-      Command("NextClipFlag", XXO("Next Clip Flag"), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
+      Command("PreviousClipFlag", XXO("Previous Clip Flag"),
+         [](const CommandContext &context) { NavigateProjectFlag(context.project, false); }, AudioIONotBusyFlag()),
+      Command("NextClipFlag", XXO("Next Clip Flag"),
+         [](const CommandContext &context) { NavigateProjectFlag(context.project, true); }, AudioIONotBusyFlag()),
       Command("AddClipMarker", XXO("Add Clip Flag..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag()),
       Command("RemoveClipMarker", XXO("Remove Clip Flag..."), CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag())),
    wxT("Edit/Other/Clip")
