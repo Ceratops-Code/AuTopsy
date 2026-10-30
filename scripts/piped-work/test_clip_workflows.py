@@ -7,10 +7,12 @@ that directory. No personal media, microphone or installed editor is used.
 import array
 import json
 import math
+import threading
+import time
 
 from run_fork_test_harness import operate_owned_video_track, run_process, save_reopen
 from test_beginner_edits import assert_bounds, model, select, video_rows
-from test_clip_actions import with_native_dialog
+from test_clip_actions import ClipDialogWindows, with_native_dialog
 
 CLIP_WORKFLOW_CASES = ("video-range-export", "video-clip-appearance", "linked-ripple-delete")
 
@@ -24,6 +26,41 @@ def pixel(ffmpeg, path, at, size="1:1"):
 def assert_unchanged(client, expected, selection):
     assert model(client) == expected
     assert client.data("GetInfo: Type=Selection Format=JSON") == selection
+
+
+def send_ripple_delete(client, *, locked=False, command="RippleDelete"):
+    """Exercise native menu error dialogs and fail promptly on unexpected ones."""
+    windows = ClipDialogWindows()
+    result, errors = [], []
+
+    def send():
+        try:
+            result.append(client.send(command))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=send, daemon=True)
+    worker.start()
+    deadline, rejected = time.monotonic() + 15, False
+    while worker.is_alive():
+        for dialog in windows.windows():
+            if not windows.visible(dialog):
+                continue
+            children = windows.windows(dialog)
+            labels = [windows.caption(h) for h in children if windows.kind(h) == "Static"]
+            buttons = [h for h in children if windows.kind(h) == "Button"
+                       and windows.caption(h).replace("&", "") == "OK"]
+            if buttons:
+                assert locked and any("Unlock" in label for label in labels), (
+                    command, windows.caption(dialog), labels)
+                rejected = True
+                windows.activate(dialog)
+                windows.click(buttons[0])
+        assert time.monotonic() < deadline, (command, [windows.caption(h) for h in windows.windows()])
+        worker.join(timeout=.025)
+    if errors:
+        raise errors[0]
+    assert result and (not locked or rejected or "Unlock" in result[0]), result
 
 
 def check_video_range_export(client, root, ffmpeg, ffprobe):
@@ -76,10 +113,10 @@ def check_video_range_export(client, root, ffmpeg, ffprobe):
     client.send("Undo")
     assert model(client) == original
     # Composition's parent IDs and fade clocks must survive time rebasing.
-    client.file("ImportVideo", root / "portrait.mp4")
+    client.file("ImportVideo", root / "other-source.mp4")
     rows = video_rows(client)
-    child = next(row for row in rows if row["source"].endswith("portrait.mp4"))
-    parent = next(row for row in rows if row["source"].endswith("source.mp4"))
+    child = next(row for row in rows if row["source"].endswith("other-source.mp4"))
+    parent = next(row for row in rows if not row["source"].endswith("other-source.mp4"))
     client.send(f'SetVideoEmbedding: Track={child["track"]} Parent={parent["track"]} X=0.6 Y=0.1 Width=0.3 Height=0.7')
     client.send(f'SetVideoClipFades: Track={parent["track"]} Id="{parent["id"]}" In=2')
     whole = root / "_composed-whole.mp4"
@@ -96,6 +133,7 @@ def check_video_range_export(client, root, ffmpeg, ffprobe):
     tail = root / "_selected-tail.mp4"
     client.file("ExportVideoMix", tail, settings)
     assert max(pixel(ffmpeg, tail, .25)) < 20
+    client.file("SaveProject2", root / "_range-export-project.aup3")
 
 
 def check_video_clip_appearance(client, root, ffmpeg):
@@ -168,6 +206,7 @@ def check_video_clip_appearance(client, root, ffmpeg):
         output = root / f"_appearance-picture-{repeat}.mp4"
         client.file("ExportVideoMix", output, "SelectedOnly=1 Preset=h264 Width=160 Height=90")
         assert pixel(ffmpeg, output, .5)[0] > 180 and pixel(ffmpeg, output, 3)[2] > 180
+    client.send("Save")
 
 
 def check_linked_ripple_delete(client, root):
@@ -179,7 +218,7 @@ def check_linked_ripple_delete(client, root):
     for repeat in range(2):
         for anchor in (video["track"], 1):
             select(client, anchor, 1, 2)
-            client.send("RippleDelete")
+            send_ripple_delete(client)
             changed = model(client)
             assert_bounds(changed["video"], [(0, 1), (1, 3)])
             partner = [row for row in changed["audio"] if row["track"] == 1]
@@ -197,14 +236,12 @@ def check_linked_ripple_delete(client, root):
             locked = model(client)
             select(client, anchor, 1, 2)
             selection = client.data("GetInfo: Type=Selection Format=JSON")
-            # Native menu dispatch reports that it handled the command; its
-            # error response and unchanged model prove the edit was rejected.
-            assert "Unlock" in client.send("RippleDelete")
+            send_ripple_delete(client, locked=True)
             assert_unchanged(client, locked, selection)
             client.send("Undo")
             assert model(client) == original
     select(client, video["track"], 1, 2)
-    client.send("RippleDeleteProject")
+    send_ripple_delete(client, command="RippleDeleteProject")
     global_result = model(client)
     for track in (1, 2):
         old_end = max(row["end"] for row in original["audio"] if row["track"] == track)
@@ -218,7 +255,7 @@ def check_linked_ripple_delete(client, root):
     client.send("Undo")
     assert model(client) == original
     select(client, 1, 1, 2)
-    client.send("RippleDelete")
+    send_ripple_delete(client)
     saved = model(client)
     save_reopen(client, root / "_linked-ripple.aup3")
     assert model(client) == saved
