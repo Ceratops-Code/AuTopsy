@@ -43,7 +43,10 @@ def check_picture_slip(client, root, ffmpeg):
     assert model(client) == slipped
     for source in (-1, 3):
         def operation():
-            return client.send(f'SetVideoClipSlip: Track={track} Id="{identifier}" SourceStart={source}', success=False)
+            # The inherited menu dispatcher returns OK after closing a native
+            # parameter-error dialog. Its rejection is the dialog plus unchanged
+            # state; Apply-time range errors instead return a failed batch.
+            return client.send(f'SetVideoClipSlip: Track={track} Id="{identifier}" SourceStart={source}', success=source < 0)
         if source < 0:
             # Native parameter-range errors use an OK dialog before Apply.
             with_native_dialog(operation, "SetVideoClipSlip",
