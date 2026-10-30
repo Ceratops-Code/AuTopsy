@@ -394,6 +394,12 @@ whole project's sources, even outside the chosen interval. The existing export
 workspace owns staging, cancellation cleanup and atomic destination publication;
 no new output owner or recovery log is introduced. Export does not edit selection
 or history. A failed/aborted overwrite leaves the prior destination intact.
+The intermediate audio writer calls the same native `CreateMixer` boundary as
+audio export and writes a fixed-length stereo float RF64 stream with libsndfile.
+After mixer exhaustion it writes explicit zero samples until the selected end;
+this prevents malformed empty floating WAV data for video-only or late ranges.
+Finite samples, write counts and final close errors are checked before muxing.
+The existing workspace removes incomplete intermediates on every return path.
 
 `VideoClipAppearance` owns a bounded UTF-8 name and optional 24-bit RGB header
 colour. Empty/default values retain source-based labels and theme colours.

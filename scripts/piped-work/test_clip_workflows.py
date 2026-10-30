@@ -10,6 +10,7 @@ import math
 import threading
 import time
 
+from run_audacity_consumer import select_audio_project_tracks
 from run_fork_test_harness import operate_owned_video_track, run_process, save_reopen
 from test_beginner_edits import assert_bounds, model, select, video_rows
 from test_clip_actions import ClipDialogWindows, with_native_dialog
@@ -21,6 +22,13 @@ def pixel(ffmpeg, path, at, size="1:1"):
     return run_process([ffmpeg, "-v", "error", "-ss", str(at), "-i", str(path),
                         "-frames:v", "1", "-vf", f"scale={size}", "-pix_fmt", "rgb24",
                         "-f", "rawvideo", "pipe:1"], timeout=30)
+
+
+def assert_silent_audio(ffmpeg, path, minimum_seconds):
+    samples = array.array("f", run_process([ffmpeg, "-v", "error", "-i", str(path),
+        "-map", "0:a:0", "-ar", "8000", "-ac", "1", "-f", "f32le", "pipe:1"], timeout=30))
+    assert len(samples) >= round(minimum_seconds * 8000), len(samples)
+    assert max(abs(value) for value in samples) < .00001
 
 
 def assert_unchanged(client, expected, selection):
@@ -51,7 +59,7 @@ def send_ripple_delete(client, *, locked=False, command="RippleDelete"):
             buttons = [h for h in children if windows.kind(h) == "Button"
                        and windows.caption(h).replace("&", "") == "OK"]
             if buttons:
-                assert locked and any("Unlock" in label for label in labels), (
+                assert locked and windows.caption(dialog) == "Message", (
                     command, windows.caption(dialog), labels)
                 rejected = True
                 windows.activate(dialog)
@@ -133,6 +141,20 @@ def check_video_range_export(client, root, ffmpeg, ffprobe):
     tail = root / "_selected-tail.mp4"
     client.file("ExportVideoMix", tail, settings)
     assert max(pixel(ffmpeg, tail, .25)) < 20
+    assert_silent_audio(ffmpeg, tail, .95)
+    client.send("SelectAll")
+    client.send("SetTrackAudio: Mute=1")
+    select(client, parent["track"], 1, 3)
+    muted = root / "_selected-muted-audio.mp4"
+    client.file("ExportVideoMix", muted, settings)
+    assert_silent_audio(ffmpeg, muted, 1.95)
+    select_audio_project_tracks(client.send, client.data)
+    client.send("RemoveTracks")
+    parent = next(row for row in video_rows(client) if not row["source"].endswith("other-source.mp4"))
+    select(client, parent["track"], 1, 3)
+    video_only = root / "_selected-video-only.mp4"
+    client.file("ExportVideoMix", video_only, settings)
+    assert_silent_audio(ffmpeg, video_only, 1.95)
     client.file("SaveProject2", root / "_range-export-project.aup3")
 
 
