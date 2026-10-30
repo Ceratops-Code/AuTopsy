@@ -54,6 +54,11 @@ TEST_CASE("Video names and colours survive structural edits without changing pic
       REQUIRE_NOTHROW(RequireWellFormedTimeline(timeline));
       const auto named = SampleVideoContent(timeline.clips[0], SourceFor(timeline, timeline.clips[0]), 3);
       REQUIRE(named.source.path == original.source.path); REQUIRE(named.sourceTime == original.sourceTime);
+      auto generated = timeline;
+      REQUIRE(ReverseVideoClip(generated, 1)); REQUIRE(generated.clips[0].appearance == style);
+      REQUIRE(ReverseVideoClip(generated, 1)); REQUIRE(generated.clips[0].appearance == style);
+      generated = timeline;
+      REQUIRE(FreezeVideoClip(generated, 1, 3, 2)); REQUIRE(generated.clips[0].appearance == style);
       SplitClipAt(timeline, 6); REQUIRE(timeline.clips[1].appearance == style);
       auto copy = CopyVideoRange(timeline, 2, 9);
       REQUIRE(copy.clips[0].appearance == style); REQUIRE(copy.clips[1].appearance == style);

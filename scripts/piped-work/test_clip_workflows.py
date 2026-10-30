@@ -171,6 +171,11 @@ def check_video_clip_appearance(client, root, ffmpeg):
         changed = model(client)
         assert changed["video"][0]["name"] == name and changed["video"][0]["colour"] == 16777130
         assert changed["audio"] == original["audio"]
+        for action in ("ReverseVideoPicture", "FreezeVideoFrame"):
+            client.send(f'{action}: Track={track} Id="{identifier}" At=1 Seconds=2')
+            assert video_rows(client)[0]["name"] == name and video_rows(client)[0]["colour"] == 16777130
+            client.send("Undo")
+            assert model(client) == changed
         client.send(request)
         client.send("Undo")
         assert model(client) == original, "Repeated appearance edit added history."
@@ -233,8 +238,34 @@ def check_video_clip_appearance(client, root, ffmpeg):
 
 def check_linked_ripple_delete(client, root):
     """Audio/video anchors, unselected partners, locks and project-wide scope."""
+    names = ("/GUI/EditClipCanMove", "/GUI/SyncLockTracks")
+    previous = {}
+    for name in names:
+        try:
+            previous[name] = client.send(f'GetPreference: Name="{name}"').split("BatchCommand", 1)[0].strip()
+        except AssertionError as error:
+            # The public preference reader returns payload-free failure for an
+            # absent key. Both tested preferences have the native default false.
+            if str(error).strip() != "BatchCommand finished: Failed!":
+                raise
+            previous[name] = "0"
+    try:
+        client.send('SetPreference: Name="/GUI/SyncLockTracks" Value="0"')
+        for move_others in (0, 1):
+            client.send(f'SetPreference: Name="/GUI/EditClipCanMove" Value="{move_others}"')
+            exercise_linked_ripple_delete(client, root, move_others)
+            client.send("Close")
+    finally:
+        for name, value in previous.items():
+            client.send(f'SetPreference: Name="{name}" Value="{value}"')
+
+
+def exercise_linked_ripple_delete(client, root, preference):
+    """A separate later linked occurrence must move with either native setting."""
     client.file("ImportVideo", root / "source.mp4")
     client.file("Import2", root / "tone-b.wav")
+    select(client, 0, 2.5, 2.5)
+    client.send("Split")
     original = model(client)
     video = original["video"][0]
     for repeat in range(2):
@@ -242,9 +273,11 @@ def check_linked_ripple_delete(client, root):
             select(client, anchor, 1, 2)
             send_ripple_delete(client)
             changed = model(client)
-            assert_bounds(changed["video"], [(0, 1), (1, 3)])
+            assert_bounds(changed["video"], [(0, 1), (1, 1.5), (1.5, 3)])
             partner = [row for row in changed["audio"] if row["track"] == 1]
-            assert abs(max(row["end"] for row in partner) - (original["audio"][0]["end"] - 1)) < .0001
+            old_end = max(row["end"] for row in original["audio"] if row["track"] == 1)
+            assert abs(max(row["end"] for row in partner) - (old_end - 1)) < .0001
+            assert abs(max(row["start"] for row in partner) - 1.5) < .0001, partner
             assert [row for row in changed["audio"] if row["track"] == 2] == [
                 row for row in original["audio"] if row["track"] == 2]
             client.send("Undo")
@@ -273,13 +306,13 @@ def check_linked_ripple_delete(client, root):
     # Ordinary Delete remains a gap edit and never pulls the right piece left.
     select(client, video["track"], 1, 2)
     client.send("Delete")
-    assert_bounds(video_rows(client), [(0, 1), (2, 4)])
+    assert_bounds(video_rows(client), [(0, 1), (2, 2.5), (2.5, 4)])
     client.send("Undo")
     assert model(client) == original
     select(client, 1, 1, 2)
     send_ripple_delete(client)
     saved = model(client)
-    save_reopen(client, root / "_linked-ripple.aup3")
+    save_reopen(client, root / f"_linked-ripple-{preference}.aup3")
     assert model(client) == saved
 
 

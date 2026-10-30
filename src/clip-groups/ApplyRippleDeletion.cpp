@@ -46,13 +46,21 @@ bool DeleteMediaRangeClosingGap(AudacityProject &project, bool wholeProject)
       const auto targets = PlanRippleDeletion(inputs, from, to, wholeProject);
       if (targets.empty()) { selection = previous; return false; }
       // No event-yielding work is permitted between snapshot, preflight and
-      // publication. Native Clear retains its audio/label/video edit contract;
+      // publication. Native basic edits retain their audio/label/video contracts;
       // history restores the entire project if any edit or autosave fails.
       try {
          for (const auto &id : targets) {
             auto *track = tracks.FindById(id);
             if (!track) throw std::runtime_error("A ripple target was removed.");
-            track->Clear(from, to);
+            if (auto *audio = dynamic_cast<WaveTrack*>(track)) {
+               // SplitDelete always retains a gap; ShiftBy closes it explicitly.
+               // Clear's movement of nonintersecting clips depends on a user
+               // preference, which cannot weaken this operation's ripple policy.
+               const auto begin = audio->SnapToSample(from), end = audio->SnapToSample(to);
+               audio->SplitDelete(begin, end);
+               audio->ShiftBy(end, begin - end);
+            }
+            else track->Clear(from, to);
          }
          selection.collapseToT0();
          ProjectHistory::Get(project).PushState(

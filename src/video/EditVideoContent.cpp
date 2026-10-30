@@ -432,6 +432,7 @@ Clip GeneratorClip(const Clip &original, const std::shared_ptr<VideoClipContent>
    Clip result{original.id, original.start, 0, original.duration};
    result.content = content; result.linkGroup = original.linkGroup;
    result.timingLocked = original.timingLocked; result.muted = original.muted; result.crop = original.crop;
+   result.appearance = original.appearance;
    return result;
 }
 }

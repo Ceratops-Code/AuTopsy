@@ -422,8 +422,10 @@ editable tracks for the explicitly named whole-project command. Affected clip
 links and embedded families expand the set transitively, including later clips
 that move when a gap closes. Unchanged earlier links do not widen scope. Every
 affected timing lock is checked after closure and before publication. The narrow
-`ApplyRippleDeletion` adapter keeps native `Track::Clear` responsible for audio,
-labels and retained video. No event-yielding worker runs between snapshot and
+`ApplyRippleDeletion` adapter composes native audio `SplitDelete` and `ShiftBy`
+at the native sample boundaries, retaining source handles and closing the gap
+regardless of the "Editing a clip can move other clips" preference. Other native
+tracks use `Track::Clear`. No event-yielding worker runs between snapshot and
 publication. One native history transaction records the result; any edit or
 autosave exception restores the project and prior selection. A successful call
 collapses the removed range to its start; ordinary Delete remains gap-preserving.
@@ -434,7 +436,8 @@ Independent `range-export`, `clip-appearance` and `ripple-deletion` cases cover
 the policies, including reordered opaque identities. Native cases
 `video-range-export`, `video-clip-appearance` and `linked-ripple-delete` in
 `scripts/piped-work/test_clip_workflows.py` check decoded picture/audio, offsets,
-PIP/fade clocks, repeated and rejected effects, menu cancellation, Undo/Redo and
+PIP/fade clocks, repeated and rejected effects, both clip-movement preference
+values with sync-lock disabled, appearance after Reverse/Freeze, menu cancellation, Undo/Redo and
 save/reopen. The existing stock-Audacity consumer case now includes optional clip
 appearance in both simple and retained video. These cases use generated media
 and the shared private-session runner on the permitted display.
