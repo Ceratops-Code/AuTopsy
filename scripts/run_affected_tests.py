@@ -54,6 +54,7 @@ GROUPS = (
     CheckGroup("media-collection", ("src/media/CollectMediaFiles.*", "src/media/TestMediaCollection.cpp"),
         "media-collection-test"),
     CheckGroup("media-clip-selection", ("src/clip-groups/SelectMediaClips.h",
+        "src/clip-groups/PlanRippleDeletion.h",
         "src/clip-groups/TestMediaClipSelection.cpp"), "media-clip-selection-test"),
     CheckGroup("project-storage", ("libraries/lib-project-file-io/ConfigureProjectStorage.*",
         "libraries/lib-project-file-io/tests/*", "lib-src/sqlite/sqlite3.c", "lib-src/sqlite/sqlite3.h"),
@@ -100,6 +101,8 @@ GROUPS = (
 # Native bodies are outside portable acceptance. These hints keep their required
 # next scope visible without launching a GUI or rebuilding an accepted installer.
 NATIVE_INPUTS = (
+    "src/video/EditVideoClipAppearance.*", "src/clip-groups/ApplyRippleDeletion.*",
+    "src/clip-groups/PlanRippleDeletion.h", "scripts/piped-work/test_clip_workflows.py",
     "src/video/GenerateVideoCaptions.*", "src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake",
     "src/update/CheckProductUpdates.*", "src/AudacityApp.cpp", "src/AboutDialog.cpp", "resources/autopsy-release.json",
     "scripts/piped-work/test_product_updates.py",
@@ -153,6 +156,14 @@ DOCUMENT_SUFFIXES = {".md", ".rst"}
 # Keep desktop impact beside the portable input map, never in the installer or CI.
 INSTALLER_BASELINE_TESTS = ("fork-fixtures", "fork-preview", "fork-project-compatibility")
 INSTALLER_NATIVE_GROUPS = (
+    (("video-range-export",), ("src/video/EditVideoTimeline.h", "src/video/ShowVideoPreview.cpp",
+        "src/video/ChooseVideoExport.*", "src/video/ExportVideoMix.*", "src/video/PrepareVideoEffects.*",
+        "scripts/piped-work/test_clip_workflows.py")),
+    (("video-clip-appearance",), ("src/video/EditVideoClipAppearance.*", "src/video/EditVideoContent.*",
+        "src/video/CreateVideoTrack.*", "src/video/JoinVideoClips.*", "src/video/ShowVideoTrack.*",
+        "scripts/piped-work/test_clip_workflows.py")),
+    (("linked-ripple-delete", "delete-gap", "clip-properties"), ("src/clip-groups/PlanRippleDeletion.h",
+        "src/clip-groups/ApplyRippleDeletion.*", "src/menus/EditMenus.cpp", "scripts/piped-work/test_clip_workflows.py")),
     (("video-caption-interchange", "video-caption-english", "video-caption-hebrew", "video-caption-warp"), (
         "src/video/EditCaptionCues.*", "src/video/GenerateVideoCaptions.*", "scripts/piped-work/test_video_captions.py")),
     (("video-caption-english", "video-caption-hebrew", "video-caption-warp"), ("src/video/PrepareCaptionModels.*", "src/video/BuildSpeechEngine.cmake")),

@@ -3,11 +3,15 @@
 #include "PlanVideoExport.h"
 #include "PrepareVideoEffects.h"
 #include "PrepareCaptionModels.h"
+#include "../clip-groups/GuardMediaDialogs.h"
 #include "Export.h"
-#include "ExportPluginRegistry.h"
+#include "ExportPluginHelpers.h"
+#include "FileFormats.h"
+#include "Mix.h"
 #include "Prefs.h"
 #include "MemoryX.h"
 #include <sndfile.h>
+#include <wx/file.h>
 #include <wx/filefn.h>
 #include <wx/filename.h>
 #include <wx/log.h>
@@ -26,6 +30,7 @@
 #include <fstream>
 #include <iomanip>
 #include <locale>
+#include <limits>
 #include <memory>
 #include <map>
 #include <random>
@@ -172,6 +177,52 @@ public:
    void OnProgress(double value) override
    { mCancelled = !mDialog.Update(int(std::clamp(value, 0.0, 1.0) * 1000)); }
 };
+
+// The native mixer owns all track/master effects, stretching, mute, solo and
+// gain. This adapter owns only the fixed-length, interleaved stereo intermediate.
+// An exhausted mixer produces explicit zeros: an empty floating WAV from the
+// general audio exporter is not a usable input for video-only or late ranges.
+bool WriteProjectAudioRange(AudacityProject &project, const fs::path &path,
+   double start, double duration, wxWindow *parent)
+{
+   constexpr size_t BlockFrames = 8192;
+   constexpr double Rate = 48000;
+   const auto frameValue = std::round(duration * Rate);
+   if (!std::isfinite(frameValue) || frameValue < 1 || frameValue >= double(std::numeric_limits<sf_count_t>::max()))
+      throw std::runtime_error("The export audio range cannot fit a sample-frame count.");
+   const auto frames = static_cast<sf_count_t>(frameValue);
+   auto mixer = ExportPluginHelpers::CreateMixer(project, false, start, start + duration,
+      2, BlockFrames, true, Rate, floatSample, nullptr);
+   SF_INFO info{}; info.channels = 2; info.samplerate = int(Rate);
+   // RF64 keeps the same WAV/float decoder contract without a 4 GB size limit.
+   info.format = SF_FORMAT_RF64 | SF_FORMAT_FLOAT;
+   wxFile output{wxString(path.wstring()), wxFile::write};
+   if (!output.IsOpened()) throw std::runtime_error("Could not create the video export's audio intermediate.");
+   SFFile file;
+   // Match the native audio export's Unicode-safe descriptor boundary. The
+   // wxFile keeps ownership until libsndfile has finished its container header.
+   file.reset(SFCall<SNDFILE*>(sf_open_fd, output.fd(), SFM_WRITE, &info, SF_FALSE));
+   if (!file) throw std::runtime_error("Could not create the video export's audio intermediate.");
+   std::vector<float> block(BlockFrames * 2);
+   MixProgress progress{parent};
+   for (sf_count_t written{}; written < frames;) {
+      const auto count = size_t(std::min<sf_count_t>(BlockFrames, frames - written));
+      std::fill(block.begin(), block.end(), 0.f);
+      const auto mixed = mixer->Process(count);
+      if (mixed > count) throw std::runtime_error("The audio mixer exceeded its requested frame count.");
+      if (mixed) std::memcpy(block.data(), mixer->GetBuffer(), mixed * 2 * sizeof(float));
+      if (!std::all_of(block.begin(), block.begin() + count * 2, [](float value) { return std::isfinite(value); }))
+         throw std::runtime_error("The project audio mix contains a non-finite sample.");
+      if (SFCall<sf_count_t>(sf_writef_float, file.get(), block.data(), sf_count_t(count)) != sf_count_t(count))
+         throw std::runtime_error("Could not write the video export's audio intermediate (disk full or write error).");
+      written += count;
+      progress.OnProgress(double(written) / frames);
+      if (progress.IsCancelled()) return false;
+   }
+   if (file.close() != 0) throw std::runtime_error("Could not finish the video export's audio intermediate.");
+   if (!output.Close()) throw std::runtime_error("Could not close the video export's audio intermediate.");
+   return true;
+}
 
 // Quote a single CreateProcess argument using the Windows C runtime rules.
 // No command shell is involved, including for filenames containing metacharacters.
@@ -474,6 +525,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTim
    double projectVideoDuration, const wxString &destination, bool overwrite, wxWindow *parent,
    const ExportSettings &settings, double projectAudioStart)
 {
+   ClipActions::MediaDialogCommandGuard commands;
    RequireUsableExportSettings(settings);
    // Clip-only exports keep their selected picture and its fades, while mixing
    // the audible project audio over the original project-time window.
@@ -492,7 +544,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTim
       : PlanVideoExportFrames(timeline, duration, outputRate);
    const fs::path target = fs::absolute(fs::path(destination.ToStdWstring()));
    if (!std::isfinite(duration) || duration <= 0 || duration + 1e-7 < timeline.End() ||
-       timeline.sourcePath.empty() || destination.empty())
+       (!timeline.clips.empty() && timeline.sourcePath.empty()) || destination.empty())
       throw std::runtime_error("Choose video clips and an output filename before exporting.");
    const auto extension = wxString(target.extension().wstring()).Lower();
    if (extension != ".mp4" && extension != ".mkv")
@@ -526,8 +578,6 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTim
       throw std::runtime_error("The output already exists. Choose another name or allow overwrite.");
    const auto executable = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPathWithSep() + "ffmpeg.exe";
    if (!wxFileExists(executable)) throw std::runtime_error("The bundled ffmpeg.exe is missing. Reinstall AuTopsy.");
-   const auto [plugin, format] = ExportPluginRegistry::Get().FindFormat("WAV");
-   if (!plugin) throw std::runtime_error("The WAV export module is unavailable.");
 
    std::optional<std::pair<int,int>> pictureSize;
    std::optional<size_t> autoCanvasInput;
@@ -555,19 +605,7 @@ bool ExportMix(AudacityProject &project, const VideoTimeline::Timeline &inputTim
    ExportWorkspace workspace{ target };
    const auto mix = workspace.path / "_mix.wav";
    const auto result = workspace.path / (extension == ".mp4" ? "_result.mp4" : "_result.mkv");
-   {
-      // A floating-point intermediate retains mix headroom. The existing mixer
-      // supplies track/master effects, time stretching, mute/solo, gain and pan.
-      auto task = ExportTaskBuilder{}.SetPlugin(plugin, format)
-         .SetFileName(wxFileName(wxString(mix.wstring())))
-         .SetRange(projectAudioStart, projectAudioStart + duration, false)
-         .SetNumChannels(2).SetSampleRate(48000)
-         .SetParameters({ { SF_FORMAT_WAV, int(SF_FORMAT_FLOAT) } }).Build(project);
-      MixProgress progress{ parent };
-      auto outcome = task.get_future();
-      task(progress);
-      if (outcome.get() != ExportResult::Success) return false;
-   }
+   if (!WriteProjectAudioRange(project, mix, projectAudioStart, duration, parent)) return false;
    std::wostringstream seconds;
    seconds.imbue(std::locale::classic());
    seconds << std::setprecision(17) << duration;

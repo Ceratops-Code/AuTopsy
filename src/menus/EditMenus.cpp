@@ -41,6 +41,9 @@
 #include "Sequence.h"
 #include "UserException.h"
 #include "Viewport.h"
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+#include "../clip-groups/ApplyRippleDeletion.h"
+#endif
 
 #include <wx/clipbrd.h>
 #include <wx/frame.h>
@@ -383,10 +386,11 @@ void OnCut(const CommandContext &context)
 void OnRippleDelete(const CommandContext &context)
 {
    auto &project = context.project;
-   if (!PermitTimingEdit(project, ClipActions::TimingEditScope::Following, true)) return;
 #ifdef AUTOPSY_HAS_VIDEO_PREVIEW
-   VideoTimeline::SelectVideoClipForDeletion(project);
-#endif
+   try { ClipGroups::DeleteMediaRangeClosingGap(project); }
+   catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); }
+#else
+   if (!PermitTimingEdit(project, ClipActions::TimingEditScope::Following, true)) return;
    auto &tracks = TrackList::Get( project );
    auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
 
@@ -406,7 +410,16 @@ void OnRippleDelete(const CommandContext &context)
       XO("Deleted %.2f seconds at t=%.2f")
          .Format( seconds, selectedRegion.t0()),
       XO("Delete"));
+#endif
 }
+
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+void OnRippleDeleteProject(const CommandContext &context)
+{
+   try { ClipGroups::DeleteMediaRangeClosingGap(context.project, true); }
+   catch (const std::exception &error) { context.Error(wxString::FromUTF8(error.what())); }
+}
+#endif
 
 void OnSplitDelete(const CommandContext &context);
 bool DeleteSelectionLeavingGap(const CommandContext &context);
@@ -1306,6 +1319,10 @@ auto EditMenu()
                   /* i18n-hint: (verb) Do a special kind of DELETE*/
                   Command( wxT("RippleDelete"), XXO("Ripple Delete (Close Gap)"), OnRippleDelete,
                       NotBusyTimeAndTracksFlags, Options{ wxT("Ctrl+Delete") } ),
+#ifdef AUTOPSY_HAS_VIDEO_PREVIEW
+                   Command( wxT("RippleDeleteProject"), XXO("Ripple Delete across Whole Project"), OnRippleDeleteProject,
+                      NotBusyTimeAndTracksFlags ),
+#endif
                   Command( wxT("SplitDelete"), XXO("&Delete and leave gap"), OnSplitDelete,
                      NotBusyTimeAndTracksFlags,
                      Options{ wxT("Ctrl+Alt+K") } )

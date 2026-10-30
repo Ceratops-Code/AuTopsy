@@ -7,7 +7,8 @@
 #include <wx/stattext.h>
 #include <algorithm>
 namespace VideoExport {
-std::optional<ExportSettings> ChooseVideoExport(wxWindow *parent, ExportSettings settings)
+std::optional<ExportSettings> ChooseVideoExport(wxWindow *parent, ExportSettings settings,
+   ExportRangeChoice *range)
 {
    wxDialog dialog{parent, wxID_ANY, _("Video Export Settings")};
    auto *layout = new wxBoxSizer{wxVERTICAL};
@@ -20,6 +21,17 @@ std::optional<ExportSettings> ChooseVideoExport(wxWindow *parent, ExportSettings
       rows->Add(new wxStaticText{&dialog, wxID_ANY, label}, 0, wxALIGN_CENTER_VERTICAL);
       rows->Add(control, 1, wxEXPAND);
    };
+   wxChoice *scope{};
+   if (range) {
+      scope = new wxChoice{&dialog, wxID_ANY};
+      scope->Append(_("Entire project"));
+      const bool hasRange = range->end > range->start;
+      if (hasRange) scope->Append(wxString::Format(
+         _("Current selection (%.3f to %.3f seconds)"), range->start, range->end));
+      scope->SetSelection(hasRange && range->selectedOnly ? 1 : 0);
+      scope->SetName(_("Video export range"));
+      row(_("Export range"), scope);
+   }
    const std::vector<std::string> names{"auto","h264","hevc","av1","h264-nvenc","hevc-nvenc"};
    auto *preset = new wxChoice{&dialog, wxID_ANY};
    for (const auto *name : {"Automatic (copy unchanged picture; H.264 for edits)",
@@ -45,7 +57,11 @@ std::optional<ExportSettings> ChooseVideoExport(wxWindow *parent, ExportSettings
    while (dialog.ShowModal() == wxID_OK) {
       settings = {names.at(preset->GetSelection()), width->GetValue(), height->GetValue(),
          rate->GetValue(), quality->GetValue()};
-      try { RequireUsableExportSettings(settings); return settings; }
+      try {
+         RequireUsableExportSettings(settings);
+         if (range) range->selectedOnly = scope->GetSelection() == 1;
+         return settings;
+      }
       catch (const std::exception &error) {
          wxMessageBox(wxString::FromUTF8(error.what()), _("Video Export Settings"),
             wxOK | wxICON_ERROR, &dialog);

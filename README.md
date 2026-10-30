@@ -330,6 +330,10 @@ pipes, so it can run alongside an installed copy of Audacity.
    starting playback also brings it back. Delete a video track using its normal
    close button or **Tracks > Remove Tracks**.
 5. Choose **File > Export Video with Audio Mix...** to save MP4 or MKV.
+   **Export range** offers the entire project or the current time selection;
+   a nonempty selection is selected by default. The output starts at zero and
+   includes the composed visible picture and all audio you would hear in that
+   interval, regardless of which tracks are selected. Picture gaps become black.
    Auto copies unchanged picture without re-encoding, including adjacent
    splits. Edited picture defaults to H.264. The export dialog also offers HEVC,
    AV1, and NVIDIA H.264/HEVC, with resolution, frame rate and quality controls.
@@ -583,6 +587,20 @@ an absolute move to the same start, or deletion of an absent ID makes no change.
 With a video track and time range selected, `HealVideoSplit`, `JoinVideoClips`
 and `SeparateVideoClips` call the same structural operations. `GetVideoClips`
 also reports `joined` and the retained direct `pieces` count for each clip.
+
+## Clip names and coordinated ripple deletion
+
+Right-click a video clip and choose **Clip Name and Colour...** to label it and
+pick a header colour. Clear the name to show its source name; **Use default clip
+colour** restores the usual appearance. These are editing labels, with Undo,
+clipboard and project-save support; they do not alter the exported picture.
+
+**Ctrl+Delete** / **Ripple Delete (Close Gap)** removes the selected time from
+selected tracks, native sync-lock tracks, linked audio/video partners and tied
+embedded-video tracks. Other tracks keep their times. Use **Edit > Remove Special
+> Ripple Delete across Whole Project** when every editable track should close the
+gap. An affected locked clip rejects the whole edit. Ordinary **Delete** still
+leaves a gap. One Undo restores the complete ripple edit.
 
 ## Undo and Redo
 

@@ -33,6 +33,7 @@ public:
    const VideoTimeline::Timeline &Timeline() const { return mTimeline; }
    uint64_t PictureRevision() const { return mPictureRevision; }
    void SetTimeline(VideoTimeline::Timeline timeline);
+   bool SetClipAppearance(uint64_t id, const VideoEditing::VideoClipAppearance &appearance);
    bool VideoVisible() const { return mVisible; }
    void SetVideoVisible(bool visible);
    bool VideoSolo() const { return mSolo; }

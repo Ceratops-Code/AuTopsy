@@ -166,6 +166,7 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    PlanVideoEdits.cpp PlanVideoEdits.h EvaluateVideoTimeline.cpp EvaluateVideoTimeline.h
    RenderVideoComposition.cpp RenderVideoComposition.h EditVideoComposition.cpp EditVideoComposition.h
    ShowVideoCrop.cpp ShowVideoCrop.h
+   EditVideoClipAppearance.cpp EditVideoClipAppearance.h
    PrepareVideoEffects.cpp PrepareVideoEffects.h
    PrepareGeneratedVideo.cpp PrepareGeneratedVideo.h
    ../update/CheckProductUpdates.cpp ../update/CheckProductUpdates.h ../update/ChooseProductUpdate.h
@@ -175,6 +176,8 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    PrepareVideoPreview.cpp PrepareVideoPreview.h ShowVideoTrack.cpp ShowVideoTrack.h
    CreateVideoTrack.cpp CreateVideoTrack.h ChooseVideoExport.cpp ChooseVideoExport.h RelinkVideoMedia.cpp RelinkVideoMedia.h
    ../clip-groups/LinkMediaClips.cpp ../clip-groups/LinkMediaClips.h
+   ../clip-groups/ApplyRippleDeletion.cpp ../clip-groups/ApplyRippleDeletion.h
+   ../clip-groups/PlanRippleDeletion.h
    ../clip-groups/EditClipMarkers.cpp ../clip-groups/EditClipMarkers.h)
 target_include_directories(Audacity PRIVATE "${audacity_video_mpv_include}")
 target_link_libraries(Audacity PRIVATE bcrypt winhttp)

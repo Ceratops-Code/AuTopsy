@@ -60,6 +60,7 @@ from test_clip_actions import (
     check_video_clip_export,
 )
 from test_clip_selection import check_clip_selection
+from test_clip_workflows import CLIP_WORKFLOW_CASES, check_clip_workflow
 from test_preview_controls import (
     check_preview_controls,
     check_preview_quality,
@@ -159,6 +160,7 @@ def check_project_compatibility(client, root):
     client.file("ImportVideo", root / "source.mp4")
     client.file("Import2", root / "tone-b.wav")
     client.send('GroupAudioClips: Clips="1:0,2:0"')
+    client.send('SetVideoClipAppearance: Track=0 Id="1" Name="Compatibility clip" Colour=15577088')
     for track, marker in ((0, "c" * 32), (1, "d" * 32)):
         client.send(f'AddClipMarker: Track={track} At=1 Text="Compatibility flag" Id="{marker}"')
     client.send("SelectTime: Start=0.5 End=1.5")
@@ -1041,6 +1043,8 @@ def worker(args, root):
         check_collect_media(client, root)
     elif args.case == "video-fades":
         check_video_fades(client, root, args.ffmpeg, args.ffprobe)
+    elif args.case in CLIP_WORKFLOW_CASES:
+        check_clip_workflow(client, root, args.ffmpeg, args.ffprobe, args.case)
     elif args.case in GENERATOR_CASES:
         check_video_generator(client, root, args.ffmpeg, args.ffprobe, args.case)
     elif args.case in ("video-embedding", "video-embedding-controls"):

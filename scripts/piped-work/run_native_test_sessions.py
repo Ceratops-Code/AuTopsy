@@ -46,6 +46,7 @@ from run_fork_test_harness import (
     write_tone,
 )
 from test_beginner_edits import BEGINNER_VIDEO_CASES
+from test_clip_workflows import CLIP_WORKFLOW_CASES
 from test_video_captions import CAPTION_CASES, caption_test_inputs
 from test_video_generators import GENERATOR_CASES
 from test_video_recording import VIDEO_RECORDING_CASES
@@ -115,6 +116,10 @@ def native_test_inputs(args, executable, module, display, case_api):
         inputs["beginner_edits_sha256"] = sha(here / "test_beginner_edits.py")
         inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
         inputs["clip_edits_sha256"] = sha(here / "test_video_clip_edits.py")
+    if args.case in CLIP_WORKFLOW_CASES:
+        inputs["clip_workflows_sha256"] = sha(here / "test_clip_workflows.py")
+        inputs["beginner_edits_sha256"] = sha(here / "test_beginner_edits.py")
+        inputs["clip_actions_sha256"] = sha(here / "test_clip_actions.py")
     if args.case in ("video-export-timing", "video-vfr-export", "video-encoder-boundaries"):
         inputs["export_timing_sha256"] = sha(here / "test_video_export_timing.py")
     if args.case in ("preview-controls", "preview-quality", "video-cursor", "preview-soak"):
@@ -215,6 +220,7 @@ NATIVE_CASES = (
     "video-audio-join-links",
     "video-preview-close",
     *BEGINNER_VIDEO_CASES,
+    *CLIP_WORKFLOW_CASES,
     "display-guard",
     "groups",
     "tracks",
@@ -236,6 +242,7 @@ NATIVE_CASES = (
 
 
 SHARED_PROJECT_CASES = frozenset({
+    *CLIP_WORKFLOW_CASES,
     "video-reverse", "video-freeze", "video-repeat", "video-text",
     "video-caption-interchange", "video-caption-hebrew", "video-caption-warp",
     "video-selection", "video-edges", "video-linked-edges", "video-split-edges",
@@ -545,7 +552,7 @@ def build_case_media(args, destination):
         ("tone-stereo.wav", 2),
     ):
         write_tone(destination / name, channels)
-    if args.case in BEGINNER_VIDEO_CASES or args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
+    if args.case in (*BEGINNER_VIDEO_CASES, *CLIP_WORKFLOW_CASES) or args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "clip-selection", "video-clip-export", "edit-cursor-line", "video", "video-selection", "video-edges", "video-linked-edges", "video-split-edges", "video-linked-split-edges", "video-clip-edits", "video-linked-clip-edits", "video-compound-render", "video-clipboard", "video-track-menu", "video-transport", "video-visibility", "video-speed", "video-speed-storage", "video-clip-storage", "video-parent-links", "media", "project-compatibility"):
         run_process(
             [
                 args.ffmpeg,
@@ -605,7 +612,7 @@ def build_case_media(args, destination):
 
 def prepare_case_media(args, root):
     """Reuse exact recipe/tool bytes; application acceptance is independent."""
-    small = args.case in BEGINNER_VIDEO_CASES or args.case in (
+    small = args.case in (*BEGINNER_VIDEO_CASES, *CLIP_WORKFLOW_CASES) or args.case in (
         "video-preview-close", "video-audio-parity", "video-audio-join-links",
         "clip-selection", "video-clip-export", "edit-cursor-line", "video",
         "video-selection", "video-edges", "video-linked-edges", "video-split-edges",

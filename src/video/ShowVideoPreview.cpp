@@ -1129,6 +1129,7 @@ BuiltinCommandsModule::Registration<ImportVideoCommand> sImportVideoCommand;
 class ExportVideoMixCommand final : public AudacityCommand {
    wxString mFileName;
    bool mOverwrite{};
+   bool mSelectedOnly{};
    wxString mPreset{"auto"};
    int mWidth{}, mHeight{}, mQuality{23};
    double mFrameRate{};
@@ -1141,6 +1142,7 @@ public:
    {
       visitor.Define(mFileName, wxT("Filename"), wxString{});
       visitor.Define(mOverwrite, wxT("Overwrite"), false);
+      visitor.Define(mSelectedOnly, wxT("SelectedOnly"), false);
       visitor.Define(mPreset, wxT("Preset"), wxString{"auto"});
       // Keep rejected values for the owned policy below. The inherited loader
       // offers defaults in a modal dialog for out-of-range numeric settings;
@@ -1173,9 +1175,12 @@ public:
       if (dialog.ShowModal() != wxID_OK) return false;
       mFileName = dialog.GetPath();
       mOverwrite = wxFileExists(mFileName);
-      const auto settings = VideoExport::ChooseVideoExport(&ProjectWindow::Get(project),
-         {Utf8(mPreset), mWidth, mHeight, mFrameRate, mQuality});
+       const auto &selection = ViewInfo::Get(project).selectedRegion;
+       VideoExport::ExportRangeChoice range{selection.t0(), selection.t1(), !selection.isPoint()};
+       const auto settings = VideoExport::ChooseVideoExport(&ProjectWindow::Get(project),
+          {Utf8(mPreset), mWidth, mHeight, mFrameRate, mQuality}, &range);
       if (!settings) return false;
+       mSelectedOnly = range.selectedOnly;
       mPreset = wxString::FromUTF8(settings->preset);
       mWidth = settings->width; mHeight = settings->height;
       mFrameRate = settings->frameRate; mQuality = settings->quality;
@@ -1191,16 +1196,22 @@ public:
       try {
           VideoExport::RequireUsableExportSettings(
              {Utf8(mPreset), mWidth, mHeight, mFrameRate, mQuality});
-          auto effects = VideoEditing::PrepareProjectVideoExport(context.project, VideoTimeline::GetProjectVisibleVideoLayers(context.project),
-             VideoTimeline::GetProjectVideoDuration(context.project),
+           const auto &selection = ViewInfo::Get(context.project).selectedRegion;
+           const auto plan = VideoTimeline::PlanVideoRangeExport(
+              VideoTimeline::GetProjectVisibleVideoLayers(context.project), timeline,
+              mSelectedOnly ? selection.t0() : 0,
+              mSelectedOnly ? selection.t1() : VideoTimeline::GetProjectVideoDuration(context.project));
+           std::vector<const VideoTimeline::Timeline*> layers;
+           for (const auto &layer : plan.layers) layers.push_back(&layer);
+           auto effects = VideoEditing::PrepareProjectVideoExport(context.project, layers, plan.duration,
              {mWidth, mHeight, 0, mFrameRate > 0 ? mFrameRate : timeline.frameRate, true},
              &ProjectWindow::Get(context.project));
-          auto rendering = effects ? effects->timeline : timeline;
+           auto rendering = effects ? effects->timeline : plan.picture;
           rendering.protectedSourcePaths.insert(rendering.protectedSourcePaths.end(),
-             timeline.protectedSourcePaths.begin(), timeline.protectedSourcePaths.end());
+              plan.picture.protectedSourcePaths.begin(), plan.picture.protectedSourcePaths.end());
           const bool exported = VideoExport::ExportMix(context.project, rendering,
-            VideoTimeline::GetProjectVideoDuration(context.project), mFileName, mOverwrite, &ProjectWindow::Get(context.project),
-            {Utf8(mPreset), mWidth, mHeight, mFrameRate, mQuality});
+             plan.duration, mFileName, mOverwrite, &ProjectWindow::Get(context.project),
+             {Utf8(mPreset), mWidth, mHeight, mFrameRate, mQuality}, plan.projectStart);
          if (exported) context.Status(_("Exported video with the project audio mix: ") + mFileName);
          return exported;
       }

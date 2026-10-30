@@ -684,6 +684,8 @@ public:
                out.Key("sourceStart"); out.Double(clip.sourceStart); out.Key("duration"); out.Double(clip.duration);
                 out.Key("playbackRate"); out.Double(clip.playbackRate);
                out.Key("muted"); out.Bool(clip.muted);
+               out.Key("name"); out.String(clip.appearance.name.c_str());
+               out.Key("colour"); out.Int(clip.appearance.rgb);
                out.Key("fades"); out.StartObject();
                out.Key("inStart"); out.Double(clip.opacity.inStart);
                out.Key("inDuration"); out.Double(clip.opacity.inDuration);
