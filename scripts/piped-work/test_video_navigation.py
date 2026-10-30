@@ -224,6 +224,27 @@ def check_flag_navigation(client, root):
     assert client.data("GetClipMarkers") == renamed
     client.send("Redo")
     assert client.data("GetClipMarkers") == removed
+    # Navigation must expose an off-screen track, rather than merely moving the
+    # time cursor on whichever unrelated rows happen to be visible already.
+    for _ in range(8):
+        client.send("NewMonoTrack")
+    client.file("Import2", root / "tone-a.wav")
+    lower = max(row["track"] for row in client.data("GetInfo: Type=Clips Format=JSON"))
+    client.send(f'AddClipMarker: Track={lower} At=2.5 Text="Lower sound" Id="' + "d" * 32 + '"')
+    before_jump = client.data("GetVideoPreviewInfo")
+    zoom_width = before_jump["viewEnd"] - before_jump["viewStart"]
+    client.send("SelectTime: Start=0 End=0")
+    client.send("NextClipFlag")
+    assert selection_time(client) == .5
+    upper = client.data("GetVideoPreviewInfo")["videoTrackRows"][0]
+    assert upper["y"] >= 0 and upper["height"] > 0, upper
+    client.send("NextClipFlag")
+    assert selection_time(client) == 2.5
+    lower_view = client.data("GetVideoPreviewInfo")
+    upper = lower_view["videoTrackRows"][0]
+    assert upper["y"] < 0 or upper["height"] == 0, upper
+    assert abs(lower_view["viewEnd"] - lower_view["viewStart"] - zoom_width) < .0001
+    removed = client.data("GetClipMarkers")
     save_reopen(client, root / "_flag-navigation.aup3")
     assert client.data("GetClipMarkers") == removed
     client.send("Save")

@@ -141,7 +141,8 @@ void JumpToFlag(AudacityProject &project, const FlagTarget &target)
    SelectUtilities::SelectNone(project); clip.track->SetSelected(true);
    TrackFocus::Get(project).Set(clip.track, false);
    ViewInfo::Get(project).selectedRegion.setTimes(time, time);
-   Viewport::Get(project).ScrollIntoView(time); Viewport::Get(project).Redraw();
+   auto &viewport = Viewport::Get(project);
+   viewport.ShowTrack(*clip.track); viewport.ScrollIntoView(time); viewport.Redraw();
 }
 bool RenameFlag(AudacityProject &project, const FlagTarget &target, const wxString &text)
 {
