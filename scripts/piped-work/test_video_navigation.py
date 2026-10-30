@@ -91,6 +91,11 @@ def check_picture_slip(client, root, ffmpeg):
         def cancel(windows, dialog):
             fields = [h for h in windows.windows(dialog) if windows.kind(h) == "Edit"]
             assert len(fields) == 1
+            windows.text(fields[0], "1")
+            windows.click(windows.button(dialog, "+1 frame"))
+            assert abs(float(windows.control_text(fields[0])) - (1 + 1 / 30)) < .000001
+            windows.click(windows.button(dialog, "-1 frame"))
+            assert float(windows.control_text(fields[0])) == 1
             windows.text(fields[0], "1.25")
             windows.click(windows.button(dialog, "Cancel"))
         with_native_dialog(lambda: operate_owned_video_track(client, 1.5, track=track,
@@ -99,6 +104,12 @@ def check_picture_slip(client, root, ffmpeg):
     def apply(windows, dialog):
         fields = [h for h in windows.windows(dialog) if windows.kind(h) == "Edit"]
         assert len(fields) == 1
+        for bad in ("not a number", "3"):
+            windows.text(fields[0], bad)
+            button = windows.button(dialog, "OK")
+            with_native_dialog(lambda: windows.api.PostMessageW(button, 0xF5, 0, 0), "Invalid Picture Source",
+                lambda error_windows, error_dialog: error_windows.click(error_windows.button(error_dialog, "OK")))
+            assert windows.visible(dialog), "An invalid source closed the edit dialog."
         windows.text(fields[0], "1.5")
         windows.click(windows.button(dialog, "OK"))
     with_native_dialog(lambda: operate_owned_video_track(client, 1.5, track=track,

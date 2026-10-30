@@ -79,7 +79,7 @@ void ShowVideoPictureSlip(AudacityProject &project, AuTopsyVideoTrack &track,
          ChangeVideoPictureSource(project, track, clipId, value); dialog.EndModal(wxID_OK);
       }
       catch (const VideoPreview::PreviewPreparationCancelled &) {}
-      catch (const std::exception &error) { wxMessageBox(wxString::FromUTF8(error.what()), _("Slip Picture"), wxOK | wxICON_ERROR, &dialog); }
+      catch (const std::exception &error) { wxMessageBox(wxString::FromUTF8(error.what()), _("Invalid Picture Source"), wxOK | wxICON_ERROR, &dialog); }
    }, wxID_OK);
    dialog.ShowModal();
 }
