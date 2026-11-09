@@ -28,7 +28,7 @@ repository:
         tools: [uv, node, npm]
       steps:
         - run: [uv, sync, --project, scripts, --locked]
-        - run: [npm, ci, --prefix, scripts]
+        - run: [uv, run, --project, scripts, --locked, python, -c, "import shutil, subprocess, sys; tool = shutil.which(sys.argv[1]); sys.exit(subprocess.call([tool, *sys.argv[2:]]) if tool else f'{sys.argv[1]} is not on PATH')", npm, ci, --prefix, scripts]
     pre-build-checks:
       check-groups:
         shellcheck:
