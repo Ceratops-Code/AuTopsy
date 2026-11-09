@@ -1,4 +1,4 @@
-version: 4
+version: 5
 kind: ceratops-sdlc
 repository:
   capabilities:
@@ -22,39 +22,41 @@ repository:
             - --project
             - scripts
             - --locked
-    validate:
-      requires:
-        capabilities:
-          - uv
-          - shellcheck
-      steps:
-        - run:
-            - uv
-            - run
-            - --locked
-            - scripts/validate-repository.py
-      validation-capabilities:
-        - shellcheck
-    test:
-      requires:
-        capabilities:
-          - uv
-          - cmake
-          - ctest
-      steps:
-        - run:
-            - uv
-            - run
-            - --project
-            - scripts
-            - --locked
-            - python
-            - scripts/run_affected_tests.py
+    pre-build-checks:
+      check-groups:
+        source:
+          requires:
+            capabilities:
+              - uv
+              - shellcheck
+          steps:
+            - run:
+                - uv
+                - run
+                - --locked
+                - scripts/validate-repository.py
+          validation-capabilities:
+            - shellcheck
+        tests:
+          requires:
+            capabilities:
+              - uv
+              - cmake
+              - ctest
+          steps:
+            - run:
+                - uv
+                - run
+                - --project
+                - scripts
+                - --locked
+                - python
+                - scripts/run_affected_tests.py
 deliverables:
   packages:
     windows-installer:
-      source: .
-      prerequisites: []
+      root-dir: .
+      build-after: []
       artifact:
         type: windows-installer
         output-directory: .build/_windows-installer/package
@@ -82,10 +84,12 @@ deliverables:
                 - "{build_dir}"
                 - --inno-compiler
                 - "{inno_compiler}"
-        test:
-          requires:
-            capabilities: []
-          no-op: The repository tests exercise the portable installer builder. Every new installer build must pass fork-fixtures before packaging and records that result in its build manifest.
+        pre-build-checks:
+          check-groups:
+            tests:
+              requires:
+                capabilities: []
+              no-op: The repository tests exercise the portable installer builder. Every new installer build must pass fork-fixtures before packaging and records that result in its build manifest.
         publish:
           requires:
             capabilities: [uv]
@@ -103,18 +107,20 @@ deliverables:
                 - --publish-installer
   apps:
     autopsy:
-      source: .
+      root-dir: .
       manifest: win/Inno_Setup_Wizard/audacity.iss.in
-      prerequisites: [windows-installer]
+      build-after: [deliverables.packages.windows-installer]
       actions:
-        validate:
-          requires:
-            capabilities: []
-          no-op: Installer payload checks belong to the windows-installer package; there is no separate application scan.
-        test:
-          requires:
-            capabilities: []
-          no-op: Each prerequisite installer build checks its synthetic media before packaging; repository tests cover the portable feature models and builder.
+        pre-build-checks:
+          check-groups:
+            source:
+              requires:
+                capabilities: []
+              no-op: Installer payload checks belong to the windows-installer package; there is no separate application scan.
+            tests:
+              requires:
+                capabilities: []
+              no-op: Each prerequisite installer build checks its synthetic media before packaging; repository tests cover the portable feature models and builder.
         install:
           requires:
             capabilities: []
