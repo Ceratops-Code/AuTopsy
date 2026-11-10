@@ -86,7 +86,7 @@ GROUPS = (
         "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
         "scripts/piped-work/pipeclient.py")),
     CheckGroup("affected-test-selection", (
-        "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py",
+        "scripts/test_run_affected_tests.py", "scripts/run_affected_tests.py", "scripts/*repository*.py",
         "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_native_test_sessions.py",
         "scripts/piped-work/run_fork_test_harness.py", "scripts/piped-work/pipeclient.py",
         "scripts/piped-work/test_video_clip_edits.py", "scripts/piped-work/test_video_transport.py", "scripts/piped-work/test_preview_controls.py",

@@ -18,7 +18,6 @@ members = []
 target-version = "py314"
 # Own the fork tooling; inherited scripting examples keep their upstream policy.
 include = [
-  "scripts/validate-repository.py",
   "scripts/run-actionlint.py",
   "scripts/run_affected_tests.py",
   "scripts/test_run_affected_tests.py",
@@ -45,7 +44,6 @@ ignore = ["E501"]
 # The GUI test driver targets Win32 even when lint runs on a Linux host.
 platform = "win32"
 files = [
-  "scripts/validate-repository.py",
   "scripts/run-actionlint.py",
   "scripts/run_affected_tests.py",
   "scripts/test_run_affected_tests.py",
