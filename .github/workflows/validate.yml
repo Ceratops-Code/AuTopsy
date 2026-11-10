@@ -48,7 +48,7 @@ jobs:
           }
           shellcheck --version
       - name: Validate and test through SDLC
-        uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@315e68f6b915781a8e36f12bc97206a552eed4a3 # revision 315e68f6b915
+        uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@1a6ce3995e79b5adc5fa02301e0389e7e9eca500 # revision 1a6ce3995e79
         env:
           AUTOPSY_TEST_LEVEL: beta
           GH_TOKEN: ${{ github.token }}
