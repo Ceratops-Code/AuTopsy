@@ -40,7 +40,7 @@ finally:
     stream.Close()
 """
     run_process(["uv", "run", "--project", str(Path(__file__).resolve().parents[1]),
-        "--locked", "--python", "3.12", "python", "-c", speech_code, str(speech)], timeout=45)
+        "--locked", "python", "-c", speech_code, str(speech)], timeout=45)
     return speech
 
 
