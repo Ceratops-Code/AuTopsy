@@ -194,8 +194,6 @@ deliverables:
                 - --project
                 - scripts
                 - --locked
-                - --python
-                - '3.12'
                 - --with
                 - cmake==3.31.10
                 - python
@@ -221,8 +219,6 @@ deliverables:
                 - --project
                 - scripts
                 - --locked
-                - --python
-                - '3.12'
                 - python
                 - scripts/build/windows/build_video_installer.py
                 - --publish-installer
