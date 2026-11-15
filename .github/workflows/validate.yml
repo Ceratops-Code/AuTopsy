@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   validate-repository:
+    timeout-minutes: 90
     name: AuTopsy checks (${{ matrix.os }})
     strategy:
       fail-fast: false
