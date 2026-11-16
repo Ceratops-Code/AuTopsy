@@ -30,7 +30,7 @@ Owner: AuTopsy maintainers.
     {"path": "src/video/TestVideoEdits.cpp", "role": "dedicated planner behavior evidence"},
     {"path": "src/video/TestVideoComposition.cpp", "role": "dedicated composition behavior evidence"},
     {"path": "scripts/run_affected_tests.py", "role": "portable test impact map and exact-input result reuse"},
-    {"path": "sdlc/sdlc.yml", "role": "local and CI check/build/publication entry points"},
+    {"path": ".ceratops/sdlc/sdlc.yml", "role": "local and CI check/build/publication entry points"},
     {"path": ".github/workflows/validate.yml", "role": "hosted build environments"}
   ],
   "update_triggers": ["clip model or persistence changes", "native adapter contract changes", "preview/export semantics changes", "dependency or deployment changes", "operation acceptance or quality measurements"],
@@ -1338,9 +1338,13 @@ Windows host; GitHub-hosted build/publication is already explicit here. A portfo
 landscape is unnecessary for this single system. A hand-maintained class diagram
 would duplicate evolving source without explaining another important boundary.
 
-[sdlc/sdlc.yml](../sdlc/sdlc.yml) owns local/CI checks and declared installer
+[.ceratops/sdlc/sdlc.yml](../.ceratops/sdlc/sdlc.yml) owns local/CI checks and declared installer
 build/publication. [The workflow](../.github/workflows/validate.yml) runs source
 checks on Linux/Windows and the requested unsigned installer on hosted Windows.
+The installer declaration covers `src` plus its CMake, native library, asset,
+license, Windows packaging and builder files. CI and dependency-bot configuration
+are outside that build-source list, so changing them alone does not request an
+installer build or its build-directory/compiler arguments.
 The builder uses pinned mpv/FFmpeg inputs. It compiles the native host, asks the
 existing affected-test runner for baseline and affected native checks, then
 packages the unchanged checked runtime. Baseline checks cover generated media,
