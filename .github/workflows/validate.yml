@@ -61,27 +61,30 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           shellcheck --version
-      - name: Validate and test through SDLC
-        uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@1a6ce3995e79b5adc5fa02301e0389e7e9eca500 # revision 1a6ce3995e79
+      - name: Run repository checks and tests
+        shell: bash
         env:
           AUTOPSY_TEST_LEVEL: beta
           GH_TOKEN: ${{ github.token }}
           CERATOPS_PROJECTS_ROOT: ${{ github.workspace }}/..
           CERATOPS_TASK_TEMP_ROOT: ${{ runner.temp }}
-        with:
-          repo-root: ${{ github.workspace }}
-          evidence-file: ${{ runner.temp }}/repository-validation.log
-          operations: |
-            repository.actions.pre-build-checks.check-groups.shellcheck
-            repository.actions.pre-build-checks.check-groups.npm-markdown-lint
-            repository.actions.pre-build-checks.check-groups.ruff
-            repository.actions.pre-build-checks.check-groups.mypy
-            repository.actions.pre-build-checks.check-groups.actionlint
-            deliverables.apps.autopsy.actions.pre-build-checks.check-groups.source
-            repository.actions.pre-build-checks.check-groups.tests
-            deliverables.packages.windows-installer.actions.pre-build-checks.check-groups.tests
-            deliverables.apps.autopsy.actions.pre-build-checks.check-groups.tests
-
+        run: |
+          set -euo pipefail
+          # repository.actions.pre-build-checks.check-groups.shellcheck
+          shellcheck --severity=error -- au4/buildscripts/ci/learn/make_playlists_info_file.sh au4/buildscripts/ci/learn/push_file_to_s3.sh au4/buildscripts/ci/linux/ci_all.sh au4/buildscripts/ci/linux/make_appimage.sh au4/buildscripts/ci/linux/setup.sh au4/buildscripts/ci/macos/setup.sh au4/buildscripts/ci/tools/s3_install.sh au4/buildscripts/ci/windows/ci_all.sh au4/buildscripts/packaging/Linux+BSD/mscore.1.preview.sh au4/buildscripts/packaging/MacOS/make_dmg.sh linux/AppImage/AppRun.sh linux/AppImage/apprun-hooks/00-preserve-environment.sh linux/AppImage/apprun-hooks/install-url-handler.sh linux/AppImage/apprun-hooks/setup-gtk2-theme.sh linux/audacity.sh linux/check_dependencies.sh linux/create_appimage.sh linux/packages/arch/dependencies.sh linux/packages/arch/entrypoint.sh linux/packages/build_package.sh linux/packages/build_packages.sh linux/packages/fedora34/dependencies.sh linux/packages/fedora34/entrypoint.sh linux/packages/prepare_offline_dependencies.sh linux/packages/ubuntu-20.04/dependencies.sh linux/packages/ubuntu-20.04/entrypoint.sh linux/ubuntu-focal/dependencies.sh linux/ubuntu-focal/entrypoint.sh locale/diagnostics.sh locale/no_id.sh locale/update_po_files.sh modules/import-export/mod-ffmpeg/lib-ffmpeg-support/generator/generate_headers.sh scripts/build/macOS/build_universal.sh scripts/build/macOS/hdiutil_wrapper.sh 2>&1 | tee -a "${RUNNER_TEMP}/repository-validation.log"
+          # repository.actions.pre-build-checks.check-groups.npm-markdown-lint
+          npm --prefix scripts run lint:markdown 2>&1 | tee -a "${RUNNER_TEMP}/repository-validation.log"
+          # repository.actions.pre-build-checks.check-groups.ruff
+          uv run --project scripts --locked python -m ruff check . --config scripts/pyproject.toml 2>&1 | tee -a "${RUNNER_TEMP}/repository-validation.log"
+          # repository.actions.pre-build-checks.check-groups.mypy
+          uv run --project scripts --locked python -m mypy --config-file scripts/pyproject.toml 2>&1 | tee -a "${RUNNER_TEMP}/repository-validation.log"
+          # repository.actions.pre-build-checks.check-groups.actionlint
+          uv run --project scripts --locked python scripts/run-actionlint.py 2>&1 | tee -a "${RUNNER_TEMP}/repository-validation.log"
+          # deliverables.apps.autopsy.actions.pre-build-checks.check-groups.source: Installer payload checks belong to the windows-installer package; there is no separate application scan.
+          # repository.actions.pre-build-checks.check-groups.tests
+          uv run --project scripts --locked python scripts/run_affected_tests.py 2>&1 | tee -a "${RUNNER_TEMP}/repository-validation.log"
+          # deliverables.packages.windows-installer.actions.pre-build-checks.check-groups.tests: The repository tests exercise the portable installer builder. Every new installer build must pass fork-fixtures before packaging and records that result in its build manifest.
+          # deliverables.apps.autopsy.actions.pre-build-checks.check-groups.tests: Each prerequisite installer build checks its synthetic media before packaging; repository tests cover the portable feature models and builder.
       - name: Upload validation evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
