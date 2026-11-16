@@ -9,7 +9,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 import zipfile
+from email.message import Message
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -543,6 +545,14 @@ class InstallerBuildTests(unittest.TestCase):
                 builder.download_archive({"url": incoming.as_uri(), "sha256": "0" * 64}, archive)
             self.assertEqual(archive.read_bytes(), b"old completed archive")
             self.assertFalse((root / "__sdk.zip.pending").exists())
+            url = "https://example.invalid/sdk.zip"
+            for _ in range(2):
+                with mock.patch.object(builder.urllib.request, "urlopen", side_effect=urllib.error.HTTPError(url, 404, "Not Found", Message(), None)), \
+                        self.assertRaisesRegex(RuntimeError, "Dependency download failed for https://example.invalid/sdk.zip: HTTP Error 404") as failure:
+                    builder.download_archive({"url": url, "sha256": "0" * 64}, archive)
+                self.assertIsInstance(failure.exception.__cause__, urllib.error.HTTPError)
+                self.assertEqual(archive.read_bytes(), b"old completed archive")
+                self.assertFalse((root / "__sdk.zip.pending").exists())
             unrelated = root / "_fixture"
             unrelated.mkdir()
             (unrelated / "user-file").write_bytes(b"keep")

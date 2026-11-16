@@ -366,7 +366,10 @@ must contain include/mpv/client.h and libmpv-2.dll at its top level.
 Windows package links are listed on [mpv's installation page](https://mpv.io/installation/).
 Also provide the Windows x64 FFmpeg 8.1 GPL shared runtime, including libx264,
 libx265 and libsvtav1 encoders, available from
-[BtbN's FFmpeg builds](https://github.com/BtbN/FFmpeg-Builds/releases).
+[FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases).
+The automated builder pins a monthly archive and its checksum; upstream retains
+monthly builds for two years, while ordinary daily builds expire after fourteen
+days. Refresh that pin before its retention window ends.
 Keep ffmpeg.exe, ffprobe.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
 swresample-6.dll, swscale-9.dll, avfilter-11.dll, avdevice-62.dll, and the
 distribution's LICENSE.txt together in the selected runtime directory.

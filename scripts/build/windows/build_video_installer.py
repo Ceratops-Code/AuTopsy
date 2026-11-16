@@ -33,8 +33,10 @@ SDK_INPUTS = {
         "kind": "7z",
     },
     "ffmpeg": {
-        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-n8.1.3-18-g46d899d7a0-win64-gpl-shared-8.1.zip",
-        "sha256": "36a621ed90a46a2c68af52418be101e8e74327d2784bb35b6cf3874d59b00067",
+        # Upstream retains monthly builds for two years; daily builds expire
+        # after fourteen days. Keep this checksum-bound release on that channel.
+        "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-win64-gpl-shared-8.1.zip",
+        "sha256": "3adc00b67118a8c4bdd6624a000e139df283b1eeb8b126fcec4849bd5b778dd4",
         "files": [
             "ffmpeg.exe", "ffprobe.exe", "avformat-62.dll", "avcodec-62.dll",
             "avutil-60.dll", "swresample-6.dll", "swscale-9.dll",
@@ -162,6 +164,8 @@ def download_archive(spec: dict, archive: Path) -> None:
         if sha256(pending) != spec["sha256"]:
             raise RuntimeError(f"Dependency download has unexpected contents: {spec['url']}")
         pending.replace(archive)
+    except OSError as error:
+        raise RuntimeError(f"Dependency download failed for {spec['url']}: {error}") from error
     finally:
         pending.unlink(missing_ok=True)
 
