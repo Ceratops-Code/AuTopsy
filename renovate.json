@@ -1,3 +1,10 @@
 {
-  "forkProcessing": "enabled"
+  "forkProcessing": "enabled",
+  "includePaths": [
+    ".github/workflows/validate.yml",
+    "scripts/package.json",
+    "scripts/package-lock.json",
+    "scripts/pyproject.toml",
+    "scripts/uv.lock"
+  ]
 }
