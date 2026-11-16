@@ -58,6 +58,14 @@ bool DeleteMediaRangeClosingGap(AudacityProject &project, bool wholeProject)
                // preference, which cannot weaken this operation's ripple policy.
                const auto begin = audio->SnapToSample(from), end = audio->SnapToSample(to);
                audio->SplitDelete(begin, end);
+               // A split can retain the right clip's hidden sequence origin
+               // before the cut. Native track shifting compares that origin,
+               // so move these trimmed followers by their audible boundary
+               // first; their earlier origins keep the later call from moving
+               // them twice. The native call still owns other clips and origin.
+               for (const auto &clip : audio->Intervals())
+                  if (clip->Start() < end && clip->GetPlayStartTime() >= end)
+                     clip->ShiftBy(begin - end);
                audio->ShiftBy(end, begin - end);
             }
             else track->Clear(from, to);
