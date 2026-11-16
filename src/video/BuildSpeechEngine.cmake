@@ -2,6 +2,9 @@
 # Models are downloaded only by an explicit caption operation, never by startup.
 function(autopsy_build_speech_engine)
    include(FetchContent)
+   # The embedded project's older minimum otherwise permits option() to discard
+   # this normal variable. Keep its static choice local to this worker build.
+   set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
    set(BUILD_SHARED_LIBS OFF)
    set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
    set(WHISPER_BUILD_EXAMPLES ON CACHE BOOL "" FORCE)
@@ -22,6 +25,12 @@ function(autopsy_build_speech_engine)
       URL_HASH SHA256=645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4
       EXCLUDE_FROM_ALL)
    FetchContent_MakeAvailable(autopsy_whisper)
+   foreach(library whisper ggml ggml-base ggml-cpu)
+      get_target_property(library_type ${library} TYPE)
+      if(NOT library_type STREQUAL "STATIC_LIBRARY")
+         message(FATAL_ERROR "The caption worker requires static ${library}; got ${library_type}")
+      endif()
+   endforeach()
    set_target_properties(whisper-cli PROPERTIES
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/_speech-worker")
    get_target_property(worker_directory Audacity RUNTIME_OUTPUT_DIRECTORY)

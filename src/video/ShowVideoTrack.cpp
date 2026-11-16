@@ -672,6 +672,8 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          // overwrite this shared handle; the menu keeps its original identity.
          const auto clipId = mId;
          const auto clickTime = mClickTime;
+         // The nested menu loop must not replace the range that opened it.
+         const auto selection = ViewInfo::Get(*project).selectedRegion;
          wxMenu menu;
          menu.Append(1,_("Cut")); menu.Append(2,_("Copy")); menu.Append(3,_("Paste"));
           menu.AppendSeparator(); menu.Append(4,_("Split at Cursor"));
@@ -780,7 +782,6 @@ UIHandle::Result VideoClipHandle::Release(const TrackPanelMouseEvent &event,Auda
          else if (choice >= 7 && choice <= 9) {
             const VideoEditing::VideoEditKind kinds[]{VideoEditing::VideoEditKind::HealClips,
                VideoEditing::VideoEditKind::JoinClips, VideoEditing::VideoEditKind::SeparateClips};
-            const auto &selection = ViewInfo::Get(*project).selectedRegion;
             EditSelectedVideoStructure(*project, kinds[choice - 7], selection.t0(), selection.t1());
          }
          else {
