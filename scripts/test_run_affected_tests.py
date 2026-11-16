@@ -266,6 +266,7 @@ class SelectionTests(unittest.TestCase):
                 run_probe(boundary, index)
 
     def test_expected_fault_stop_keeps_streams_and_never_stops_an_unacknowledged_app(self) -> None:
+        import itertools
         import threading
 
         import run_fork_test_harness as harness
@@ -278,9 +279,15 @@ class SelectionTests(unittest.TestCase):
                 if acknowledged:
                     event.set()
                 app = unittest.mock.Mock()
-                app.poll.side_effect = [None, 17]
+                ready = root / "_worker-ready"
+                # Model the app exit after the worker emitted both streams; a
+                # fixed polling count races Python startup on a busy machine.
+                app.poll.side_effect = (
+                    None if index == 0 or not ready.exists() else 17
+                    for index in itertools.count()
+                )
                 app.returncode = 17
-                command = [sys.executable, "-c", "import sys,time; print('started',flush=True); print('details',file=sys.stderr,flush=True); time.sleep(60)"]
+                command = [sys.executable, "-c", "import pathlib,sys,time; print('started',flush=True); print('details',file=sys.stderr,flush=True); pathlib.Path(sys.argv[1]).touch(); time.sleep(60)", str(ready)]
                 if acknowledged:
                     result = harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
                     self.assertIsNotNone(result.returncode)

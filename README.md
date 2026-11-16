@@ -180,7 +180,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for AuTopsy contributions and
 [upstream development documentation](https://audacity.gitbook.io/dev/) for the
 inherited audio engine.
 
-The SDLC contract in `sdlc/sdlc.yml` owns the same checks used locally and in CI.
+The SDLC contract in `.ceratops/sdlc/sdlc.yml` owns the same checks used locally and in CI.
 It runs the independent C++ feature tests with CMake/CTest, alongside headless
 screen-selection and worker-lifecycle cases. CMake owns the disposable
 `.build/_core` cache and updates it in place on each call; installers are separate

@@ -276,7 +276,7 @@ def compiled_runtime_inputs(source: Path, build: Path, configure: list[str], dep
                       "scripts/build/windows/build_video_installer.py"}
     files = {}
     for name in paths:
-        if not name or name in excluded_files or name.startswith(("docs/", ".github/", "sdlc/", "scripts/piped-work/")):
+        if not name or name in excluded_files or name.startswith(("docs/", ".github/", ".ceratops/sdlc/", "scripts/piped-work/")):
             continue
         path = source / name
         files[name] = sha256(path) if path.is_file() else "missing"

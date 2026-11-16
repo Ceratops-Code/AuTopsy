@@ -39,7 +39,7 @@ class CheckGroup:
 
 
 COMMON_INPUTS = (
-    "src/video/CMakeLists.txt", "sdlc/sdlc.yml",
+    "src/video/CMakeLists.txt", ".ceratops/sdlc/sdlc.yml",
     "scripts/pyproject.toml", "scripts/uv.lock", "tests/Catch2Main.cpp",
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/RenderVideoComposition.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
