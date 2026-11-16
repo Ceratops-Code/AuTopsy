@@ -1,6 +1,6 @@
 #include "EditTrackGroups.h"
 #include "RenderGroupWaveform.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <algorithm>
 #include <limits>
 #include <stdexcept>

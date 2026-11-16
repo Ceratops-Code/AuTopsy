@@ -5,7 +5,7 @@
 #include "PlanVideoTransitions.h"
 #include "../update/ChooseProductUpdate.h"
 #include "JoinVideoClips.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <limits>
 
 using namespace VideoEditing;
@@ -24,7 +24,7 @@ TEST_CASE("Separating nested picture envelopes preserves their product and saved
       REQUIRE(a); REQUIRE(b);
       const auto before = VideoTimeline::SampleVideoContent(*a, VideoTimeline::SourceFor(original, *a), a->ContentTimeAtProjectTime(at));
       const auto after = VideoTimeline::SampleVideoContent(*b, VideoTimeline::SourceFor(timeline, *b), b->ContentTimeAtProjectTime(at));
-      REQUIRE(after.opacity == Approx(before.opacity)); REQUIRE(after.sourceTime == Approx(before.sourceTime));
+      REQUIRE(after.opacity == Catch::Approx(before.opacity)); REQUIRE(after.sourceTime == Catch::Approx(before.sourceTime));
    }
    for (const auto &clip : timeline.clips) {
       REQUIRE_FALSE(clip.opacityModifiers.empty());
@@ -41,18 +41,18 @@ TEST_CASE("Picture opacity stays anchored through retained cuts and speed change
    const auto source = VideoTimeline::SourceFor(timeline, clip);
    VideoTimeline::RequireUsableVideoContent(clip, source);
    for (int repeat{}; repeat < 2; ++repeat) {
-      REQUIRE(VideoTimeline::SampleVideoContent(clip, source, .5).opacity == Approx(.25));
+      REQUIRE(VideoTimeline::SampleVideoContent(clip, source, .5).opacity == Catch::Approx(.25));
       auto right = clip; right.start = 5; right.sourceStart = 3; right.duration = 5;
       REQUIRE(VideoTimeline::SampleVideoContent(right, source, 3).opacity == 1);
       const auto fade = VideoTimeline::SampleVideoContent(right, source, 7);
-      REQUIRE(fade.opacity == Approx(.5));
-      REQUIRE(fade.opacityRamps.back().start == Approx(8));
-      REQUIRE(fade.opacityRamps.back().end == Approx(10));
+      REQUIRE(fade.opacity == Catch::Approx(.5));
+      REQUIRE(fade.opacityRamps.back().start == Catch::Approx(8));
+      REQUIRE(fade.opacityRamps.back().end == Catch::Approx(10));
       auto fast = clip; fast.playbackRate = 2; fast.duration = 4;
       const auto sample = VideoTimeline::SampleVideoContent(fast, source, 1);
-      REQUIRE(sample.opacity == Approx(.5));
-      REQUIRE(sample.opacityRamps.front().start == Approx(2));
-      REQUIRE(sample.opacityRamps.front().end == Approx(3));
+      REQUIRE(sample.opacity == Catch::Approx(.5));
+      REQUIRE(sample.opacityRamps.front().start == Catch::Approx(2));
+      REQUIRE(sample.opacityRamps.front().end == Catch::Approx(3));
    }
    auto different = clip; different.opacity.inDuration = 1;
    REQUIRE_FALSE(VideoTimeline::SameVideoContent(clip, different));
@@ -70,8 +70,8 @@ TEST_CASE("Nested fades multiply in one project clock without moving source samp
    VideoTimeline::Clip joined{1, 10, 0, 10}; joined.content = content; joined.opacity = {0, 4, 0, 0};
    VideoTimeline::RequireUsableVideoContent(joined, {});
    const auto sample = VideoTimeline::SampleVideoContent(joined, {}, 2.5);
-   REQUIRE(sample.sourceTime == Approx(.5));
-   REQUIRE(sample.opacity == Approx(.625 * .25));
+   REQUIRE(sample.sourceTime == Catch::Approx(.5));
+   REQUIRE(sample.opacity == Catch::Approx(.625 * .25));
    REQUIRE(sample.opacityRamps.size() == 2);
    REQUIRE(sample.opacityRamps[0].start == 10);
    REQUIRE(sample.opacityRamps[1].start == 12);
@@ -115,16 +115,16 @@ TEST_CASE("Picture crop handles retain an editable nonempty rectangle at every b
    const VideoFrameCrop original{.1, .2, .3, .1};
    for (int repeat{}; repeat < 2; ++repeat) {
       const auto left = DragVideoCropHandle(original, CropLeft, 20, 0, .001, .002);
-      REQUIRE(left.left == Approx(.699)); REQUIRE(left.right == original.right);
+      REQUIRE(left.left == Catch::Approx(.699)); REQUIRE(left.right == original.right);
       const auto corner = DragVideoCropHandle(original, CropRight | CropBottom, -20, -20, .001, .002);
-      REQUIRE(corner.right == Approx(.899)); REQUIRE(corner.bottom == Approx(.798));
+      REQUIRE(corner.right == Catch::Approx(.899)); REQUIRE(corner.bottom == Catch::Approx(.798));
       const auto restored = DragVideoCropHandle(left, CropLeft, -20, 0, .001, .002);
       REQUIRE(restored.left == 0); REQUIRE(restored.right == original.right);
       const auto moved = DragVideoCropHandle(original, CropMove, 20, -20, .001, .002);
-      REQUIRE(moved.left == Approx(.4)); REQUIRE(moved.right == 0);
-      REQUIRE(moved.top == 0); REQUIRE(moved.bottom == Approx(.3));
-      REQUIRE(1 - moved.left - moved.right == Approx(1 - original.left - original.right));
-      REQUIRE(1 - moved.top - moved.bottom == Approx(1 - original.top - original.bottom));
+      REQUIRE(moved.left == Catch::Approx(.4)); REQUIRE(moved.right == 0);
+      REQUIRE(moved.top == 0); REQUIRE(moved.bottom == Catch::Approx(.3));
+      REQUIRE(1 - moved.left - moved.right == Catch::Approx(1 - original.left - original.right));
+      REQUIRE(1 - moved.top - moved.bottom == Catch::Approx(1 - original.top - original.bottom));
       REQUIRE(DragVideoCropHandle(original, CropMove, 0, 0, .001, .002) == original);
    }
    REQUIRE_THROWS(DragVideoCropHandle(original, 0, 0, 0, .001, .002));
@@ -140,12 +140,12 @@ TEST_CASE("Retimed picture plans and flat exports agree on source clocks", "[vid
    VideoTimeline::ChangeVideoClipSpeed(front, 1, 2);
    const auto frame = EvaluateVideoTimeline(project, Settings(), 3.25);
    REQUIRE(frame.layers.size() == 2);
-   REQUIRE(frame.layers.back().sourceTime == Approx(2.5));
+   REQUIRE(frame.layers.back().sourceTime == Catch::Approx(2.5));
    REQUIRE(frame.layers.back().playbackRate == 2);
    const auto flattened = VideoTimeline::ComposeVideoTracks({&front, &project.tracks[1].timeline});
    const auto exported = VideoTimeline::EvaluateVideoLayers({&flattened}, 3.25);
    REQUIRE(exported.source.path == frame.layers.back().source.path);
-   REQUIRE(exported.sourceTime == Approx(frame.layers.back().sourceTime));
+   REQUIRE(exported.sourceTime == Catch::Approx(frame.layers.back().sourceTime));
    REQUIRE(exported.playbackRate == frame.layers.back().playbackRate);
    REQUIRE(EvaluateVideoTimeline(project, Settings(), 7.5).layers.size() == 1);
 }
@@ -204,9 +204,9 @@ TEST_CASE("Embedded layers resolve nested rectangles by parent identity and hide
    REQUIRE(frame.layers[1].trackId == "front");
    REQUIRE(frame.layers[2].trackId == "child");
    REQUIRE(frame.layers[3].trackId == "nested");
-   REQUIRE(frame.layers[3].rectangle.x == Approx(0.6));
-   REQUIRE(frame.layers[3].rectangle.y == Approx(0.5));
-   REQUIRE(frame.layers[3].rectangle.width == Approx(0.2));
+   REQUIRE(frame.layers[3].rectangle.x == Catch::Approx(0.6));
+   REQUIRE(frame.layers[3].rectangle.y == Catch::Approx(0.5));
+   REQUIRE(frame.layers[3].rectangle.width == Catch::Approx(0.2));
    VideoTimeline::MoveClipTo(project.tracks[0].timeline, 1, 3);
    REQUIRE(EvaluateVideoTimeline(project, settings, 1).layers.size() == 1);
    project.tracks[2].parentTrackId = "nested";
@@ -308,7 +308,7 @@ TEST_CASE("Native layer selection shares mute and solo precedence with compositi
             if (preview.clip) {
                REQUIRE(preview.source.path == composition.layers.back().source.path);
                REQUIRE(exported.source.path == preview.source.path);
-               REQUIRE(exported.sourceTime == Approx(preview.sourceTime));
+               REQUIRE(exported.sourceTime == Catch::Approx(preview.sourceTime));
             }
             REQUIRE(composition.duration == 25);
             REQUIRE(SameVideoProject(project, before));
@@ -370,9 +370,9 @@ TEST_CASE("Picture crop belongs to retained clips through join separate and copy
    const auto before = project;
    const auto left = EvaluateVideoTimeline(project, Settings(), 1).layers.back();
    const auto right = EvaluateVideoTimeline(project, Settings(), 6).layers.back();
-   REQUIRE(left.crop.left == Approx(0.25));
-   REQUIRE(right.crop.right == Approx(0.5));
-   REQUIRE(left.crop.top == Approx(0.2));
+   REQUIRE(left.crop.left == Catch::Approx(0.25));
+   REQUIRE(right.crop.right == Catch::Approx(0.5));
+   REQUIRE(left.crop.top == Catch::Approx(0.2));
    REQUIRE_FALSE(VideoTimeline::ChangeVideoClipCrop(timeline, timeline.clips[0].id, {0, 0.2, 0, 0.1}));
    REQUIRE(SameVideoProject(project, before));
    REQUIRE(VideoTimeline::SeparateVideoClips(timeline, 0, 10));
@@ -451,7 +451,7 @@ TEST_CASE("Export spans share a global frame clock across cuts gaps and rate cha
             const auto clip = std::find_if(timeline.clips.begin(), timeline.clips.end(),
                [&](const auto &value) { return value.id == span.clipId; });
             REQUIRE(clip != timeline.clips.end());
-            REQUIRE(span.sourceStart == Approx(clip->ContentTimeAtProjectTime(span.firstFrame / outputRate)));
+            REQUIRE(span.sourceStart == Catch::Approx(clip->ContentTimeAtProjectTime(span.firstFrame / outputRate)));
          }
          REQUIRE(cursor == static_cast<int64_t>(std::ceil(10 * outputRate - 1e-7)));
          REQUIRE(timeline.clips.size() == original.clips.size());
@@ -466,7 +466,7 @@ TEST_CASE("Export spans share a global frame clock across cuts gaps and rate cha
    REQUIRE(plan.size() == 3);
    REQUIRE(plan[0].clipId == 0); REQUIRE(plan[0].frameCount == 8);
    REQUIRE(plan[1].firstFrame == 8); REQUIRE(plan[1].frameCount == 30);
-   REQUIRE(plan[1].sourceStart == Approx((8.0 / 30 - 0.25) * 2));
+   REQUIRE(plan[1].sourceStart == Catch::Approx((8.0 / 30 - 0.25) * 2));
    REQUIRE(plan[2].clipId == 0); REQUIRE(plan[2].firstFrame == 38); REQUIRE(plan[2].frameCount == 22);
    REQUIRE_THROWS(VideoExport::PlanVideoExportFrames(timeline, 2, 0));
    REQUIRE_THROWS(VideoExport::PlanVideoExportFrames(timeline, 0.5, 30));
@@ -506,8 +506,8 @@ TEST_CASE("Embedded render plans resolve nested rectangles and suppress children
       REQUIRE(plan[0].layers[0].source.path == "parent.mp4");
       REQUIRE(plan[0].layers[1].source.path == "child.mp4");
       const auto &rect = plan[0].layers[2].rectangle;
-      REQUIRE(rect.x == Approx(.6)); REQUIRE(rect.y == Approx(.225));
-      REQUIRE(rect.width == Approx(.2)); REQUIRE(rect.height == Approx(.25));
+      REQUIRE(rect.x == Catch::Approx(.6)); REQUIRE(rect.y == Catch::Approx(.225));
+      REQUIRE(rect.width == Catch::Approx(.2)); REQUIRE(rect.height == Catch::Approx(.25));
       const auto pixels = CalculateVideoPlacementRectangle(plan[0].layers[1].rectangle, 640, 360);
       REQUIRE(pixels.x == 320); REQUIRE(pixels.y == 36);
       REQUIRE(pixels.width == 256); REQUIRE(pixels.height == 180);
@@ -726,7 +726,7 @@ TEST_CASE("Timeline thumbnails resolve reverse freeze and nested picture clocks 
       REQUIRE_FALSE(sample.generated);
       REQUIRE(sample.source.path == "movie.mp4");
       REQUIRE(sample.source.duration == 5);
-      REQUIRE(sample.sourceTime == Approx((149 - std::floor(at * 30 + 1e-8)) / 30));
+      REQUIRE(sample.sourceTime == Catch::Approx((149 - std::floor(at * 30 + 1e-8)) / 30));
    }
    auto frozen = VideoTimeline::CreateVideoTimeline("movie.mp4", 5, 30, 320, 180);
    REQUIRE(VideoTimeline::FreezeVideoClip(frozen, 1, 1.25, 2));
@@ -734,10 +734,10 @@ TEST_CASE("Timeline thumbnails resolve reverse freeze and nested picture clocks 
       const auto sample = VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, at);
       REQUIRE(sample);
       REQUIRE(sample.source.duration == 5);
-      REQUIRE(sample.sourceTime == Approx(37.0 / 30));
+      REQUIRE(sample.sourceTime == Catch::Approx(37.0 / 30));
    }
    REQUIRE(VideoTimeline::ReverseVideoClip(frozen, 1));
-   REQUIRE(VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, .25).sourceTime == Approx(37.0 / 30));
+   REQUIRE(VideoTimeline::SampleVideoThumbnail(frozen.clips.front(), {}, .25).sourceTime == Catch::Approx(37.0 / 30));
 }
 
 TEST_CASE("Text overlays retain their appearance and alpha through native clip models", "[video-composition][video-text]")

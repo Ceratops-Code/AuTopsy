@@ -10,9 +10,9 @@ else()
    find_package(Threads REQUIRED)
    target_link_libraries(project-storage-sqlite PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
    add_executable(project-storage-test ../ConfigureProjectStorage.cpp
-      TestProjectStorage.cpp ../../../tests/Catch2Main.cpp)
+      TestProjectStorage.cpp)
    target_compile_features(project-storage-test PRIVATE cxx_std_17)
-   target_link_libraries(project-storage-test PRIVATE Catch2::Catch2 project-storage-sqlite)
+   target_link_libraries(project-storage-test PRIVATE Catch2::Catch2WithMain project-storage-sqlite)
    catch_discover_tests(project-storage-test TEST_PREFIX "project-storage::"
       PROPERTIES TIMEOUT 60)
 endif()

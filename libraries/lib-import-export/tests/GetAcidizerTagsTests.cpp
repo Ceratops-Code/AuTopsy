@@ -15,7 +15,7 @@
 #include "FileFormats.h"
 #include "sndfile.h"
 #include <array>
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -69,7 +69,7 @@ TEST_CASE("GetAcidizerTags")
          sf_command(&file, SFC_GET_CURRENT_SF_INFO, &info, sizeof(SF_INFO));
          const auto durationAfterClose = 1. * info.frames / info.samplerate;
          const auto expectedBpm = numBeats * 60 / durationAfterClose;
-         REQUIRE(actual->bpm == Approx(expectedBpm));
+         REQUIRE(actual->bpm == Catch::Approx(expectedBpm));
          REQUIRE(actual->isOneShot == false);
       };
       SECTION("Tempo is set and the distributor is whitelisted")

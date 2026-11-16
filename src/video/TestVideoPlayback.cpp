@@ -16,7 +16,7 @@
 #include "EditVideoTimeline.h"
 #include "JoinVideoClips.h"
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -90,7 +90,7 @@ TEST_CASE("Frame timecode keeps fractional source rates and rejects malformed in
    for (const double rate : {24.0, 25.0, 30.0, 60.0, 24000.0 / 1001, 30000.0 / 1001}) {
       for (const auto frame : {0, 1, 29, 301, 123456}) {
          const auto time = frame / rate;
-         REQUIRE(ParseFrameTimecode(FormatFrameTimecode(time, rate), rate) == Approx(time));
+         REQUIRE(ParseFrameTimecode(FormatFrameTimecode(time, rate), rate) == Catch::Approx(time));
       }
    }
    for (const auto *bad : {"", "00:60:00:00", "00:00:00:30", "-1:00:00:00", "00:00:01:00 junk"})
@@ -106,8 +106,8 @@ TEST_CASE("Timelapse timecode shows elapsed seconds and frame steps retain the s
          REQUIRE(FormatFrameTimecode(10.1, rate) == "00:00:10:00");
          REQUIRE(ParseFrameTimecode("00:00:10:00", rate) == 10);
          REQUIRE_THROWS(ParseFrameTimecode("00:00:10:01", rate));
-         REQUIRE(AdjacentSourceFrame(0, 0, 0, rate, 1) == Approx(1 / rate));
-         REQUIRE(AdjacentSourceFrame(1 / rate, 0, 0, rate, -1) == Approx(0));
+         REQUIRE(AdjacentSourceFrame(0, 0, 0, rate, 1) == Catch::Approx(1 / rate));
+         REQUIRE(AdjacentSourceFrame(1 / rate, 0, 0, rate, -1) == Catch::Approx(0));
       }
    }
    REQUIRE_THROWS(FormatFrameTimecode(0, 0));
@@ -192,12 +192,12 @@ TEST_CASE("Preview seeking preserves desired playback and pause after every inte
 TEST_CASE("Frame steps use source boundaries after moves and trims")
 {
    const double start = 7.0, source = 1.0 / 60;
-   REQUIRE(AdjacentSourceFrame(start, start, source, 60, 1) == Approx(start + 1.0 / 60));
-   REQUIRE(AdjacentSourceFrame(start + 1.0 / 60, start, source, 60, -1) == Approx(start));
-   REQUIRE(AdjacentSourceFrame(start + 0.001, start, source, 60, -1) == Approx(start));
+   REQUIRE(AdjacentSourceFrame(start, start, source, 60, 1) == Catch::Approx(start + 1.0 / 60));
+   REQUIRE(AdjacentSourceFrame(start + 1.0 / 60, start, source, 60, -1) == Catch::Approx(start));
+   REQUIRE(AdjacentSourceFrame(start + 0.001, start, source, 60, -1) == Catch::Approx(start));
    REQUIRE(AdjacentSourceFrame(0, 0, 0, 30, -1) == 0);
-   REQUIRE(AdjacentSourceFrame(start, start, source, 60, 1, 2) == Approx(start + 1.0 / 120));
-   REQUIRE(AdjacentSourceFrame(start + 1.0 / 120, start, source, 60, -1, 2) == Approx(start));
+   REQUIRE(AdjacentSourceFrame(start, start, source, 60, 1, 2) == Catch::Approx(start + 1.0 / 120));
+   REQUIRE(AdjacentSourceFrame(start + 1.0 / 120, start, source, 60, -1, 2) == Catch::Approx(start));
    REQUIRE_THROWS(AdjacentSourceFrame(start, start, source, 60, 1, 0));
    REQUIRE_THROWS(AdjacentSourceFrame(0, 0, 0, 30, 0));
 }
@@ -267,7 +267,7 @@ TEST_CASE("Precise inspection seeks a single source frame that smooth playback c
    player.state.position = 1;
    const TransportSnapshot cursor{1 + 1.0 / 60, 1, false};
    SynchronizeVideoPlayback(player, cursor, true);
-   REQUIRE(player.state.position == Approx(cursor.position));
+   REQUIRE(player.state.position == Catch::Approx(cursor.position));
    REQUIRE(player.effects == std::vector<std::string>{"seek"});
    SynchronizeVideoPlayback(player, cursor, true);
    REQUIRE(player.effects.size() == 1);
@@ -291,7 +291,7 @@ void CheckInterruptionBoundaries(const PlayerSnapshot &initial,
    FakePlayer accepted;
    accepted.state = initial;
    RunFreshCalls(accepted, audio);
-   REQUIRE(accepted.state.position == Approx(expectedPosition));
+   REQUIRE(accepted.state.position == Catch::Approx(expectedPosition));
    REQUIRE(accepted.state.paused == expectedPaused);
    const auto acceptedEffects = accepted.effects;
    REQUIRE_FALSE(acceptedEffects.empty());
@@ -303,9 +303,9 @@ void CheckInterruptionBoundaries(const PlayerSnapshot &initial,
       interrupted.interruptBoundary = boundary;
       RunFreshCalls(interrupted, audio);
       REQUIRE_FALSE(interrupted.interruptBoundary);
-      REQUIRE(interrupted.state.position == Approx(expectedPosition));
+      REQUIRE(interrupted.state.position == Catch::Approx(expectedPosition));
       REQUIRE(interrupted.state.paused == expectedPaused);
-      REQUIRE(interrupted.state.speed == Approx(accepted.state.speed));
+      REQUIRE(interrupted.state.speed == Catch::Approx(accepted.state.speed));
       REQUIRE(interrupted.effects == acceptedEffects);
 
       const auto effects = interrupted.effects;
@@ -546,7 +546,7 @@ TEST_CASE("Video clipboard ranges carry sources across tracks and combine differ
    REQUIRE(destination.End() == 6);
    REQUIRE_FALSE(KeepsOriginalPicture(destination));
    REQUIRE(SplitClipAt(destination, 1.03));
-   REQUIRE(destination.clips[0].duration == Approx(1.04));
+   REQUIRE(destination.clips[0].duration == Catch::Approx(1.04));
    REQUIRE(SourceFor(destination, destination.clips[1]).path == "blue.mp4");
 }
 
@@ -580,12 +580,12 @@ TEST_CASE("Video edge trimming is frame snapped, reversible and atomically rejec
    using namespace VideoTimeline;
    auto timeline = CreateVideoTimeline("movie.mp4", 4, 30);
    REQUIRE(TrimVideoClip(timeline, 1, 1.01, 3.01));
-   REQUIRE(timeline.clips[0].start == Approx(1));
-   REQUIRE(timeline.clips[0].sourceStart == Approx(1));
-   REQUIRE(timeline.clips[0].duration == Approx(2));
+   REQUIRE(timeline.clips[0].start == Catch::Approx(1));
+   REQUIRE(timeline.clips[0].sourceStart == Catch::Approx(1));
+   REQUIRE(timeline.clips[0].duration == Catch::Approx(2));
    REQUIRE_FALSE(TrimVideoClip(timeline, 1, 1, 3));
    REQUIRE_THROWS(TrimVideoClip(timeline, 1, -1, 3));
-   REQUIRE(timeline.clips[0].start == Approx(1));
+   REQUIRE(timeline.clips[0].start == Catch::Approx(1));
    REQUIRE(TrimVideoClip(timeline, 1, 0, 4));
    REQUIRE(KeepsOriginalPicture(timeline));
    SplitClipAt(timeline, 2);
@@ -599,18 +599,18 @@ TEST_CASE("Video edge trimming is frame snapped, reversible and atomically rejec
    REQUIRE(DragVideoClipEdge(dragged, 1, true, 1));
    REQUIRE_FALSE(DragVideoClipEdge(dragged, 1, true, 1));
    REQUIRE(DragVideoClipEdge(dragged, 1, true, -10));
-   REQUIRE(dragged.clips[0].start == Approx(0));
-   REQUIRE(dragged.clips[0].sourceStart == Approx(0));
+   REQUIRE(dragged.clips[0].start == Catch::Approx(0));
+   REQUIRE(dragged.clips[0].sourceStart == Catch::Approx(0));
    REQUIRE(DragVideoClipEdge(dragged, 1, false, 3));
    REQUIRE(DragVideoClipEdge(dragged, 1, false, 20));
    REQUIRE(KeepsOriginalPicture(dragged));
    SplitClipAt(dragged, 2);
    REQUIRE(DragVideoClipEdge(dragged, 2, true, 3));
    REQUIRE(DragVideoClipEdge(dragged, 2, true, -10));
-   REQUIRE(dragged.clips[1].start == Approx(2));
-   REQUIRE(dragged.clips[1].sourceStart == Approx(2));
+   REQUIRE(dragged.clips[1].start == Catch::Approx(2));
+   REQUIRE(dragged.clips[1].sourceStart == Catch::Approx(2));
    REQUIRE(DragVideoClipEdge(dragged, 1, false, -10));
-   REQUIRE(dragged.clips[0].duration == Approx(1.0 / 30));
+   REQUIRE(dragged.clips[0].duration == Catch::Approx(1.0 / 30));
    REQUIRE(DragVideoClipEdge(dragged, 1, false, 20));
    REQUIRE(KeepsOriginalPicture(dragged));
    const auto before = dragged;
@@ -637,18 +637,18 @@ TEST_CASE("Shared video seams trim the inward side from either pixel owner and c
          auto preview = original;
          REQUIRE(DragVideoClipEdge(preview, edge.id, edge.left, seam + motion));
          REQUIRE(KeepsOriginalPicture(original));
-         REQUIRE(original.clips[1].sourceStart == Approx(seam));
+         REQUIRE(original.clips[1].sourceStart == Catch::Approx(seam));
          REQUIRE(preview.clips[0].start == 0);
-         REQUIRE(preview.clips[1].End() == Approx(4));
+         REQUIRE(preview.clips[1].End() == Catch::Approx(4));
          if (motion > 0) {
-            REQUIRE(preview.clips[0].End() == Approx(seam));
-            REQUIRE(preview.clips[1].start == Approx(seam + motion));
-            REQUIRE(preview.clips[1].sourceStart == Approx(seam + motion));
+            REQUIRE(preview.clips[0].End() == Catch::Approx(seam));
+            REQUIRE(preview.clips[1].start == Catch::Approx(seam + motion));
+            REQUIRE(preview.clips[1].sourceStart == Catch::Approx(seam + motion));
          }
          else {
-            REQUIRE(preview.clips[0].End() == Approx(seam + motion));
-            REQUIRE(preview.clips[1].start == Approx(seam));
-            REQUIRE(preview.clips[1].sourceStart == Approx(seam));
+            REQUIRE(preview.clips[0].End() == Catch::Approx(seam + motion));
+            REQUIRE(preview.clips[1].start == Catch::Approx(seam));
+            REQUIRE(preview.clips[1].sourceStart == Catch::Approx(seam));
          }
          REQUIRE_FALSE(DragVideoClipEdge(preview, edge.id, edge.left, seam + motion));
          const auto returning = ChooseVideoTrimEdge(preview, edge.id, edge.left, -motion);
@@ -709,8 +709,8 @@ TEST_CASE("Preview evaluation and export choose the same source frames across la
       REQUIRE(bool(preview.clip) == visible);
       REQUIRE(output.visible == visible);
       if (!visible) continue;
-      REQUIRE(preview.sourceTime == Approx(sample.sourceTime));
-      REQUIRE(output.sourceTime == Approx(sample.sourceTime));
+      REQUIRE(preview.sourceTime == Catch::Approx(sample.sourceTime));
+      REQUIRE(output.sourceTime == Catch::Approx(sample.sourceTime));
       const auto previewSource = SourceFor(*preview.timeline, *preview.clip);
       const auto outputSource = SourceFor(exported, *ClipAt(exported, sample.projectTime));
       REQUIRE(previewSource.path == sample.source);
@@ -724,8 +724,8 @@ TEST_CASE("Preview evaluation and export choose the same source frames across la
    REQUIRE(lower.clips[1].id == 2);
    REQUIRE(lower.clips[1].sourceStart == 3);
    REQUIRE(lower.clips[1].start == 4);
-   REQUIRE(upper.clips[0].sourceStart == Approx(.4));
-   REQUIRE(upper.clips[0].duration == Approx(1.2));
+   REQUIRE(upper.clips[0].sourceStart == Catch::Approx(.4));
+   REQUIRE(upper.clips[0].duration == Catch::Approx(1.2));
    REQUIRE(EvaluateVideoLayers(layers, 4).clip == &lower.clips[1]);
    REQUIRE_FALSE(EvaluateVideoLayers({}, 1).clip);
    REQUIRE_FALSE(EvaluateVideoLayers(layers,
@@ -783,15 +783,15 @@ TEST_CASE("Clip flags retain content-relative placement across video moves, spli
    REQUIRE(timeline.clips[1].markers.size() == 1);
    VideoTimeline::MoveClipTo(timeline, 2, 8);
    const auto &right = timeline.clips[1];
-   REQUIRE(ClipMarkers::ProjectMarkerTime(right.markers[0], right.start-right.sourceStart, 1) == Approx(9));
+   REQUIRE(ClipMarkers::ProjectMarkerTime(right.markers[0], right.start-right.sourceStart, 1) == Catch::Approx(9));
    auto clipboard = VideoTimeline::CopyVideoRange(timeline, 8, 10);
    REQUIRE(clipboard.clips[0].markers[0].text == "Sync clap");
    REQUIRE(ClipMarkers::ProjectMarkerTime(clipboard.clips[0].markers[0],
-      clipboard.clips[0].start-clipboard.clips[0].sourceStart, 1) == Approx(1));
+      clipboard.clips[0].start-clipboard.clips[0].sourceStart, 1) == Catch::Approx(1));
    auto before = clipboard.clips[0].markers;
    REQUIRE_THROWS(ClipMarkers::PutMarker(clipboard.clips[0].markers, {"bad-id", 1, "Invalid"}));
    REQUIRE(clipboard.clips[0].markers[0].id == before[0].id);
-   REQUIRE(ClipMarkers::ProjectMarkerTime(before[0], 2, 0.5) == Approx(4));
+   REQUIRE(ClipMarkers::ProjectMarkerTime(before[0], 2, 0.5) == Catch::Approx(4));
 }
 
 TEST_CASE("Clip export separates source picture time from the project mix range")
@@ -874,8 +874,8 @@ TEST_CASE("Preview quality selects bounded playback proxies without changing ori
 
 TEST_CASE("Preview one-second navigation and shared volume converge without editing tracks")
 {
-   REQUIRE(PreviewSecondDestination(2.25, 10, 1) == Approx(3.25));
-   REQUIRE(PreviewSecondDestination(2.25, 10, -1) == Approx(1.25));
+   REQUIRE(PreviewSecondDestination(2.25, 10, 1) == Catch::Approx(3.25));
+   REQUIRE(PreviewSecondDestination(2.25, 10, -1) == Catch::Approx(1.25));
    REQUIRE(PreviewSecondDestination(0.25, 10, -1) == 0);
    REQUIRE(PreviewSecondDestination(9.75, 10, 1) == 10);
    REQUIRE_THROWS(PreviewSecondDestination(1, 10, 0));
@@ -891,12 +891,12 @@ TEST_CASE("Preview one-second navigation and shared volume converge without edit
       if (interruption >= 0) REQUIRE_THROWS(ApplyPreviewVolume(mixer, 42));
       ApplyPreviewVolume(mixer, 42);
       REQUIRE(mixer.effect == 1);
-      REQUIRE(mixer.gain == Approx(0.42));
+      REQUIRE(mixer.gain == Catch::Approx(0.42));
       REQUIRE(PreviewVolumePercent(mixer.gain) == 42);
       for (int repeat = 0; repeat < 3; ++repeat) REQUIRE_FALSE(ApplyPreviewVolume(mixer, 42));
       REQUIRE_THROWS(ApplyPreviewVolume(mixer, -1));
       REQUIRE_THROWS(ApplyPreviewVolume(mixer, 101));
-      REQUIRE(mixer.gain == Approx(0.42));
+      REQUIRE(mixer.gain == Catch::Approx(0.42));
    }
 }
 

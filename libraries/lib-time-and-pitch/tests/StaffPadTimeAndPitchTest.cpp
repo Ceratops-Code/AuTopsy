@@ -15,7 +15,7 @@
 #include "TimeAndPitchRealSource.h"
 #include "WavFileIO.h"
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 using namespace std::literals::string_literals;
 using namespace std::literals::chrono_literals;

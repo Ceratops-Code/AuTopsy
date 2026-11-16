@@ -3,7 +3,7 @@
 #include "MusicInformationRetrieval.h"
 #include "WavMirAudioReader.h"
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <chrono>
 #include <fstream>
 #include <iomanip>

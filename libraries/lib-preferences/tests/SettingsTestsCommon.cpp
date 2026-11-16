@@ -9,7 +9,7 @@
 
 **********************************************************************/
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include "BasicSettings.h"
 
 bool IsSame(const wxArrayString& arr, std::initializer_list<wxString> list, bool compareWithCase = true)

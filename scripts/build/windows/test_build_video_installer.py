@@ -9,7 +9,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 import zipfile
+from email.message import Message
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -45,8 +47,8 @@ class InstallerBuildTests(unittest.TestCase):
             source, build = root / "source", root / "build"
             source.mkdir()
             build.mkdir()
-            tracked = ("main.cpp", "scripts/piped-work/test_video_clip_edits.py", "docs/design.md", "README.md",
-                       "scripts/build/windows/test_build_video_installer.py")
+            tracked = ("src/video/BuildSpeechEngine.cmake", "scripts/piped-work/test_video_clip_edits.py", "docs/design.md", "README.md",
+                       "scripts/build/windows/test_build_video_installer.py", ".github/ISSUE_TEMPLATE/bug_report.yml")
             for name in tracked:
                 target = source / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +62,7 @@ class InstallerBuildTests(unittest.TestCase):
                 for name in tracked[1:]:
                     (source / name).write_text("edited check/document", encoding="utf-8")
                     self.assertEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
-                for path in (source / "main.cpp", cache, tool):
+                for path in (source / tracked[0], cache, tool):
                     original = path.read_bytes()
                     path.write_bytes(b"changed product input")
                     self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
@@ -141,13 +143,48 @@ class InstallerBuildTests(unittest.TestCase):
                 "checks": [{"name": name, "result": "passed"} for name in (
                     "fork-fixtures", "fork-preview", "fork-project-compatibility")]}
 
-    def test_package_location_does_not_activate_or_follow_native_test_selection(self):
+    def test_default_tool_and_package_paths_do_not_activate_native_tests(self):
         for _ in range(2):
             with mock.patch.dict(os.environ, {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
                                               "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
                 self.assertEqual(builder.get_installer_build_directory(), Path("_accepted-build"))
             with mock.patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
                 self.assertEqual(builder.get_installer_build_directory(), Path(".build/_windows-installer"))
+        with tempfile.TemporaryDirectory(prefix="_installer-tools-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            user_compiler = root / "user/Programs/Inno Setup 6/ISCC.exe"
+            machine_compiler = root / "machine/Inno Setup 6/ISCC.exe"
+            for compiler in (user_compiler, machine_compiler):
+                compiler.parent.mkdir(parents=True)
+                compiler.write_bytes(b"test compiler, never executed")
+            for _ in range(2):
+                for explicit, environment, on_path, expected in (
+                        (None, None, None, user_compiler),
+                        (None, None, str(root / "path-compiler.exe"), root / "path-compiler.exe"),
+                        (None, str(root / "explicit-env.exe"), None, root / "explicit-env.exe"),
+                        (str(root / "explicit-cli.exe"), str(root / "explicit-env.exe"), None, root / "explicit-cli.exe")):
+                    (root / "path-compiler.exe").write_bytes(b"test compiler, never executed")
+                    values = {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}
+                    if environment:
+                        values["AUTOPSY_INNO_COMPILER"] = environment
+                    with mock.patch.dict(os.environ, values, clear=True), \
+                            mock.patch.object(builder.sys, "platform", "win32"), \
+                            mock.patch.object(builder.sys, "argv", ["build_video_installer.py", *(["--inno-compiler", explicit] if explicit else [])]), \
+                            mock.patch.object(builder.shutil, "which", return_value=on_path), \
+                            mock.patch.object(builder, "build_installer", return_value={}) as build, \
+                            mock.patch("builtins.print"):
+                        builder.main()
+                    self.assertEqual(build.call_args.args[2], expected)
+                    self.assertEqual(build.call_args.args[1], Path(".build/_windows-installer"))
+            user_compiler.unlink()
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}, clear=True), \
+                    mock.patch.object(builder.sys, "platform", "win32"), \
+                    mock.patch.object(builder.sys, "argv", ["build_video_installer.py"]), \
+                    mock.patch.object(builder.shutil, "which", return_value=None), \
+                    mock.patch.object(builder, "build_installer", return_value={}) as build, \
+                    mock.patch("builtins.print"):
+                builder.main()
+            self.assertEqual(build.call_args.args[2], machine_compiler)
 
     def test_preview_publication_repeats_and_interrupts_each_remote_effect(self):
         revision, body = "a" * 40, "Unsigned AuTopsy preview.\n"
@@ -349,14 +386,28 @@ class InstallerBuildTests(unittest.TestCase):
                     (source / "CMakeLists.txt").write_text("project(test)")
                     (source / "resources").mkdir()
                     (source / "resources/autopsy-release.json").write_text('{"version":"3.7.10-autopsy.2"}')
+                    (source / "README.md").write_text("bundled readme")
+                    (source / "BUILDING.md").write_text("build instructions")
+                    (source / ".github").mkdir()
+                    (source / ".github/ci.yml").write_text("initial CI")
                     inno = root / "ISCC.exe"
                     inno.write_bytes(b"test compiler")
+                    build.mkdir()
+                    driver = root / "cmake.exe"
+                    driver.write_bytes(b"test CMake engine")
+                    cache = build / "CMakeCache.txt"
+                    cache.write_text(f"CMAKE_COMMAND:INTERNAL={driver}\nCMAKE_CXX_FLAGS:STRING=/O2\n")
                     calls = 0
                     interrupted = False
+                    revision = "a" * 40
+                    state = {"revision": revision}
+                    commands: list[list[str]] = []
 
-                    def run(arguments, _source, _diagnostics, *, boundary=boundary, after=after, build=build):
+                    def run(arguments, _source, _diagnostics, *, boundary=boundary, after=after, build=build,
+                            state=state, observed=commands):
                         nonlocal calls, interrupted
                         calls += 1
+                        observed.append(arguments)
                         stop = calls == boundary and not interrupted
                         if stop and not after:
                             interrupted = True
@@ -366,11 +417,16 @@ class InstallerBuildTests(unittest.TestCase):
                             package.mkdir(exist_ok=True)
                             name = "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
                             target = package / name
-                            if not target.exists():
-                                target.write_bytes(b"completed installer")
+                            target.write_bytes(b"completed installer")
                             builder.write_json(package / "_installer-x64.json",
                                                {"filename": name, "sha256": builder.sha256(target)})
-                        result = "a" * 40 + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
+                        elif "--build" in arguments:
+                            self.native_report(build)
+                        result = state["revision"] + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
+                        if arguments[1:3] == ["ls-files", "-z"]:
+                            result = "CMakeLists.txt\0resources/autopsy-release.json\0README.md\0BUILDING.md\0.github/ci.yml\0"
+                        if arguments[1:3] == ["diff", "--name-only"]:
+                            result = "README.md" if (_source / "README.md").read_text() != "bundled readme" else ""
                         if "--before-package" in arguments:
                             result = json.dumps(self.native_report(build))
                         if stop and after:
@@ -379,7 +435,7 @@ class InstallerBuildTests(unittest.TestCase):
                         return result
 
                     with mock.patch.object(builder, "prepare_sdk", return_value=root), \
-                         mock.patch.object(builder.shutil, "which", return_value="cmake"), \
+                         mock.patch.object(builder.shutil, "which", return_value=str(driver)), \
                          mock.patch.object(builder, "run_command", side_effect=run), \
                          mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
                         with self.assertRaises(InterruptedError):
@@ -393,6 +449,42 @@ class InstallerBuildTests(unittest.TestCase):
                         self.assertEqual(first["source_revision"], "a" * 40)
                         self.assertEqual(first["checks"], [{"name": "fork-fixtures", "result": "passed",
                                                            "source_revision": "a" * 40}])
+                        original_manifest = manifest.read_bytes()
+                        provenance = build / "_compiled-runtime.json"
+                        original_provenance = provenance.read_bytes()
+                        revision = "b" * 40
+                        state["revision"] = revision
+                        (source / ".github/ci.yml").write_text("fixed compiler setup")
+                        (source / "BUILDING.md").write_text("updated build instructions")
+                        previous_commands = len(commands)
+                        for _ in range(2):
+                            self.assertEqual(builder.build_installer(source, build, inno), first)
+                        self.assertTrue(all(command[0] == "git" for command in commands[previous_commands:]))
+                        self.assertEqual(manifest.read_bytes(), original_manifest)
+                        self.assertEqual(manifest.stat().st_mtime_ns, timestamp)
+                        self.assertEqual(provenance.read_bytes(), original_provenance)
+                        relocated = root / "relocated"
+                        shutil.copytree(source, relocated)
+                        self.assertEqual(builder.build_installer(relocated, build, inno), first)
+                        # Changed product/package inputs and damaged artifacts
+                        # must return to the ordinary check/package boundary.
+                        for fault in ("product", "readme", "installer", "settings", "provenance", "native selection"):
+                            with self.subTest(reuse_fault=fault):
+                                manifest.write_bytes(original_manifest)
+                                provenance.write_bytes(original_provenance)
+                                (source / "CMakeLists.txt").write_text("changed product" if fault == "product" else "project(test)")
+                                (source / "README.md").write_text("changed package text" if fault == "readme" else "bundled readme")
+                                cache.write_text(f"CMAKE_COMMAND:INTERNAL={driver}\nCMAKE_CXX_FLAGS:STRING={'/Od' if fault == 'settings' else '/O2'}\n")
+                                installer = manifest.parent / first["filename"]
+                                installer.write_bytes(b"damaged installer" if fault == "installer" else b"completed installer")
+                                if fault == "provenance":
+                                    provenance.unlink()
+                                previous_commands = len(commands)
+                                refreshed = builder.build_installer(source, build, inno,
+                                    "^extra-native-check$" if fault == "native selection" else None)
+                                self.assertEqual(refreshed["source_revision"], revision)
+                                self.assertTrue(any("--before-package" in command for command in commands[previous_commands:]))
+                                self.assertTrue(any("innosetup" in command for command in commands[previous_commands:]))
 
     def test_failed_media_check_cannot_package_an_installer(self):
         with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
@@ -508,6 +600,14 @@ class InstallerBuildTests(unittest.TestCase):
                 builder.download_archive({"url": incoming.as_uri(), "sha256": "0" * 64}, archive)
             self.assertEqual(archive.read_bytes(), b"old completed archive")
             self.assertFalse((root / "__sdk.zip.pending").exists())
+            url = "https://example.invalid/sdk.zip"
+            for _ in range(2):
+                with mock.patch.object(builder.urllib.request, "urlopen", side_effect=urllib.error.HTTPError(url, 404, "Not Found", Message(), None)), \
+                        self.assertRaisesRegex(RuntimeError, "Dependency download failed for https://example.invalid/sdk.zip: HTTP Error 404") as failure:
+                    builder.download_archive({"url": url, "sha256": "0" * 64}, archive)
+                self.assertIsInstance(failure.exception.__cause__, urllib.error.HTTPError)
+                self.assertEqual(archive.read_bytes(), b"old completed archive")
+                self.assertFalse((root / "__sdk.zip.pending").exists())
             unrelated = root / "_fixture"
             unrelated.mkdir()
             (unrelated / "user-file").write_bytes(b"keep")

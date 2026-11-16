@@ -1,6 +1,6 @@
 #include "EditCaptionCues.h"
 #include "JoinVideoClips.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <limits>
 
 using namespace VideoCaptions;
@@ -49,7 +49,7 @@ TEST_CASE("Overlapping captions keep every active speaker on one non-overlapping
       REQUIRE(combined[2].text == "First\nThird"); REQUIRE(combined[3].text == "Third");
       const auto plan = PlanCaptionClips(input, 1280, 288);
       REQUIRE(plan.clips.size() == 4); VideoTimeline::RequireWellFormedTimeline(plan);
-      REQUIRE(plan.clips.back().End() == Approx(4)); REQUIRE(input.size() == 3);
+      REQUIRE(plan.clips.back().End() == Catch::Approx(4)); REQUIRE(input.size() == 3);
    }
 }
 TEST_CASE("Recognition times are offset and bounded by the rendered project range", "[video-captions]")

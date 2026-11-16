@@ -3,9 +3,11 @@ name = "repository-tools"
 version = "0.0.0"
 requires-python = "==3.14.9"
 dependencies = [
+    "cmake==3.31.10",
     "mypy",
     "pywin32>=312 ; sys_platform == 'win32'",
     "ruff",
+    "shellcheck-py==0.11.0.1",
 ]
 
 [tool.uv]

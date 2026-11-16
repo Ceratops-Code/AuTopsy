@@ -101,6 +101,16 @@ under the existing marked test-workspace owner and its finite receipt policy.
 
 ## Building on Windows
 
+The Windows installer and installed app share the product input list in
+`sdlc/sdlc.yml`: `src` plus the declared native dependency, CMake, resource,
+license, test-harness and packaging paths. This includes inherited Audacity
+inputs, the SDK pins in the Windows builder, and the speech-engine pin under
+`src/video`. CMake stages `README.md` with the app, so it remains a package input.
+Repository-only files such as `.github/ISSUE_TEMPLATE/bug_report.yml` do not
+belong to that list. New product inputs outside these paths must be added there.
+This declaration describes build impact; the promotion caller still owns
+selecting affected builds before requesting builder-only parameters.
+
 1. Ensure the Python installer option `Add Python 3.x to PATH` is checked. Go to Windows Settings "Add or Remove Programs" and check the `Add Python to environment variables` in Python settings if Python is not in `PATH`.
   
 2. Use this AuTopsy source checkout, which includes the video extension
@@ -356,7 +366,10 @@ must contain include/mpv/client.h and libmpv-2.dll at its top level.
 Windows package links are listed on [mpv's installation page](https://mpv.io/installation/).
 Also provide the Windows x64 FFmpeg 8.1 GPL shared runtime, including libx264,
 libx265 and libsvtav1 encoders, available from
-[BtbN's FFmpeg builds](https://github.com/BtbN/FFmpeg-Builds/releases).
+[FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases).
+The automated builder pins a monthly archive and its checksum; upstream retains
+monthly builds for two years, while ordinary daily builds expire after fourteen
+days. Refresh that pin before its retention window ends.
 Keep ffmpeg.exe, ffprobe.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
 swresample-6.dll, swscale-9.dll, avfilter-11.dll, avdevice-62.dll, and the
 distribution's LICENSE.txt together in the selected runtime directory.
@@ -591,13 +604,14 @@ with any distributed build, alongside AuTopsy's existing license material.
 
 Run the same repository-owned builder used by the GitHub-hosted Windows job:
 
-    uv run --project scripts --locked --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+    uv run --project scripts --locked python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
 
 Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
 `--inno-compiler` for a nondefault compiler location. The builder uses CMake's
 archive reader, so a separate 7-Zip installation is unnecessary. Python build
 dependencies, including the Windows process-tree wrapper, come from the locked
-`scripts` environment.
+`scripts` environment. Repository shell checks also use its pinned
+`shellcheck-py` executable, so a separate ShellCheck installation is unnecessary.
 
 The builder owns `_video-dependencies` under its selected build directory:
 one pinned archive and current SDK per component, private extraction/download
@@ -647,10 +661,24 @@ Every new installer build runs `fork-fixtures` after compilation and before
 packaging, without opening AuTopsy. The build manifest records its passing result
 and source revision. Repeated builds reuse that accepted installer only when the
 clean source, dependency inputs and installer integrity still match the receipt.
+A descendant commit containing only CI, check or unbundled documentation changes
+also reuses that original installer when its compiled-input record still matches
+the current product files, tools and build settings. `README.md` remains a package
+input. Reuse keeps the original manifest and check identities without configuring,
+compiling, running desktop cases or repackaging. An explicit native test selection
+still requests its checks; missing provenance or changed product inputs requires
+the normal build path.
 Portable model and installer-producer tests run in the repository test operation;
 source-only CI does not require an already-built Windows application.
-The package build operation takes explicit `build_dir` and `inno_compiler`
-inputs, so local builds can reuse their task-owned build and compiler paths.
+The package build operation declares CMake, CTest and the Windows Inno Setup
+compiler (`ISCC.exe`) alongside `uv`. `scripts/pyproject.toml` and `scripts/uv.lock`
+supply the pinned CMake/CTest environment through `uv`; the builder discovers ISCC on PATH or in the standard
+per-user and machine-wide Inno Setup 6 locations. `AUTOPSY_INNO_COMPILER` selects
+an explicit compiler, while `AUTOPSY_INSTALLER_BUILD_DIR` selects the task-owned
+build directory (default `.build/_windows-installer`). The command-line options
+`--inno-compiler` and `--build-dir` override those defaults for direct calls.
+Both application and portable C++ tests use the single Catch2 3.16.1 pin in
+`cmake-proxies/cmake-modules/AudacityTesting.cmake`, with Catch2's compiled main.
 Setting both `AUTOPSY_VIDEO_BUILD_DIR` and `AUTOPSY_VIDEO_TEST_NAME` selects only
 an explicit native session in the repository test operation. For example,
 `^fork-media$` runs the existing guarded desktop case for linked-media splits
@@ -728,7 +756,7 @@ saved clip flags, relinking, source frame stepping and modern software exports.
 The SDLC `repository.actions.test` operation and GitHub CI call the same owning
 runner. Its direct developer entry point is:
 
-    uv run --project scripts --locked --with cmake==3.31.10 python scripts/run_affected_tests.py
+    uv run --project scripts --locked python scripts/run_affected_tests.py
 
 Local development defaults to the merge base with `origin/main`, including
 current staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use
@@ -818,8 +846,8 @@ streams. Interrupted pending writes are removed by the current owner or its next
 normal entry; the command report never controls test reuse or execution progress.
 
 This mode checks owned video timing, transport, edit plans, crop/PiP geometry and product-name policy
-without the editor or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
-test interface, pinned to its Git commit. CMake owns the current executables,
+without the editor or media SDKs. It fetches Catch2 3.16.1 through the shared
+application test setup, pinned to its Git commit. CMake owns the current executables,
 dependency checkout, and generated files in the selected build directory.
 The full Windows cases above cover the native adapters, media, and GUI; the
 independent CI checks do not claim those desktop behaviors were exercised.

@@ -10,6 +10,9 @@ repository:
       executable: cmake
     ctest:
       executable: ctest
+    iscc:
+      executable: ISCC.exe
+      platforms: [windows]
     python:
       executable: python
       version-from:
@@ -33,7 +36,7 @@ repository:
       check-groups:
         shellcheck:
           requires:
-            tools: [shellcheck]
+            tools: [uv, shellcheck]
           validation-tools: [shellcheck]
           check-results:
             result-owner: operation
@@ -72,10 +75,16 @@ repository:
               - modules/import-export/mod-ffmpeg/lib-ffmpeg-support/generator/generate_headers.sh
               - scripts/build/macOS/build_universal.sh
               - scripts/build/macOS/hdiutil_wrapper.sh
-            check-inputs: [sdlc/sdlc.yml, .shellcheckrc, '**/.shellcheckrc']
-            tools: [shellcheck]
+            check-inputs: [sdlc/sdlc.yml, scripts/pyproject.toml, .shellcheckrc, '**/.shellcheckrc']
+            dependencies: [scripts/uv.lock]
+            tools: [uv, shellcheck]
           steps:
             - run:
+                - uv
+                - run
+                - --project
+                - scripts
+                - --locked
                 - shellcheck
                 - --severity=error
                 - --
@@ -174,7 +183,37 @@ repository:
 deliverables:
   packages:
     windows-installer:
-      root-dir: .
+      version:
+        file: resources/autopsy-release.json
+        field: version
+      # CMake builds the inherited audio engine and owned extensions together.
+      # Keep product/packaging inputs explicit; repository metadata is not payload.
+      root-dir: src
+      additional-source-files: &windows-product-inputs
+        - CMakeLists.txt
+        - LICENSE.txt
+        - README.md
+        - cmake-proxies/**
+        - conan/**
+        - crashreporter/**
+        - help/**
+        - images/**
+        - include/**
+        - lib-src/**
+        - libraries/**
+        - locale/**
+        - modules/**
+        - nyquist/**
+        - plug-ins/**
+        - resources/**
+        - tests/**
+        - win/**
+        - scripts/build/windows/**
+        - scripts/piped-work/**
+        - scripts/run_affected_tests.py
+        - scripts/pyproject.toml
+        - scripts/uv.lock
+        - sdlc/sdlc.yml
       build-after: []
       artifact:
         type: windows-installer
@@ -183,10 +222,7 @@ deliverables:
       actions:
         build:
           requires:
-            tools: [uv]
-          parameters:
-            - build_dir
-            - inno_compiler
+            tools: [uv, cmake, ctest, iscc]
           steps:
             - run:
                 - uv
@@ -194,14 +230,8 @@ deliverables:
                 - --project
                 - scripts
                 - --locked
-                - --with
-                - cmake==3.31.10
                 - python
                 - scripts/build/windows/build_video_installer.py
-                - --build-dir
-                - '{build_dir}'
-                - --inno-compiler
-                - '{inno_compiler}'
         pre-build-checks:
           check-groups:
             tests:
@@ -224,7 +254,8 @@ deliverables:
                 - --publish-installer
   apps:
     autopsy:
-      root-dir: .
+      root-dir: src
+      additional-source-files: *windows-product-inputs
       manifest: win/Inno_Setup_Wizard/audacity.iss.in
       build-after:
         - deliverables.packages.windows-installer

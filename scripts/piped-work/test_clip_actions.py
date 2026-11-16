@@ -141,7 +141,11 @@ def with_native_dialog(operation, title, handle_dialog, *, menu_gesture=False, n
         while not (dialog := windows.dialog(title)):
             if errors:
                 raise errors[0]
-            assert time.monotonic() < deadline, f"Owned dialog {title!r} did not appear."
+            if time.monotonic() >= deadline:
+                observed = [(windows.caption(handle),
+                             [(windows.kind(child), windows.caption(child)) for child in windows.windows(handle)])
+                            for handle in windows.windows() if windows.visible(handle)]
+                raise AssertionError(f"Owned dialog {title!r} did not appear; worker active={worker.is_alive()}; owned windows={observed!r}")
             time.sleep(0.025)
         if menu_gesture:
             # The common menu driver restores its previous focus after the item

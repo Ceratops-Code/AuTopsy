@@ -33,8 +33,10 @@ SDK_INPUTS = {
         "kind": "7z",
     },
     "ffmpeg": {
-        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-n8.1.3-18-g46d899d7a0-win64-gpl-shared-8.1.zip",
-        "sha256": "36a621ed90a46a2c68af52418be101e8e74327d2784bb35b6cf3874d59b00067",
+        # Upstream retains monthly builds for two years; daily builds expire
+        # after fourteen days. Keep this checksum-bound release on that channel.
+        "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-win64-gpl-shared-8.1.zip",
+        "sha256": "3adc00b67118a8c4bdd6624a000e139df283b1eeb8b126fcec4849bd5b778dd4",
         "files": [
             "ffmpeg.exe", "ffprobe.exe", "avformat-62.dll", "avcodec-62.dll",
             "avutil-60.dll", "swresample-6.dll", "swscale-9.dll",
@@ -162,6 +164,8 @@ def download_archive(spec: dict, archive: Path) -> None:
         if sha256(pending) != spec["sha256"]:
             raise RuntimeError(f"Dependency download has unexpected contents: {spec['url']}")
         pending.replace(archive)
+    except OSError as error:
+        raise RuntimeError(f"Dependency download failed for {spec['url']}: {error}") from error
     finally:
         pending.unlink(missing_ok=True)
 
@@ -377,31 +381,10 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         raise RuntimeError("Hosted installer source differs from the workflow's checked-out revision.")
     dependency_inputs = {name: {"url": value["url"], "sha256": value["sha256"]}
                          for name, value in SDK_INPUTS.items()}
-    checks = [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}]
-    manifest = build / "package/_build-manifest.json"
-    if manifest.is_file() and not dirty:
-        try:
-            accepted = json.loads(manifest.read_text(encoding="utf-8"))
-            completed = build / "package" / accepted["filename"]
-            if (accepted.get("schema") == "autopsy-windows-installer.v1"
-                    and accepted.get("source_revision") == revision
-                    and accepted.get("product_version") == product_version
-                    and accepted.get("source_dirty") is False
-                    and accepted.get("dependency_inputs") == dependency_inputs
-                    and accepted.get("checks") == checks
-                    and completed.parent.resolve() == (build / "package").resolve()
-                    and completed.is_file() and sha256(completed) == accepted.get("sha256")):
-                diagnostics.unlink(missing_ok=True)
-                return accepted
-        except (ValueError, KeyError, TypeError):
-            # An absent or incomplete receipt cannot authorize reuse. The normal
-            # build recreates it only after the media check and packaging pass.
-            pass
-    mpv = prepare_sdk("mpv", SDK_INPUTS["mpv"], dependency_root, source, diagnostics)
-    ffmpeg = prepare_sdk("ffmpeg", SDK_INPUTS["ffmpeg"], dependency_root, source, diagnostics)
     cmake = shutil.which("cmake")
     if not cmake:
         raise RuntimeError("CMake is missing from PATH.")
+    mpv, ffmpeg = dependency_root / "_mpv", dependency_root / "_ffmpeg"
     configure = [
         cmake, "-S", str(source), "-B", str(build), "-G", "Visual Studio 17 2022", "-A", "x64",
         "-DCMAKE_CONFIGURATION_TYPES=Release",
@@ -411,6 +394,57 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         "-DINNO_SETUP_COMPILER=" + str(inno),
         "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python()),
     ]
+    checks = [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}]
+    manifest = build / "package/_build-manifest.json"
+    if manifest.is_file() and not dirty and not native_tests:
+        try:
+            accepted = json.loads(manifest.read_text(encoding="utf-8"))
+            completed = build / "package" / accepted["filename"]
+            original_revision = accepted.get("source_revision", "")
+            if (accepted.get("schema") == "autopsy-windows-installer.v1"
+                    and re.fullmatch(r"[0-9a-f]{40}", original_revision)
+                    and accepted.get("product_version") == product_version
+                    and accepted.get("source_dirty") is False
+                    and accepted.get("dependency_inputs") == dependency_inputs
+                    and accepted.get("checks") == [{"name": "fork-fixtures", "result": "passed",
+                                                    "source_revision": original_revision}]
+                    and completed.parent.resolve() == (build / "package").resolve()
+                    and completed.is_file() and sha256(completed) == accepted.get("sha256")):
+                matching_source = original_revision == revision
+                provenance = build / "_compiled-runtime.json"
+                if not matching_source and provenance.is_file():
+                    previous = json.loads(provenance.read_text(encoding="utf-8"))
+                    inputs = compiled_runtime_inputs(source, build, configure, dependency_inputs, diagnostics)
+                    previous_inputs = previous.get("inputs", {})
+                    if (inputs is not None and previous.get("schema") == "autopsy-compiled-runtime.v1"
+                            and previous.get("source_revision") == accepted.get("compiled_source_revision")
+                            and previous.get("runtime")
+                            and previous["runtime"] == accepted.get("prepackage", {}).get("payload")
+                            and accepted.get("prepackage", {}).get("result") == "passed"):
+                        # Product file hashes bind the checkout's contents. Its
+                        # location may differ during post-merge publication; all
+                        # other requested build settings must remain identical.
+                        source_argument = inputs["configure"].index("-S") + 1
+                        original_argument = previous_inputs["configure"].index("-S") + 1
+                        inputs["configure"][source_argument] = previous_inputs["configure"][original_argument]
+                        matching_source = inputs == previous_inputs and not run_command(
+                            ["git", "diff", "--name-only", "--no-renames", original_revision, revision,
+                             "--", "README.md"], source, diagnostics).strip()
+                        if matching_source:
+                            run_command(["git", "merge-base", "--is-ancestor", original_revision, revision],
+                                        source, diagnostics)
+                if matching_source:
+                    # Retain the original artifact, source and check identities.
+                    # CI/check-only commits do not create a replacement package
+                    # or retrospectively rerun its accepted desktop checks.
+                    diagnostics.unlink(missing_ok=True)
+                    return accepted
+        except (ValueError, KeyError, TypeError):
+            # An absent or incomplete receipt cannot authorize reuse. The normal
+            # build recreates it only after the media check and packaging pass.
+            pass
+    prepare_sdk("mpv", SDK_INPUTS["mpv"], dependency_root, source, diagnostics)
+    prepare_sdk("ffmpeg", SDK_INPUTS["ffmpeg"], dependency_root, source, diagnostics)
     run_command(configure, source, diagnostics)
     compiled = reuse_or_compile_runtime(source, build, configure, dependency_inputs, revision, diagnostics)
     ctest = shutil.which("ctest")
@@ -654,6 +688,19 @@ def get_installer_build_directory() -> Path:
 
 
 def main() -> None:
+    # Explicit input wins; otherwise inspect standard installation locations.
+    # Tool discovery never installs software or edits the user's PATH.
+    inno_default = os.environ.get("AUTOPSY_INNO_COMPILER")
+    if not inno_default:
+        candidates = [shutil.which("ISCC.exe")]
+        for variable, suffix in (("LOCALAPPDATA", "Programs/Inno Setup 6/ISCC.exe"),
+                                 ("ProgramFiles(x86)", "Inno Setup 6/ISCC.exe"),
+                                 ("ProgramFiles", "Inno Setup 6/ISCC.exe")):
+            if os.environ.get(variable):
+                candidates.append(str(Path(os.environ[variable]) / suffix))
+        inno_default = next((value for value in candidates if value and Path(value).is_file()),
+                            str(Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+                                / "Inno Setup 6/ISCC.exe"))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--build-dir", type=Path, default=get_installer_build_directory())
@@ -664,11 +711,9 @@ def main() -> None:
     parser.add_argument("--release-notes", type=Path, default=os.environ.get("AUTOPSY_RELEASE_NOTES"))
     parser.add_argument("--test-name", default=os.environ.get("AUTOPSY_VIDEO_TEST_NAME"),
                         help="Extra prepackage native scope; in test-only mode, defaults to fork-fixtures.")
-    parser.add_argument("--inno-compiler", type=Path, default=Path(
-        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-    ) / "Inno Setup 6/ISCC.exe")
+    parser.add_argument("--inno-compiler", type=Path, default=Path(inno_default))
     args = parser.parse_args()
-    if os.name != "nt":
+    if sys.platform != "win32":
         parser.error("The Windows installer requires a Windows build host.")
     if args.publish_installer:
         if args.test_existing_build or not args.release_tag or not args.release_notes:

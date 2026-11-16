@@ -49,38 +49,31 @@ jobs:
           node-version: "24"
       - name: Install npm validation dependencies
         run: npm --prefix scripts ci
-      - name: Require ShellCheck
-        if: runner.os != 'Windows'
-        run: shellcheck --version
-      - name: Prepare ShellCheck on Windows
+      - name: Prepare locked Python tools
+        run: uv sync --project scripts --locked
+      - name: Check shell scripts
+        # Vendored library scripts retain their upstream policy, matching SDLC.
+        run: >-
+          uv run --project scripts --locked python -c
+          "import subprocess; paths = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.sh', ':(exclude)lib-src/**']).split(b'\0'); subprocess.run(['shellcheck', '--severity=error', '--', *[path.decode('utf-8') for path in paths if path]], check=True)"
+      - name: Check Markdown
+        run: npm --prefix scripts run lint:markdown
+      - name: Check Python style
+        run: uv run --project scripts --locked python -m ruff check . --config scripts/pyproject.toml
+      - name: Check Python types
+        run: uv run --project scripts --locked python -m mypy --config-file scripts/pyproject.toml
+      - name: Check GitHub workflows
+        run: uv run --project scripts --locked python scripts/run-actionlint.py
+      - name: Prepare Windows C++ tools
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command shellcheck -ErrorAction SilentlyContinue)) {
-            choco install shellcheck --yes --no-progress
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          shellcheck --version
-      - name: Validate and test through SDLC
-        uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@1a6ce3995e79b5adc5fa02301e0389e7e9eca500 # revision 1a6ce3995e79
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Run affected repository tests
         env:
           AUTOPSY_TEST_LEVEL: beta
           GH_TOKEN: ${{ github.token }}
-          CERATOPS_PROJECTS_ROOT: ${{ github.workspace }}/..
-          CERATOPS_TASK_TEMP_ROOT: ${{ runner.temp }}
-        with:
-          repo-root: ${{ github.workspace }}
-          evidence-file: ${{ runner.temp }}/repository-validation.log
-          operations: |
-            repository.actions.pre-build-checks.check-groups.shellcheck
-            repository.actions.pre-build-checks.check-groups.npm-markdown-lint
-            repository.actions.pre-build-checks.check-groups.ruff
-            repository.actions.pre-build-checks.check-groups.mypy
-            repository.actions.pre-build-checks.check-groups.actionlint
-            deliverables.apps.autopsy.actions.pre-build-checks.check-groups.source
-            repository.actions.pre-build-checks.check-groups.tests
-            deliverables.packages.windows-installer.actions.pre-build-checks.check-groups.tests
-            deliverables.apps.autopsy.actions.pre-build-checks.check-groups.tests
+        run: uv run --project scripts --locked python scripts/run_affected_tests.py
 
       - name: Upload validation evidence
         if: failure()
@@ -91,9 +84,8 @@ jobs:
           name: repository-validation-evidence-${{ matrix.os }}
           retention-days: 7
           path: |
-            ${{ runner.temp }}/repository-validation.log
-            .build/deploy-validation/repository-validation.log
             .build/_test-results/**/_result-*.json
+            .build/_test-results/_command-failure.json
 
   build-windows-installer:
     name: Windows x64 installer (unsigned)
@@ -119,7 +111,7 @@ jobs:
         id: installer
         env:
           GH_TOKEN: ${{ github.token }}
-        run: uv run --project scripts --locked --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+        run: uv run --project scripts --locked python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
       - name: Upload unsigned installer and source manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

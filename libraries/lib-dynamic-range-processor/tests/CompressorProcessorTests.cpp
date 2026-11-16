@@ -11,7 +11,7 @@
 #pragma once
 
 #include "CompressorProcessor.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 TEST_CASE("GetMaxCompressionDb", "simple test")
 {
@@ -23,16 +23,16 @@ TEST_CASE("GetMaxCompressionDb", "simple test")
    // Infinite ratio -> max compression simply is the input compression
    // threshold.
    settings.compressionRatio = std::numeric_limits<float>::infinity();
-   REQUIRE(CompressorProcessor::GetMaxCompressionDb(settings) == Approx(20));
+   REQUIRE(CompressorProcessor::GetMaxCompressionDb(settings) == Catch::Approx(20));
 
    // 2:1 ratio -> half the input compression threshold.
    settings.compressionRatio = 2;
-   REQUIRE(CompressorProcessor::GetMaxCompressionDb(settings) == Approx(10));
+   REQUIRE(CompressorProcessor::GetMaxCompressionDb(settings) == Catch::Approx(10));
 
    // So long as the knee half width is less than the input compression
    // threshold, it shouldn't change the result.
    settings.kneeWidthDb = 40;
-   REQUIRE(CompressorProcessor::GetMaxCompressionDb(settings) == Approx(10));
+   REQUIRE(CompressorProcessor::GetMaxCompressionDb(settings) == Catch::Approx(10));
 
    // But if it's greater, it should.
    settings.kneeWidthDb = 60;

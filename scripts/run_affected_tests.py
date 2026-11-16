@@ -40,7 +40,7 @@ class CheckGroup:
 
 COMMON_INPUTS = (
     "src/video/CMakeLists.txt", "sdlc/sdlc.yml",
-    "scripts/pyproject.toml", "scripts/uv.lock", "tests/Catch2Main.cpp",
+    "scripts/pyproject.toml", "scripts/uv.lock", "cmake-proxies/cmake-modules/AudacityTesting.cmake",
 )
 TIMELINE_INPUTS = ("src/video/EditVideoContent.*", "src/video/RenderVideoComposition.*", "src/video/JoinVideoClips.*", "src/video/EditVideoTimeline.h", "src/clip-groups/EditClipMarkers.h")
 GROUPS = (
