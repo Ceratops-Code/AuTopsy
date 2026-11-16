@@ -661,6 +661,13 @@ Every new installer build runs `fork-fixtures` after compilation and before
 packaging, without opening AuTopsy. The build manifest records its passing result
 and source revision. Repeated builds reuse that accepted installer only when the
 clean source, dependency inputs and installer integrity still match the receipt.
+A descendant commit containing only CI, check or unbundled documentation changes
+also reuses that original installer when its compiled-input record still matches
+the current product files, tools and build settings. `README.md` remains a package
+input. Reuse keeps the original manifest and check identities without configuring,
+compiling, running desktop cases or repackaging. An explicit native test selection
+still requests its checks; missing provenance or changed product inputs requires
+the normal build path.
 Portable model and installer-producer tests run in the repository test operation;
 source-only CI does not require an already-built Windows application.
 The package build operation declares CMake, CTest and the Windows Inno Setup

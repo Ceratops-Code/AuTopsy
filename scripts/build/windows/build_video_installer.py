@@ -381,31 +381,10 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         raise RuntimeError("Hosted installer source differs from the workflow's checked-out revision.")
     dependency_inputs = {name: {"url": value["url"], "sha256": value["sha256"]}
                          for name, value in SDK_INPUTS.items()}
-    checks = [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}]
-    manifest = build / "package/_build-manifest.json"
-    if manifest.is_file() and not dirty:
-        try:
-            accepted = json.loads(manifest.read_text(encoding="utf-8"))
-            completed = build / "package" / accepted["filename"]
-            if (accepted.get("schema") == "autopsy-windows-installer.v1"
-                    and accepted.get("source_revision") == revision
-                    and accepted.get("product_version") == product_version
-                    and accepted.get("source_dirty") is False
-                    and accepted.get("dependency_inputs") == dependency_inputs
-                    and accepted.get("checks") == checks
-                    and completed.parent.resolve() == (build / "package").resolve()
-                    and completed.is_file() and sha256(completed) == accepted.get("sha256")):
-                diagnostics.unlink(missing_ok=True)
-                return accepted
-        except (ValueError, KeyError, TypeError):
-            # An absent or incomplete receipt cannot authorize reuse. The normal
-            # build recreates it only after the media check and packaging pass.
-            pass
-    mpv = prepare_sdk("mpv", SDK_INPUTS["mpv"], dependency_root, source, diagnostics)
-    ffmpeg = prepare_sdk("ffmpeg", SDK_INPUTS["ffmpeg"], dependency_root, source, diagnostics)
     cmake = shutil.which("cmake")
     if not cmake:
         raise RuntimeError("CMake is missing from PATH.")
+    mpv, ffmpeg = dependency_root / "_mpv", dependency_root / "_ffmpeg"
     configure = [
         cmake, "-S", str(source), "-B", str(build), "-G", "Visual Studio 17 2022", "-A", "x64",
         "-DCMAKE_CONFIGURATION_TYPES=Release",
@@ -415,6 +394,57 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         "-DINNO_SETUP_COMPILER=" + str(inno),
         "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python()),
     ]
+    checks = [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}]
+    manifest = build / "package/_build-manifest.json"
+    if manifest.is_file() and not dirty and not native_tests:
+        try:
+            accepted = json.loads(manifest.read_text(encoding="utf-8"))
+            completed = build / "package" / accepted["filename"]
+            original_revision = accepted.get("source_revision", "")
+            if (accepted.get("schema") == "autopsy-windows-installer.v1"
+                    and re.fullmatch(r"[0-9a-f]{40}", original_revision)
+                    and accepted.get("product_version") == product_version
+                    and accepted.get("source_dirty") is False
+                    and accepted.get("dependency_inputs") == dependency_inputs
+                    and accepted.get("checks") == [{"name": "fork-fixtures", "result": "passed",
+                                                    "source_revision": original_revision}]
+                    and completed.parent.resolve() == (build / "package").resolve()
+                    and completed.is_file() and sha256(completed) == accepted.get("sha256")):
+                matching_source = original_revision == revision
+                provenance = build / "_compiled-runtime.json"
+                if not matching_source and provenance.is_file():
+                    previous = json.loads(provenance.read_text(encoding="utf-8"))
+                    inputs = compiled_runtime_inputs(source, build, configure, dependency_inputs, diagnostics)
+                    previous_inputs = previous.get("inputs", {})
+                    if (inputs is not None and previous.get("schema") == "autopsy-compiled-runtime.v1"
+                            and previous.get("source_revision") == accepted.get("compiled_source_revision")
+                            and previous.get("runtime")
+                            and previous["runtime"] == accepted.get("prepackage", {}).get("payload")
+                            and accepted.get("prepackage", {}).get("result") == "passed"):
+                        # Product file hashes bind the checkout's contents. Its
+                        # location may differ during post-merge publication; all
+                        # other requested build settings must remain identical.
+                        source_argument = inputs["configure"].index("-S") + 1
+                        original_argument = previous_inputs["configure"].index("-S") + 1
+                        inputs["configure"][source_argument] = previous_inputs["configure"][original_argument]
+                        matching_source = inputs == previous_inputs and not run_command(
+                            ["git", "diff", "--name-only", "--no-renames", original_revision, revision,
+                             "--", "README.md"], source, diagnostics).strip()
+                        if matching_source:
+                            run_command(["git", "merge-base", "--is-ancestor", original_revision, revision],
+                                        source, diagnostics)
+                if matching_source:
+                    # Retain the original artifact, source and check identities.
+                    # CI/check-only commits do not create a replacement package
+                    # or retrospectively rerun its accepted desktop checks.
+                    diagnostics.unlink(missing_ok=True)
+                    return accepted
+        except (ValueError, KeyError, TypeError):
+            # An absent or incomplete receipt cannot authorize reuse. The normal
+            # build recreates it only after the media check and packaging pass.
+            pass
+    prepare_sdk("mpv", SDK_INPUTS["mpv"], dependency_root, source, diagnostics)
+    prepare_sdk("ffmpeg", SDK_INPUTS["ffmpeg"], dependency_root, source, diagnostics)
     run_command(configure, source, diagnostics)
     compiled = reuse_or_compile_runtime(source, build, configure, dependency_inputs, revision, diagnostics)
     ctest = shutil.which("ctest")
