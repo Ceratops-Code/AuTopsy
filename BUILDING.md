@@ -101,6 +101,16 @@ under the existing marked test-workspace owner and its finite receipt policy.
 
 ## Building on Windows
 
+The Windows installer and installed app share the product input list in
+`sdlc/sdlc.yml`: `src` plus the declared native dependency, CMake, resource,
+license, test-harness and packaging paths. This includes inherited Audacity
+inputs, the SDK pins in the Windows builder, and the speech-engine pin under
+`src/video`. CMake stages `README.md` with the app, so it remains a package input.
+Repository-only files such as `.github/ISSUE_TEMPLATE/bug_report.yml` do not
+belong to that list. New product inputs outside these paths must be added there.
+This declaration describes build impact; the promotion caller still owns
+selecting affected builds before requesting builder-only parameters.
+
 1. Ensure the Python installer option `Add Python 3.x to PATH` is checked. Go to Windows Settings "Add or Remove Programs" and check the `Add Python to environment variables` in Python settings if Python is not in `PATH`.
   
 2. Use this AuTopsy source checkout, which includes the video extension

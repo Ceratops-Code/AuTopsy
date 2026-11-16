@@ -174,7 +174,34 @@ repository:
 deliverables:
   packages:
     windows-installer:
-      root-dir: .
+      # CMake builds the inherited audio engine and owned extensions together.
+      # Keep product/packaging inputs explicit; repository metadata is not payload.
+      root-dir: src
+      additional-source-files: &windows-product-inputs
+        - CMakeLists.txt
+        - LICENSE.txt
+        - README.md
+        - cmake-proxies/**
+        - conan/**
+        - crashreporter/**
+        - help/**
+        - images/**
+        - include/**
+        - lib-src/**
+        - libraries/**
+        - locale/**
+        - modules/**
+        - nyquist/**
+        - plug-ins/**
+        - resources/**
+        - tests/**
+        - win/**
+        - scripts/build/windows/**
+        - scripts/piped-work/**
+        - scripts/run_affected_tests.py
+        - scripts/pyproject.toml
+        - scripts/uv.lock
+        - sdlc/sdlc.yml
       build-after: []
       artifact:
         type: windows-installer
@@ -224,7 +251,8 @@ deliverables:
                 - --publish-installer
   apps:
     autopsy:
-      root-dir: .
+      root-dir: src
+      additional-source-files: *windows-product-inputs
       manifest: win/Inno_Setup_Wizard/audacity.iss.in
       build-after:
         - deliverables.packages.windows-installer

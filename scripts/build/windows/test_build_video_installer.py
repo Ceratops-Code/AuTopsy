@@ -45,8 +45,8 @@ class InstallerBuildTests(unittest.TestCase):
             source, build = root / "source", root / "build"
             source.mkdir()
             build.mkdir()
-            tracked = ("main.cpp", "scripts/piped-work/test_video_clip_edits.py", "docs/design.md", "README.md",
-                       "scripts/build/windows/test_build_video_installer.py")
+            tracked = ("src/video/BuildSpeechEngine.cmake", "scripts/piped-work/test_video_clip_edits.py", "docs/design.md", "README.md",
+                       "scripts/build/windows/test_build_video_installer.py", ".github/ISSUE_TEMPLATE/bug_report.yml")
             for name in tracked:
                 target = source / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +60,7 @@ class InstallerBuildTests(unittest.TestCase):
                 for name in tracked[1:]:
                     (source / name).write_text("edited check/document", encoding="utf-8")
                     self.assertEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
-                for path in (source / "main.cpp", cache, tool):
+                for path in (source / tracked[0], cache, tool):
                     original = path.read_bytes()
                     path.write_bytes(b"changed product input")
                     self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
