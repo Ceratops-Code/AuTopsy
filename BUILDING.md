@@ -610,7 +610,8 @@ Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
 `--inno-compiler` for a nondefault compiler location. The builder uses CMake's
 archive reader, so a separate 7-Zip installation is unnecessary. Python build
 dependencies, including the Windows process-tree wrapper, come from the locked
-`scripts` environment.
+`scripts` environment. Repository shell checks also use its pinned
+`shellcheck-py` executable, so a separate ShellCheck installation is unnecessary.
 
 The builder owns `_video-dependencies` under its selected build directory:
 one pinned archive and current SDK per component, private extraction/download

@@ -7,6 +7,7 @@ dependencies = [
     "mypy",
     "pywin32>=312 ; sys_platform == 'win32'",
     "ruff",
+    "shellcheck-py==0.11.0.1",
 ]
 
 [tool.uv]

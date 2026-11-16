@@ -36,7 +36,7 @@ repository:
       check-groups:
         shellcheck:
           requires:
-            tools: [shellcheck]
+            tools: [uv, shellcheck]
           validation-tools: [shellcheck]
           check-results:
             result-owner: operation
@@ -75,10 +75,16 @@ repository:
               - modules/import-export/mod-ffmpeg/lib-ffmpeg-support/generator/generate_headers.sh
               - scripts/build/macOS/build_universal.sh
               - scripts/build/macOS/hdiutil_wrapper.sh
-            check-inputs: [sdlc/sdlc.yml, .shellcheckrc, '**/.shellcheckrc']
-            tools: [shellcheck]
+            check-inputs: [sdlc/sdlc.yml, scripts/pyproject.toml, .shellcheckrc, '**/.shellcheckrc']
+            dependencies: [scripts/uv.lock]
+            tools: [uv, shellcheck]
           steps:
             - run:
+                - uv
+                - run
+                - --project
+                - scripts
+                - --locked
                 - shellcheck
                 - --severity=error
                 - --
@@ -177,6 +183,9 @@ repository:
 deliverables:
   packages:
     windows-installer:
+      version:
+        file: resources/autopsy-release.json
+        field: version
       # CMake builds the inherited audio engine and owned extensions together.
       # Keep product/packaging inputs explicit; repository metadata is not payload.
       root-dir: src
