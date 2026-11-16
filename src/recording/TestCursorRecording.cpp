@@ -1,5 +1,5 @@
 #include "PlanCursorRecording.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -42,8 +42,8 @@ TEST_CASE("Cursor recording respects every capture track and selection end")
 TEST_CASE("Cursor recording sample edges never overwrite the next clip")
 {
    auto plan = PlanRecordingAtCursor(1.0004, {}, 1000, {{1.0028, 2}});
-   REQUIRE(plan.start == Approx(1));
-   REQUIRE(*plan.stop == Approx(1.002));
+   REQUIRE(plan.start == Catch::Approx(1));
+   REQUIRE(*plan.stop == Catch::Approx(1.002));
    REQUIRE(*plan.stop <= 1.0028);
    REQUIRE_THROWS(PlanRecordingAtCursor(1, {}, 1000, {{1.0004, 2}}));
    REQUIRE_THROWS(PlanRecordingAtCursor(0.9996, {}, 1000, {{1, 2}}));
@@ -76,11 +76,11 @@ TEST_CASE("Recording gap boundaries are independent of track ordering and sample
       for (unsigned turn = 0; turn != ranges.size(); ++turn) {
          for (int repeat = 0; repeat != 2; ++repeat) {
             const auto plan = PlanRecordingAtCursor(3 / rate, {}, rate, ranges);
-            REQUIRE(plan.start == Approx(3 / rate));
-            REQUIRE(plan.stop == Approx(10 / rate));
-            REQUIRE((*plan.stop - plan.start) * rate == Approx(7));
+            REQUIRE(plan.start == Catch::Approx(3 / rate));
+            REQUIRE(plan.stop == Catch::Approx(10 / rate));
+            REQUIRE((*plan.stop - plan.start) * rate == Catch::Approx(7));
             REQUIRE(PlanRecordingAtCursor(3 / rate, 8 / rate, rate, ranges).stop
-               == Approx(8 / rate));
+               == Catch::Approx(8 / rate));
          }
          std::rotate(ranges.begin(), ranges.begin() + 1, ranges.end());
       }
@@ -100,8 +100,8 @@ TEST_CASE("Recording refuses a sub-sample gap and accepts its exact one-sample b
             REQUIRE_THROWS(PlanRecordingAtCursor(start, {}, rate,
                {{start + 0.4 / rate, start + 1}}));
             const auto plan = PlanRecordingAtCursor(start, start + 1 / rate, rate, {});
-            REQUIRE(plan.start == Approx(start));
-            REQUIRE((*plan.stop - plan.start) * rate == Approx(1).margin(1e-5));
+            REQUIRE(plan.start == Catch::Approx(start));
+            REQUIRE((*plan.stop - plan.start) * rate == Catch::Approx(1).margin(1e-5));
          }
       }
    }

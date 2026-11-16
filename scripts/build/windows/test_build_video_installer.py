@@ -141,13 +141,48 @@ class InstallerBuildTests(unittest.TestCase):
                 "checks": [{"name": name, "result": "passed"} for name in (
                     "fork-fixtures", "fork-preview", "fork-project-compatibility")]}
 
-    def test_package_location_does_not_activate_or_follow_native_test_selection(self):
+    def test_default_tool_and_package_paths_do_not_activate_native_tests(self):
         for _ in range(2):
             with mock.patch.dict(os.environ, {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
                                               "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
                 self.assertEqual(builder.get_installer_build_directory(), Path("_accepted-build"))
             with mock.patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
                 self.assertEqual(builder.get_installer_build_directory(), Path(".build/_windows-installer"))
+        with tempfile.TemporaryDirectory(prefix="_installer-tools-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
+            root = Path(temporary)
+            user_compiler = root / "user/Programs/Inno Setup 6/ISCC.exe"
+            machine_compiler = root / "machine/Inno Setup 6/ISCC.exe"
+            for compiler in (user_compiler, machine_compiler):
+                compiler.parent.mkdir(parents=True)
+                compiler.write_bytes(b"test compiler, never executed")
+            for _ in range(2):
+                for explicit, environment, on_path, expected in (
+                        (None, None, None, user_compiler),
+                        (None, None, str(root / "path-compiler.exe"), root / "path-compiler.exe"),
+                        (None, str(root / "explicit-env.exe"), None, root / "explicit-env.exe"),
+                        (str(root / "explicit-cli.exe"), str(root / "explicit-env.exe"), None, root / "explicit-cli.exe")):
+                    (root / "path-compiler.exe").write_bytes(b"test compiler, never executed")
+                    values = {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}
+                    if environment:
+                        values["AUTOPSY_INNO_COMPILER"] = environment
+                    with mock.patch.dict(os.environ, values, clear=True), \
+                            mock.patch.object(builder.sys, "platform", "win32"), \
+                            mock.patch.object(builder.sys, "argv", ["build_video_installer.py", *(["--inno-compiler", explicit] if explicit else [])]), \
+                            mock.patch.object(builder.shutil, "which", return_value=on_path), \
+                            mock.patch.object(builder, "build_installer", return_value={}) as build, \
+                            mock.patch("builtins.print"):
+                        builder.main()
+                    self.assertEqual(build.call_args.args[2], expected)
+                    self.assertEqual(build.call_args.args[1], Path(".build/_windows-installer"))
+            user_compiler.unlink()
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}, clear=True), \
+                    mock.patch.object(builder.sys, "platform", "win32"), \
+                    mock.patch.object(builder.sys, "argv", ["build_video_installer.py"]), \
+                    mock.patch.object(builder.shutil, "which", return_value=None), \
+                    mock.patch.object(builder, "build_installer", return_value={}) as build, \
+                    mock.patch("builtins.print"):
+                builder.main()
+            self.assertEqual(build.call_args.args[2], machine_compiler)
 
     def test_preview_publication_repeats_and_interrupts_each_remote_effect(self):
         revision, body = "a" * 40, "Unsigned AuTopsy preview.\n"

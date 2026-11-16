@@ -654,6 +654,19 @@ def get_installer_build_directory() -> Path:
 
 
 def main() -> None:
+    # Explicit input wins; otherwise inspect standard installation locations.
+    # Tool discovery never installs software or edits the user's PATH.
+    inno_default = os.environ.get("AUTOPSY_INNO_COMPILER")
+    if not inno_default:
+        candidates = [shutil.which("ISCC.exe")]
+        for variable, suffix in (("LOCALAPPDATA", "Programs/Inno Setup 6/ISCC.exe"),
+                                 ("ProgramFiles(x86)", "Inno Setup 6/ISCC.exe"),
+                                 ("ProgramFiles", "Inno Setup 6/ISCC.exe")):
+            if os.environ.get(variable):
+                candidates.append(str(Path(os.environ[variable]) / suffix))
+        inno_default = next((value for value in candidates if value and Path(value).is_file()),
+                            str(Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+                                / "Inno Setup 6/ISCC.exe"))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--build-dir", type=Path, default=get_installer_build_directory())
@@ -664,11 +677,9 @@ def main() -> None:
     parser.add_argument("--release-notes", type=Path, default=os.environ.get("AUTOPSY_RELEASE_NOTES"))
     parser.add_argument("--test-name", default=os.environ.get("AUTOPSY_VIDEO_TEST_NAME"),
                         help="Extra prepackage native scope; in test-only mode, defaults to fork-fixtures.")
-    parser.add_argument("--inno-compiler", type=Path, default=Path(
-        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-    ) / "Inno Setup 6/ISCC.exe")
+    parser.add_argument("--inno-compiler", type=Path, default=Path(inno_default))
     args = parser.parse_args()
-    if os.name != "nt":
+    if sys.platform != "win32":
         parser.error("The Windows installer requires a Windows build host.")
     if args.publish_installer:
         if args.test_existing_build or not args.release_tag or not args.release_notes:

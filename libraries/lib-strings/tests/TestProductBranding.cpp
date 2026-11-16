@@ -5,7 +5,7 @@
  * Core-only builds need only Catch2 and the standard library; no GUI is opened.
  */
 #include "../ApplyProductBranding.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <array>
 
 TEST_CASE("Product words inherit AuTopsy branding", "[branding-core]")

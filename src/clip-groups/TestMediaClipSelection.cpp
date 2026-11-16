@@ -1,6 +1,6 @@
 #include "SelectMediaClips.h"
 #include "PlanRippleDeletion.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <limits>
 using ClipGroups::TemporaryClipSelection;
 

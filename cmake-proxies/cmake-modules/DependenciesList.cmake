@@ -82,9 +82,6 @@ if(${_OPT}has_vst3)
    audacity_find_package(vst3sdk REQUIRED)
 endif()
 
-if( ${_OPT}has_tests )
-   audacity_find_package(Catch2 REQUIRED)
-endif()
 
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin|Windows")
    find_package(libuuid REQUIRED)

@@ -214,7 +214,6 @@ class AudacityConan(ConanFile):
 
         CrashpadDependency("cci.20220219-audacity"),
 
-        AudacityDependency("catch2", "2.13.8")
     ]
 
     options.update({f"use_{dependency.name}": [True, False] for dependency in _dependencies})

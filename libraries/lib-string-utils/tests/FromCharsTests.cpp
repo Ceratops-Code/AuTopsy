@@ -8,7 +8,7 @@
  Dmitry Vedenko
  **********************************************************************/
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include <string>
 #include <string_view>
@@ -29,7 +29,7 @@ void TestFromChars(std::string_view input, T expectedValue, std::errc errc = {})
    if (errc == std::errc {})
    {
       if constexpr (std::is_floating_point_v<std::decay_t<T>>)
-         REQUIRE(Approx(expectedValue) == value);
+         REQUIRE(Catch::Approx(expectedValue) == value);
       else
          REQUIRE(expectedValue == value);
 

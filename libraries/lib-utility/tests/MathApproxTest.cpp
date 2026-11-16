@@ -10,7 +10,7 @@
 **********************************************************************/
 
 #include "MathApprox.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <numeric>
 
 TEST_CASE("FastLog2")

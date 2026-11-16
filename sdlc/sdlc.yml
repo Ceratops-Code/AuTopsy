@@ -10,6 +10,9 @@ repository:
       executable: cmake
     ctest:
       executable: ctest
+    iscc:
+      executable: ISCC.exe
+      platforms: [windows]
     python:
       executable: python
       version-from:
@@ -210,10 +213,7 @@ deliverables:
       actions:
         build:
           requires:
-            tools: [uv]
-          parameters:
-            - build_dir
-            - inno_compiler
+            tools: [uv, cmake, ctest, iscc]
           steps:
             - run:
                 - uv
@@ -221,14 +221,8 @@ deliverables:
                 - --project
                 - scripts
                 - --locked
-                - --with
-                - cmake==3.31.10
                 - python
                 - scripts/build/windows/build_video_installer.py
-                - --build-dir
-                - '{build_dir}'
-                - --inno-compiler
-                - '{inno_compiler}'
         pre-build-checks:
           check-groups:
             tests:

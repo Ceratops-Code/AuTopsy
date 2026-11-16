@@ -4,7 +4,7 @@
 #include "RelinkVideoMedia.h"
 #include "../clip-groups/PlanClipPlacement.h"
 #include "../clip-groups/NavigateClipFlags.h"
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 #include <limits>
 
 using namespace VideoEditing;
@@ -49,8 +49,8 @@ TEST_CASE("Picture slips retain placement and the independent soundtrack clock",
       REQUIRE(timeline.clips[0].audioSourceOffset == 0);
       REQUIRE(timeline.clips[0].sourceStart == before.clips[0].sourceStart);
       REQUIRE(SlipVideoClip(timeline, 1, 2.021));
-      REQUIRE(timeline.clips[0].sourceStart == Approx(2 + 1.0 / 30));
-      REQUIRE(VideoContentLinkWindows(timeline.clips[0])[0].sourceOrigin == Approx(oldWindows[0].sourceOrigin));
+      REQUIRE(timeline.clips[0].sourceStart == Catch::Approx(2 + 1.0 / 30));
+      REQUIRE(VideoContentLinkWindows(timeline.clips[0])[0].sourceOrigin == Catch::Approx(oldWindows[0].sourceOrigin));
    }
 }
 TEST_CASE("Slipped compound and generated pictures keep forward sound through later edits", "[video-edits][picture-slip]")
@@ -274,11 +274,11 @@ TEST_CASE("Video speed retains source handles flags and split editability", "[vi
    for (int repeat{}; repeat < 2; ++repeat) {
       REQUIRE(ChangeVideoClipSpeed(timeline, 1, 2));
       REQUIRE_FALSE(ChangeVideoClipSpeed(timeline, 1, 2));
-      REQUIRE(timeline.clips[0].duration == Approx(3));
-      REQUIRE(PictureAt(timeline, 5.5).sourceTime == Approx(3));
-      REQUIRE(timeline.clips[0].ProjectTimeAtContentTime(6) == Approx(7));
+      REQUIRE(timeline.clips[0].duration == Catch::Approx(3));
+      REQUIRE(PictureAt(timeline, 5.5).sourceTime == Catch::Approx(3));
+      REQUIRE(timeline.clips[0].ProjectTimeAtContentTime(6) == Catch::Approx(7));
       REQUIRE(SplitClipAt(timeline, 6));
-      REQUIRE(timeline.clips[1].sourceStart == Approx(4));
+      REQUIRE(timeline.clips[1].sourceStart == Catch::Approx(4));
       REQUIRE(timeline.clips[1].playbackRate == 2);
       REQUIRE(HealVideoClips(timeline, 5, 8));
       REQUIRE(timeline.clips[0].markers[0].position == 6);
@@ -303,15 +303,15 @@ TEST_CASE("Retimed clipboard and gap edits preserve content coordinates", "[vide
    const auto copied = CopyVideoRange(timeline, 1, 3);
    REQUIRE(copied.clips[0].sourceStart == 2);
    REQUIRE(copied.clips[0].playbackRate == 2);
-   REQUIRE(PictureAt(copied, 0.5).sourceTime == Approx(3));
+   REQUIRE(PictureAt(copied, 0.5).sourceTime == Catch::Approx(3));
    InsertVideoGap(timeline, 1, 1);
    REQUIRE_FALSE(PictureAt(timeline, 1.5).visible);
-   REQUIRE(PictureAt(timeline, 2.25).sourceTime == Approx(2.5));
+   REQUIRE(PictureAt(timeline, 2.25).sourceTime == Catch::Approx(2.5));
    EraseVideoRange(timeline, 2, 2.5, true);
-   REQUIRE(PictureAt(timeline, 2.25).sourceTime == Approx(3.5));
+   REQUIRE(PictureAt(timeline, 2.25).sourceTime == Catch::Approx(3.5));
    Timeline pasted;
    PasteVideoRange(pasted, 1, copied, 2);
-   REQUIRE(PictureAt(pasted, 1.5).sourceTime == Approx(3));
+   REQUIRE(PictureAt(pasted, 1.5).sourceTime == Catch::Approx(3));
 }
 
 TEST_CASE("Retiming plans repeat across their single publication boundary", "[video-edits][video-speed]")
@@ -380,16 +380,16 @@ TEST_CASE("Mixed-speed joins flatten and separate without changing source sample
    const auto flattened = ComposeVideoTracks({&timeline});
    REQUIRE(SeparateVideoClips(timeline, 0, 6));
    REQUIRE_FALSE(SeparateVideoClips(timeline, 0, 6));
-   REQUIRE(timeline.clips[0].ProjectTimeAtContentTime(2) == Approx(0.5));
-   REQUIRE(timeline.clips[1].ProjectTimeAtContentTime(6) == Approx(4));
+   REQUIRE(timeline.clips[0].ProjectTimeAtContentTime(2) == Catch::Approx(0.5));
+   REQUIRE(timeline.clips[1].ProjectTimeAtContentTime(6) == Catch::Approx(4));
    const Timeline *variants[]{&flattened, &timeline};
    for (const auto *variant : variants) for (const auto &item : expected) {
       const auto actual = EvaluateVideoLayers({variant}, item.at);
       REQUIRE(bool(actual.clip) == item.visible);
       if (!item.visible) continue;
       REQUIRE(actual.source.path == item.source);
-      REQUIRE(actual.sourceTime == Approx(item.time));
-      REQUIRE(actual.playbackRate == Approx(item.rate));
+      REQUIRE(actual.sourceTime == Catch::Approx(item.time));
+      REQUIRE(actual.playbackRate == Catch::Approx(item.rate));
    }
 }
 
@@ -424,7 +424,7 @@ TEST_CASE("Joined footage retains gaps source cuts outer handles and nested edit
    REQUIRE(timeline.clips[0].content);
    REQUIRE(timeline.clips[0].sourceStart == 1);
    REQUIRE_FALSE(PictureAt(timeline, 4).visible);
-   REQUIRE(PictureAt(timeline, 5.5).sourceTime == Approx(5.5));
+   REQUIRE(PictureAt(timeline, 5.5).sourceTime == Catch::Approx(5.5));
    REQUIRE_FALSE(JoinVideoClips(timeline, 0, 10));
    auto gapOnly = timeline;
    TrimVideoClip(gapOnly, 1, 3, 5);
@@ -433,8 +433,8 @@ TEST_CASE("Joined footage retains gaps source cuts outer handles and nested edit
    // Neither this join nor an outer trim can resurrect the deleted interior.
    TrimVideoClip(timeline, 1, 0, 10);
    REQUIRE_FALSE(PictureAt(timeline, 4).visible);
-   REQUIRE(PictureAt(timeline, .5).sourceTime == Approx(.5));
-   REQUIRE(PictureAt(timeline, 9).sourceTime == Approx(9));
+   REQUIRE(PictureAt(timeline, .5).sourceTime == Catch::Approx(.5));
+   REQUIRE(PictureAt(timeline, 9).sourceTime == Catch::Approx(9));
    REQUIRE_FALSE(SampleVideoContent(timeline.clips[0], SourceFor(timeline, timeline.clips[0]), -1));
    REQUIRE_FALSE(SampleVideoContent(timeline.clips[0], SourceFor(timeline, timeline.clips[0]), 10));
    TrimVideoClip(timeline, 1, 1, 8);
@@ -461,7 +461,7 @@ TEST_CASE("Compounds use actual leaf media in playback export copy and relink", 
    REQUIRE(SourceFor(mix, *ClipAt(mix, 2)).path == "red.mp4");
    REQUIRE(SourceFor(mix, *ClipAt(mix, 4.5)).path == "green.mp4");
    REQUIRE(SourceFor(mix, *ClipAt(mix, 6)).path == "blue.mp4");
-   REQUIRE(PictureAt(mix, 6).sourceTime == Approx(1));
+   REQUIRE(PictureAt(mix, 6).sourceTime == Catch::Approx(1));
    auto copied = CopyVideoRange(upper, 2, 7);
    REQUIRE(copied.clips[0].content == upper.clips[0].content);
    REQUIRE(ReplaceVideoSource(copied, "blue.mp4", {"moved.mp4", 3, 24}));
@@ -643,7 +643,7 @@ TEST_CASE("Bound track movement follows identities and keeps every source synchr
    REQUIRE(plan.ChangedTrackIds().size() == 3);
    REQUIRE(project.tracks[0].timeline.clips[0].start == 0); // unrelated
    for (size_t i = 1; i < project.tracks.size(); ++i) {
-      REQUIRE(project.tracks[i].timeline.clips[0].start == Approx(1.123));
+      REQUIRE(project.tracks[i].timeline.clips[0].start == Catch::Approx(1.123));
       REQUIRE(project.tracks[i].timeline.clips[0].sourceStart == 0);
    }
    project.tracks[2].timeline.clips[0].start = 3;

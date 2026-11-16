@@ -9,7 +9,7 @@
 
 **********************************************************************/
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include "SnapUtils.h"
 
@@ -24,7 +24,7 @@ void TimeCase(const AudacityProject& project, const char* format, double time, d
    REQUIRE(SnapFunctionsRegistry::Snap(format, project, time, nearest).snapped);
    REQUIRE(
       SnapFunctionsRegistry::Snap(format, project, time, nearest).time ==
-      Approx(expected));
+      Catch::Approx(expected));
 }
 
 void BeatsCase(
@@ -42,7 +42,7 @@ void BeatsCase(
 
    REQUIRE(
       SnapFunctionsRegistry::Snap(format, project, time, nearest).time ==
-      Approx(expected));
+      Catch::Approx(expected));
 }
 
 void TimeStepCase(
@@ -55,7 +55,7 @@ void TimeStepCase(
    
    REQUIRE(
       SnapFunctionsRegistry::SingleStep(format, project, time, upwards).time ==
-      Approx(expected));
+      Catch::Approx(expected));
 }
 
 void BarStepCase(
@@ -73,7 +73,7 @@ void BarStepCase(
 
    REQUIRE(
       SnapFunctionsRegistry::SingleStep(format, project, time, upwards).time ==
-      Approx(expected));
+      Catch::Approx(expected));
 }
 
 TEST_CASE("Snapping", "")

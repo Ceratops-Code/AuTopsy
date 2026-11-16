@@ -1,3 +1,37 @@
+# Both the application and portable checks consume this one pinned test framework.
+# Keep it outside Conan's Audacity-only package channel so both paths use the
+# maintained upstream release and its matching CMake discovery implementation.
+if( ${_OPT}has_tests OR PROJECT_NAME STREQUAL "AuTopsyVideoCoreChecks" )
+   include(FetchContent)
+   if(APPLE)
+      # Preserve the existing older-macOS exception-runtime boundary in the
+      # separately compiled framework, rather than only its client sources.
+      set(CATCH_CONFIG_NO_CPP17_UNCAUGHT_EXCEPTIONS ON CACHE BOOL "Use the older macOS exception runtime")
+   endif()
+   FetchContent_Declare(Catch2
+      GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+      GIT_TAG 08092139210881f01a34e60c5f2fd6afa0ea4024) # v3.16.1
+   # The framework belongs only to test executables, never the installed app.
+   # Preserve the application's existing shared-library choice afterward.
+   if(DEFINED BUILD_SHARED_LIBS)
+      set(_autopsy_testing_shared_libraries "${BUILD_SHARED_LIBS}")
+   endif()
+   set(BUILD_SHARED_LIBS OFF)
+   FetchContent_MakeAvailable(Catch2)
+   if(DEFINED _autopsy_testing_shared_libraries)
+      set(BUILD_SHARED_LIBS "${_autopsy_testing_shared_libraries}")
+      unset(_autopsy_testing_shared_libraries)
+   else()
+      unset(BUILD_SHARED_LIBS)
+   endif()
+   include("${catch2_SOURCE_DIR}/extras/Catch.cmake")
+endif()
+
+# Portable targets supply their own SQLite and do not use application adapters.
+if(PROJECT_NAME STREQUAL "AuTopsyVideoCoreChecks")
+   return()
+endif()
+
 if( ${_OPT}has_tests )
 
    set( TESTS_DIR "${CMAKE_BINARY_DIR}/tests" )
@@ -38,8 +72,8 @@ if( ${_OPT}has_tests )
 
       # Create test executable
 
-      add_executable( ${test_executable_name} ${ADD_UNIT_TEST_SOURCES} "${CMAKE_SOURCE_DIR}/tests/Catch2Main.cpp")
-      target_link_libraries( ${test_executable_name} PRIVATE ${ADD_UNIT_TEST_LIBRARIES} Catch2::Catch2 )
+      add_executable( ${test_executable_name} ${ADD_UNIT_TEST_SOURCES} )
+      target_link_libraries( ${test_executable_name} PRIVATE ${ADD_UNIT_TEST_LIBRARIES} Catch2::Catch2WithMain )
 
       if (ADD_UNIT_TEST_MOCK_PREFS)
          target_compile_definitions( ${test_executable_name} PRIVATE MOCK_PREFS )
@@ -114,8 +148,6 @@ if( ${_OPT}has_tests )
                ENVIRONMENT "PATH=$<SHELL_PATH:${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>>\\;${escaped_path}"
          )
       elseif( APPLE )
-         # We target an old version of macOS, disable std::uncaught_exceptions
-         target_compile_definitions( ${test_executable_name} PRIVATE CATCH_CONFIG_NO_CPP17_UNCAUGHT_EXCEPTIONS )
          # Similar to Windows, but uses DYLD_FALLBACK_LIBRARY_PATH instead of PATH
          set_tests_properties(
             ${ADD_UNIT_TEST_NAME}

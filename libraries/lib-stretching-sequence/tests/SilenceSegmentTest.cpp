@@ -11,7 +11,7 @@
 #include "SilenceSegment.h"
 #include "AudioContainer.h"
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 TEST_CASE("SilenceSegment", "behaves as expected")
 {

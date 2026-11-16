@@ -4,7 +4,7 @@
  * SPDX-FileContributor: Dmitry Vedenko
  */
 
-#include <catch2/catch.hpp>
+#include <catch2/catch_all.hpp>
 
 #include "sqlite/Connection.h"
 

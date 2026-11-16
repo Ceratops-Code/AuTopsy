@@ -601,7 +601,7 @@ with any distributed build, alongside AuTopsy's existing license material.
 
 Run the same repository-owned builder used by the GitHub-hosted Windows job:
 
-    uv run --project scripts --locked --with cmake==3.31.10 python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+    uv run --project scripts --locked python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
 
 Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
 `--inno-compiler` for a nondefault compiler location. The builder uses CMake's
@@ -659,8 +659,15 @@ and source revision. Repeated builds reuse that accepted installer only when the
 clean source, dependency inputs and installer integrity still match the receipt.
 Portable model and installer-producer tests run in the repository test operation;
 source-only CI does not require an already-built Windows application.
-The package build operation takes explicit `build_dir` and `inno_compiler`
-inputs, so local builds can reuse their task-owned build and compiler paths.
+The package build operation declares CMake, CTest and the Windows Inno Setup
+compiler (`ISCC.exe`) alongside `uv`. `scripts/pyproject.toml` and `scripts/uv.lock`
+supply the pinned CMake/CTest environment through `uv`; the builder discovers ISCC on PATH or in the standard
+per-user and machine-wide Inno Setup 6 locations. `AUTOPSY_INNO_COMPILER` selects
+an explicit compiler, while `AUTOPSY_INSTALLER_BUILD_DIR` selects the task-owned
+build directory (default `.build/_windows-installer`). The command-line options
+`--inno-compiler` and `--build-dir` override those defaults for direct calls.
+Both application and portable C++ tests use the single Catch2 3.16.1 pin in
+`cmake-proxies/cmake-modules/AudacityTesting.cmake`, with Catch2's compiled main.
 Setting both `AUTOPSY_VIDEO_BUILD_DIR` and `AUTOPSY_VIDEO_TEST_NAME` selects only
 an explicit native session in the repository test operation. For example,
 `^fork-media$` runs the existing guarded desktop case for linked-media splits
@@ -738,7 +745,7 @@ saved clip flags, relinking, source frame stepping and modern software exports.
 The SDLC `repository.actions.test` operation and GitHub CI call the same owning
 runner. Its direct developer entry point is:
 
-    uv run --project scripts --locked --with cmake==3.31.10 python scripts/run_affected_tests.py
+    uv run --project scripts --locked python scripts/run_affected_tests.py
 
 Local development defaults to the merge base with `origin/main`, including
 current staged/unstaged and untracked inputs. Set `AUTOPSY_TEST_BASE` or use
@@ -828,8 +835,8 @@ streams. Interrupted pending writes are removed by the current owner or its next
 normal entry; the command report never controls test reuse or execution progress.
 
 This mode checks owned video timing, transport, edit plans, crop/PiP geometry and product-name policy
-without the editor or media SDKs. It fetches the same Catch2 2.13.8 revision used by the upstream
-test interface, pinned to its Git commit. CMake owns the current executables,
+without the editor or media SDKs. It fetches Catch2 3.16.1 through the shared
+application test setup, pinned to its Git commit. CMake owns the current executables,
 dependency checkout, and generated files in the selected build directory.
 The full Windows cases above cover the native adapters, media, and GUI; the
 independent CI checks do not claim those desktop behaviors were exercised.
