@@ -267,6 +267,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_expected_fault_stop_keeps_streams_and_never_stops_an_unacknowledged_app(self) -> None:
         import threading
+        import time
 
         import run_fork_test_harness as harness
 
@@ -280,15 +281,29 @@ class SelectionTests(unittest.TestCase):
                 app = unittest.mock.Mock()
                 app.poll.side_effect = [None, 17]
                 app.returncode = 17
-                command = [sys.executable, "-c", "import sys,time; print('started',flush=True); print('details',file=sys.stderr,flush=True); time.sleep(60)"]
-                if acknowledged:
-                    result = harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
-                    self.assertIsNotNone(result.returncode)
-                    self.assertIn("started", result.stdout)
-                    self.assertIn("details", result.stderr)
-                else:
-                    with self.assertRaisesRegex(RuntimeError, "Owned app exited with status 17"):
-                        harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
+                ready = root / "_worker-ready"
+                command = [sys.executable, "-c", "import pathlib,sys,time; print('started',flush=True); print('details',file=sys.stderr,flush=True); pathlib.Path(sys.argv[1]).touch(); time.sleep(60)", str(ready)]
+                # The shutdown case starts only after the real worker has emitted
+                # both streams; interpreter startup is not the behavior under test.
+                worker = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and worker.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists(), "Test worker did not reach its ready boundary")
+                    with patch.object(harness.subprocess, "Popen", return_value=worker):
+                        if acknowledged:
+                            result = harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
+                            self.assertIsNotNone(result.returncode)
+                            self.assertIn("started", result.stdout)
+                            self.assertIn("details", result.stderr)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, "Owned app exited with status 17"):
+                                harness.run_behavior_worker(command, dict(os.environ), app, root, expected_app_stop=event)
+                finally:
+                    if worker.poll() is None:
+                        worker.terminate()
+                    worker.communicate(timeout=10)
                 app.terminate.assert_not_called()
                 self.assertIn("started", (root / "_commands.log").read_text(encoding="utf-8"))
                 self.assertIn("details", (root / "_errors.log").read_text(encoding="utf-8"))
