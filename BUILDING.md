@@ -102,8 +102,8 @@ under the existing marked test-workspace owner and its finite receipt policy.
 ## Building on Windows
 
 The Windows installer and installed app share the product input list in
-`sdlc/sdlc.yml`: `src` plus the declared native dependency, CMake, resource,
-license, test-harness and packaging paths. This includes inherited Audacity
+`.ceratops/sdlc/sdlc.yml`: `src` plus the declared native dependency, CMake,
+resource, license and packaging paths. This includes inherited Audacity
 inputs, the SDK pins in the Windows builder, and the speech-engine pin under
 `src/video`. CMake stages `README.md` with the app, so it remains a package input.
 Repository-only files such as `.github/ISSUE_TEMPLATE/bug_report.yml` do not

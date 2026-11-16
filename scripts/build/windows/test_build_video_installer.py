@@ -48,7 +48,8 @@ class InstallerBuildTests(unittest.TestCase):
             source.mkdir()
             build.mkdir()
             tracked = ("src/video/BuildSpeechEngine.cmake", "scripts/piped-work/test_video_clip_edits.py", "docs/design.md", "README.md",
-                       "scripts/build/windows/test_build_video_installer.py", ".github/ISSUE_TEMPLATE/bug_report.yml")
+                       "scripts/build/windows/test_build_video_installer.py", ".github/ISSUE_TEMPLATE/bug_report.yml",
+                       ".ceratops/sdlc/sdlc.yml")
             for name in tracked:
                 target = source / name
                 target.parent.mkdir(parents=True, exist_ok=True)

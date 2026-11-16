@@ -849,6 +849,8 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(native, [path])
 
     def test_unknown_owned_executable_input_requires_a_scope_decision(self) -> None:
+        self.assertEqual(self.names([".ceratops/sdlc/sdlc.yml"]),
+                         {group.name for group in runner.GROUPS})
         for path in ("scripts/new_operation.py", "src/video/NewVideoOperation.cpp",
                      "src/video/ShowVideoNewFeature.h", "src/clip-groups/ChangeClipLinks.cpp",
                      "src/video/new-fixture.json"):

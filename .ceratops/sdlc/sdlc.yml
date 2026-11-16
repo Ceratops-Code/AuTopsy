@@ -75,7 +75,7 @@ repository:
               - modules/import-export/mod-ffmpeg/lib-ffmpeg-support/generator/generate_headers.sh
               - scripts/build/macOS/build_universal.sh
               - scripts/build/macOS/hdiutil_wrapper.sh
-            check-inputs: [sdlc/sdlc.yml, scripts/pyproject.toml, .shellcheckrc, '**/.shellcheckrc']
+            check-inputs: [.ceratops/sdlc/sdlc.yml, scripts/pyproject.toml, .shellcheckrc, '**/.shellcheckrc']
             dependencies: [scripts/uv.lock]
             tools: [uv, shellcheck]
           steps:
@@ -129,7 +129,7 @@ repository:
           check-results:
             result-owner: operation
             product-inputs: [README.md, AGENTS.md, BUILDING.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md]
-            check-inputs: [sdlc/sdlc.yml, scripts/package.json, scripts/.markdownlint.json]
+            check-inputs: [.ceratops/sdlc/sdlc.yml, scripts/package.json, scripts/.markdownlint.json]
             dependencies: [scripts/package-lock.json]
             tools: [node, npm]
           steps:
@@ -141,7 +141,7 @@ repository:
           check-results:
             result-owner: operation
             product-inputs: [scripts/**/*.py, '**/*.pyi']
-            check-inputs: [sdlc/sdlc.yml, scripts/pyproject.toml, .gitignore, '**/.gitignore']
+            check-inputs: [.ceratops/sdlc/sdlc.yml, scripts/pyproject.toml, .gitignore, '**/.gitignore']
             dependencies: [scripts/uv.lock]
             environment: [UV_OFFLINE, UV_PYTHON, UV_PYTHON_PREFERENCE]
             tools: [uv, python]
@@ -154,7 +154,7 @@ repository:
           check-results:
             result-owner: operation
             product-inputs: [scripts/**/*.py, '**/*.pyi']
-            check-inputs: [sdlc/sdlc.yml, scripts/pyproject.toml, .gitignore, '**/.gitignore']
+            check-inputs: [.ceratops/sdlc/sdlc.yml, scripts/pyproject.toml, .gitignore, '**/.gitignore']
             dependencies: [scripts/uv.lock]
             environment: [UV_OFFLINE, UV_PYTHON, UV_PYTHON_PREFERENCE, MYPYPATH]
             tools: [uv, python]
@@ -167,7 +167,7 @@ repository:
           check-results:
             result-owner: operation
             product-inputs: [.github/workflows/*.yml, .github/workflows/*.yaml, .github/actions/**]
-            check-inputs: [sdlc/sdlc.yml, scripts/pyproject.toml, scripts/run-actionlint.py, .github/actionlint.yaml,
+            check-inputs: [.ceratops/sdlc/sdlc.yml, scripts/pyproject.toml, scripts/run-actionlint.py, .github/actionlint.yaml,
                   .github/actionlint.yml]
             dependencies: [scripts/uv.lock]
             environment: [UV_OFFLINE, UV_PYTHON, UV_PYTHON_PREFERENCE, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH,
@@ -191,6 +191,7 @@ deliverables:
       root-dir: src
       additional-source-files: &windows-product-inputs
         - CMakeLists.txt
+        - CMakePresets.json
         - LICENSE.txt
         - README.md
         - cmake-proxies/**
@@ -206,14 +207,13 @@ deliverables:
         - nyquist/**
         - plug-ins/**
         - resources/**
-        - tests/**
+        - tests/journals/**
         - win/**
-        - scripts/build/windows/**
-        - scripts/piped-work/**
-        - scripts/run_affected_tests.py
+        - scripts/build/windows/build_video_installer.py
+        - scripts/build/windows/PfxSign.cmake
+        - scripts/build/windows/PfxSign.ps1
         - scripts/pyproject.toml
         - scripts/uv.lock
-        - sdlc/sdlc.yml
       build-after: []
       artifact:
         type: windows-installer
