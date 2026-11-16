@@ -64,6 +64,11 @@ jobs:
         run: uv run --project scripts --locked python -m mypy --config-file scripts/pyproject.toml
       - name: Check GitHub workflows
         run: uv run --project scripts --locked python scripts/run-actionlint.py
+      - name: Prepare Windows C++ tools
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
       - name: Run affected repository tests
         env:
           AUTOPSY_TEST_LEVEL: beta
