@@ -183,7 +183,7 @@ repository:
 deliverables:
   packages:
     windows-installer:
-      version:
+      version: &windows-installer-version
         file: resources/autopsy-release.json
         field: version
       # CMake builds the inherited audio engine and owned extensions together.
@@ -254,6 +254,7 @@ deliverables:
                 - --publish-installer
   apps:
     autopsy:
+      version: *windows-installer-version
       root-dir: src
       additional-source-files: *windows-product-inputs
       manifest: win/Inno_Setup_Wizard/audacity.iss.in
