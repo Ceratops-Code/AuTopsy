@@ -1012,16 +1012,16 @@ def operate_owned_video_track(
             deadline = time.monotonic() + 3
             while True:
                 state = user.GetMenuState(menu, index, 0x400)
-                if state != 0xFFFFFFFF and state & 0x80:
+                if state not in (-1, 0xFFFFFFFF) and state & 0x80:
                     break
                 if not user.IsWindowVisible(popup) or time.monotonic() >= deadline:
                     raise RuntimeError("The owned popup did not highlight its intended item: " + label)
                 time.sleep(0.01)
             submenu = bool(user.GetSubMenu(menu, index))
-            try:
-                button(2, popup)
-            finally:
-                button(4)
+            # Follow the highlighted native item through Windows' keyboard
+            # route. Mouse-up can dismiss a tracked popup without dispatching
+            # its item; Enter/Right retain normal menu ownership and handlers.
+            keyboard(0x27 if submenu else 0x0D)
             deadline = time.monotonic() + 3
             while not submenu and user.IsWindowVisible(popup):
                 if time.monotonic() >= deadline:
