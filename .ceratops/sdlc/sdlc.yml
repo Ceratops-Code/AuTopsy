@@ -217,7 +217,7 @@ deliverables:
       build-after: []
       artifact:
         type: windows-installer
-        output-directory: .build/_windows-installer/package
+        output-directory: build/_windows-installer/package
         filename-pattern: autopsy-win-*-x64.exe
       actions:
         build:
@@ -233,7 +233,7 @@ deliverables:
                 - python
                 - scripts/build/windows/build_video_installer.py
                 - --build-dir
-                - .build/_windows-installer
+                - build/_windows-installer
                 - --receipt-file
                 - '{build_receipt}'
         pre-build-checks:

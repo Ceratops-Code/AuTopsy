@@ -604,7 +604,7 @@ with any distributed build, alongside AuTopsy's existing license material.
 
 Run the same repository-owned builder used by the GitHub-hosted Windows job:
 
-    uv run --project scripts --locked python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+    uv run --project scripts --locked python scripts/build/windows/build_video_installer.py --build-dir build/_windows-installer
 
 Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
 `--inno-compiler` for a nondefault compiler location. The builder uses CMake's
@@ -675,7 +675,7 @@ compiler (`ISCC.exe`) alongside `uv`. `scripts/pyproject.toml` and `scripts/uv.l
 supply the pinned CMake/CTest environment through `uv`; the builder discovers ISCC on PATH or in the standard
 per-user and machine-wide Inno Setup 6 locations. `AUTOPSY_INNO_COMPILER` selects
 an explicit compiler, while `AUTOPSY_INSTALLER_BUILD_DIR` selects the task-owned
-build directory (default `.build/_windows-installer`). The command-line options
+build directory (default `build/_windows-installer`). The command-line options
 `--inno-compiler` and `--build-dir` override those defaults for direct calls.
 Both application and portable C++ tests use the single Catch2 3.16.1 pin in
 `cmake-proxies/cmake-modules/AudacityTesting.cmake`, with Catch2's compiled main.
@@ -739,7 +739,7 @@ and original test projects remain in the existing bounded per-case workspace.
 
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
 an existing native build, defaulting to
-`.build/_windows-installer`. For a separate desktop test session,
+`build/_windows-installer`. For a separate desktop test session,
 `AUTOPSY_VIDEO_TEST_NAME` selects a CTest case such as `^fork-media$`; empty
 selections fail. The same builder's `--test-existing-build`, `--build-dir` and
 `--test-name` options expose those inputs directly. Test child failures own one
@@ -823,7 +823,7 @@ GUI work with the original Windows error.
 An explicitly scoped native session runs only its selected compiled host cases;
 it never records portable passes against core binaries that session did not build.
 
-The runner owns `.build/_core` and `.build/_test-results`. Immutable results retain
+The runner owns `build/_core` and `build/_test-results`. Immutable results retain
 their original IDs and source/test/fixture/lock/executable/runtime/command inputs.
 Matching passing results can be reused unless a newer applicable failure exists;
 source changes during compilation or execution cannot earn a pass. At startup and
@@ -838,7 +838,7 @@ Later test changes do not rebuild or revoke an unchanged accepted installer.
 
 Failed-check responses contain only failed names, short causes, result identities
 and paths to their complete existing receipts. Command-level failures use one
-current `.build/_test-results/_command-failure.json`, written atomically under the
+current `build/_test-results/_command-failure.json`, written atomically under the
 same owner lock; the next successful command phase removes it. A native child
 report is referenced rather than copied into another response. If writing the
 report fails, the response preserves the original invocation, exit and both

@@ -150,7 +150,7 @@ class InstallerBuildTests(unittest.TestCase):
                                               "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
                 self.assertEqual(builder.get_installer_build_directory(), Path("_accepted-build"))
             with mock.patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
-                self.assertEqual(builder.get_installer_build_directory(), Path(".build/_windows-installer"))
+                self.assertEqual(builder.get_installer_build_directory(), Path("build/_windows-installer"))
         with tempfile.TemporaryDirectory(prefix="_installer-tools-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
             root = Path(temporary)
             user_compiler = root / "user/Programs/Inno Setup 6/ISCC.exe"
@@ -176,7 +176,7 @@ class InstallerBuildTests(unittest.TestCase):
                             mock.patch("builtins.print"):
                         builder.main()
                     self.assertEqual(build.call_args.args[2], expected)
-                    self.assertEqual(build.call_args.args[1], Path(".build/_windows-installer"))
+                    self.assertEqual(build.call_args.args[1], Path("build/_windows-installer"))
             report = root / "installer-result.json"
             with mock.patch.object(builder.sys, "platform", "win32"), \
                     mock.patch.object(builder.sys, "argv", ["build", "--build-dir", str(root / "out"), "--receipt-file", str(report)]), \

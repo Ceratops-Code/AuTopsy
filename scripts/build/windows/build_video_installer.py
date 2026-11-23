@@ -686,7 +686,7 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
 
 def get_installer_build_directory() -> Path:
     """Select package storage without activating the native test-session contract."""
-    return Path(os.environ.get("AUTOPSY_INSTALLER_BUILD_DIR", ".build/_windows-installer"))
+    return Path(os.environ.get("AUTOPSY_INSTALLER_BUILD_DIR", "build/_windows-installer"))
 
 
 def main() -> None:

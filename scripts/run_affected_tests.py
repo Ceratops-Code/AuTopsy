@@ -591,7 +591,7 @@ def run_named_check(root: Path, build: Path, test: dict[str, Any], identity: str
 
 def run_selected_tests(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--build-dir", type=Path, default=Path(".build/_core"))
+    parser.add_argument("--build-dir", type=Path, default=Path("build/_core"))
     parser.add_argument("--base", default=os.environ.get("AUTOPSY_TEST_BASE"))
     parser.add_argument("--qualification-level", choices=("alpha", "beta", "stable"),
                         default=os.environ.get("AUTOPSY_TEST_LEVEL"),
@@ -620,8 +620,8 @@ def run_selected_tests(argv: list[str] | None = None) -> int:
                                               args.qualification_level)))
         return 0
     build = args.build_dir.resolve()
-    if not build.is_relative_to(root / ".build"):
-        raise RuntimeError("Portable build/results must stay inside this worktree's .build directory.")
+    if root / "build" not in build.parents:
+        raise RuntimeError("--build-dir must name a subdirectory of this checkout's build directory.")
     for command in ("git", "cmake", "ctest"):
         if not shutil.which(command):
             raise RuntimeError(f"Required test tool is missing: {command}")

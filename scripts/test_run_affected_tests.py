@@ -912,6 +912,12 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(store.accepted("one", "input-a"), third)
 
     def test_retention_is_finite_and_never_cleans_unrelated_files(self) -> None:
+        checkout = Path(runner.__file__).resolve().parents[1]
+        for directory in (checkout / "build", checkout / "scratch" / "_core"):
+            with self.subTest(directory=directory), patch.object(runner, "ReceiptStore") as store:
+                with self.assertRaisesRegex(RuntimeError, "subdirectory"):
+                    runner.run_selected_tests(["--build-dir", str(directory)])
+                store.assert_not_called()
         root = self.root / "_results"
         root.mkdir()
         unrelated = root / "keep.txt"
