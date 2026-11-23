@@ -179,10 +179,9 @@ appimagetool/*
 .cache/
 .conan/
 .debug/
-build-*
+/build-*/
 build.release/
 build.debug/
 build.install/
 build.artifacts/
 /scripts/node_modules/
-/.build/
