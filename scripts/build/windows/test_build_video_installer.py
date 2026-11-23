@@ -183,7 +183,29 @@ class InstallerBuildTests(unittest.TestCase):
                     mock.patch.object(builder, "build_installer", return_value={"filename": "demo.exe"}), \
                     mock.patch("builtins.print"):
                 builder.main()
-            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["installer"], str(root / "out/package/demo.exe"))
+            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["installationArtifactPath"], "demo.exe")
+            package = root / "accepted"
+            package.mkdir()
+            installer = package / "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
+            installer.write_bytes(b"test installer")
+            manifest = package / "_build-manifest.json"
+            manifest.write_text("{}", encoding="utf-8")
+            with (mock.patch.object(builder.sys, "platform", "win32"), mock.patch("builtins.print"),
+                  mock.patch.object(builder, "build_installer", return_value={"filename": installer.name}) as build,
+                  mock.patch.object(builder.sys, "argv", ["builder", "--artifact-directory", str(package),
+                                                         "--receipt-file", str(report)])):
+                builder.main()
+                self.assertEqual(build.call_args.kwargs["artifact_directory"], package)
+                result = json.loads(report.read_text(encoding="utf-8"))
+                self.assertEqual(result["installationArtifactPath"], installer.name)
+                self.assertEqual({p["path"] for p in result["artifacts"]}, {installer.name, manifest.name})
+                self.assertEqual(result["schema"], "ceratops-builder-output")
+            inputs = json.dumps({"deliverables.packages.windows-installer": [str(installer), str(manifest)]})
+            with (mock.patch.object(builder.sys, "argv", ["delivery", "--install-accepted", "--accepted-artifacts", inputs]),
+                  mock.patch.object(builder.sys, "platform", "win32"), mock.patch("builtins.print"),
+                  mock.patch.object(builder.subprocess, "run", return_value=mock.Mock(returncode=0)) as install):
+                builder.main()
+                self.assertEqual(install.call_args.args[0][0], str(installer))
             user_compiler.unlink()
             with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}, clear=True), \
                     mock.patch.object(builder.sys, "platform", "win32"), \
@@ -203,7 +225,7 @@ class InstallerBuildTests(unittest.TestCase):
                     root = Path(temporary)
                     source, build = root / "source", root / "build"
                     source.mkdir()
-                    package = build / "package"
+                    package = root / "accepted" if after else build / "package"
                     package.mkdir(parents=True)
                     installer = package / "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
                     installer.write_bytes(b"accepted installer")
@@ -258,25 +280,30 @@ class InstallerBuildTests(unittest.TestCase):
                     with mock.patch.object(builder, "run_command", side_effect=command):
                         if boundary:
                             with self.assertRaises(InterruptedError):
-                                builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
-                        result = builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
+                                builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes,
+                                                      accepted_installer=installer if after else None)
+                        result = builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes,
+                                                      accepted_installer=installer if after else None)
                         effects = list(remote["effects"])
-                        self.assertEqual(builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes), result)
+                        self.assertEqual(builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes,
+                                                      accepted_installer=installer if after else None), result)
                         self.assertEqual(remote["effects"], effects)
                         self.assertEqual(effects, ["create", "upload", "upload", "edit"])
                         self.assertEqual(result["status"], "published")
                         self.assertEqual(set(result["assets"]), {installer.name, manifest.name})
                         remote["release"]["body"] = returned_body + "Different release text."
                         with self.assertRaisesRegex(RuntimeError, "requested release metadata"):
-                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
+                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes,
+                                                      accepted_installer=installer if after else None)
                         self.assertEqual(remote["effects"], effects)
                         remote["release"]["body"] = returned_body
                         with self.assertRaisesRegex(RuntimeError, "embedded product version"):
-                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.3", notes)
+                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.3", notes, accepted_installer=installer if after else None)
                         self.assertEqual(remote["effects"], effects)
                         remote["tag"] = "b" * 40
                         with self.assertRaisesRegex(RuntimeError, "different source revision"):
-                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes)
+                            builder.publish_installer(source, build, "Ceratops-Code/AuTopsy", "v3.7.10-autopsy.2", notes,
+                                                      accepted_installer=installer if after else None)
                         self.assertEqual(remote["effects"], effects)
 
     def test_existing_build_checks_keep_the_installer_unchanged_after_interruption(self):
@@ -424,7 +451,9 @@ class InstallerBuildTests(unittest.TestCase):
                             package = build / "package"
                             package.mkdir(exist_ok=True)
                             name = "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
-                            target = package / name
+                            destination = next((Path(arg.split("=", 1)[1]) for arg in arguments
+                                                if arg.startswith("AUTOPSY_INSTALLER_OUTPUT=")), package)
+                            target = destination / name
                             target.write_bytes(b"completed installer")
                             builder.write_json(package / "_installer-x64.json",
                                                {"filename": name, "sha256": builder.sha256(target)})
@@ -457,6 +486,14 @@ class InstallerBuildTests(unittest.TestCase):
                         self.assertEqual(first["source_revision"], "a" * 40)
                         self.assertEqual(first["checks"], [{"name": "fork-fixtures", "result": "passed",
                                                            "source_revision": "a" * 40}])
+                        if boundary == 1 and not after:
+                            allocated = root / "accepted-build-output"
+                            allocated.mkdir()
+                            standalone_bytes = manifest.read_bytes()
+                            managed = builder.build_installer(source, build, inno, artifact_directory=allocated)
+                            self.assertEqual({path.name for path in allocated.iterdir()},
+                                             {managed["filename"], "_build-manifest.json"})
+                            self.assertEqual(manifest.read_bytes(), standalone_bytes)
                         original_manifest = manifest.read_bytes()
                         provenance = build / "_compiled-runtime.json"
                         original_provenance = provenance.read_bytes()

@@ -645,8 +645,13 @@ are retained for 14 days; failure details for 7 days.
 Signing is a separate service approval and is not claimed by this job.
 
 The `deliverables.packages.windows-installer.actions.publish` operation consumes
-the existing accepted installer and `_build-manifest.json` from
-`AUTOPSY_INSTALLER_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
+the accepted installer and its `_build-manifest.json` from Git's common
+`ceratops/artifacts/` store. The Ceratops package build writes both files to
+`{artifact_directory}` and reports their names to `{build_receipt}`.
+Ceratops commits the build receipt and check summary under `.ceratops/build/`.
+CMake keeps its compiler files in its own build tree. App installation runs
+the accepted executable. The public preview version comes from
+`resources/autopsy-release.json`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
 to select the preview tag and a local UTF-8 notes file. The tag names the original
 build revision, including when later test/documentation commits have advanced
 main. The operation creates a draft only when needed, uploads just those two
@@ -745,8 +750,7 @@ selections fail. The same builder's `--test-existing-build`, `--build-dir` and
 `--test-name` options expose those inputs directly. Test child failures own one
 current `_test_command_failure.json` beside the build; success removes it and
 startup discards its abandoned pending sibling.
-The application's install operation takes `installer_path` from the accepted build
-manifest and runs that installer silently. It installs into Program Files/AuTopsy;
+The application's install operation receives the accepted executable from Ceratops and runs it silently. It installs into Program Files/AuTopsy;
 close the application first. Deployment never copies a source/build tree.
 The media case covers linked video/audio movement and trim/split behavior,
 saved clip flags, relinking, source frame stepping and modern software exports.

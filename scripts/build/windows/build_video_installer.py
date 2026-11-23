@@ -361,7 +361,8 @@ def read_product_version(source: Path) -> str:
     return version
 
 
-def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None) -> dict:
+def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None, *,
+                     artifact_directory: Path | None = None) -> dict:
     """A normal rerun derives all remaining work from current source and outputs."""
     source, build, inno = source.resolve(), build.resolve(), inno.resolve()
     if source == build or source.is_relative_to(build) or not (source / "CMakeLists.txt").is_file():
@@ -397,8 +398,9 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python()),
     ]
     checks = [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}]
-    manifest = build / "package/_build-manifest.json"
-    if manifest.is_file() and not dirty and not native_tests:
+    package = artifact_directory.resolve(strict=True) if artifact_directory is not None else build / "package"
+    manifest = package / "_build-manifest.json"
+    if artifact_directory is None and manifest.is_file() and not dirty and not native_tests:
         try:
             accepted = json.loads(manifest.read_text(encoding="utf-8"))
             completed = build / "package" / accepted["filename"]
@@ -472,12 +474,15 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
     current_changes = run_command(["git", "diff", "--binary", "HEAD", "--"], source, diagnostics)
     if current_revision != revision or current_changes != source_changes:
         raise RuntimeError("Installer source changed during checks; packaging is blocked.")
-    run_command([cmake, "--build", str(build), "--config", "Release", "--target", "innosetup"], source, diagnostics)
+    package_command = [cmake, "--build", str(build), "--config", "Release", "--target", "innosetup"]
+    if artifact_directory is not None:
+        package_command = [cmake, "-E", "env", f"AUTOPSY_INSTALLER_OUTPUT={package}", *package_command]
+    run_command(package_command, source, diagnostics)
     if checked_runtime_files(build, report) != report["payload"]:
         raise RuntimeError("Packaging changed the checked runtime; no accepted manifest was written.")
     descriptor = json.loads((build / "package/_installer-x64.json").read_text(encoding="utf-8"))
-    installer = build / "package" / descriptor["filename"]
-    if installer.parent.resolve() != (build / "package").resolve() or not installer.is_file():
+    installer = package / descriptor["filename"]
+    if installer.parent.resolve() != package.resolve() or not installer.is_file():
         raise RuntimeError("The packager did not produce its declared installer.")
     if not installer.name.startswith("autopsy-win-" + product_version + "-"):
         raise RuntimeError("The installer filename differs from the embedded product version.")
@@ -495,7 +500,7 @@ def _build_installer(source: Path, build: Path, inno: Path, native_tests: str | 
         "dependency_inputs": dependency_inputs, "checks": checks, "prepackage": report,
         "compiled_source_revision": compiled["source_revision"] if compiled else revision,
     }
-    write_json(build / "package/_build-manifest.json", result)
+    write_json(manifest, result)
     diagnostics.unlink(missing_ok=True)
     return result
 
@@ -531,12 +536,13 @@ def build_lock(build: Path):
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None) -> dict:
+def build_installer(source: Path, build: Path, inno: Path, native_tests: str | None = None, *,
+                    artifact_directory: Path | None = None) -> dict:
     source, build = source.resolve(), build.resolve()
     if source == build or source.is_relative_to(build):
         raise RuntimeError("Choose a separate build directory.")
     with build_lock(build):
-        return _build_installer(source, build, inno, native_tests)
+        return _build_installer(source, build, inno, native_tests, artifact_directory=artifact_directory)
 
 
 def test_existing_installer_build(source: Path, build: Path, test_name: str) -> dict:
@@ -566,7 +572,8 @@ def test_existing_installer_build(source: Path, build: Path, test_name: str) -> 
     return {"status": "passed", "build_directory": str(build), "tests": test_name}
 
 
-def publish_installer(source: Path, build: Path, repository: str, tag: str, notes: Path) -> dict:
+def publish_installer(source: Path, build: Path, repository: str, tag: str, notes: Path, *,
+                      accepted_installer: Path | None = None) -> dict:
     """Converge one unsigned public preview on its already accepted package.
 
     GitHub state, never saved progress, determines missing effects. The tag binds
@@ -587,7 +594,8 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
     diagnostics = build / "_publish_command_failure.json"
     with build_lock(build):
         diagnostics.with_name("_" + diagnostics.name + ".pending").unlink(missing_ok=True)
-        manifest = build / "package/_build-manifest.json"
+        package = accepted_installer.parent if accepted_installer is not None else build / "package"
+        manifest = package / "_build-manifest.json"
         accepted = json.loads(manifest.read_text(encoding="utf-8"))
         revision = accepted.get("source_revision", "")
         filename = accepted.get("filename", "")
@@ -597,6 +605,7 @@ def publish_installer(source: Path, build: Path, repository: str, tag: str, note
                 or not re.fullmatch(r"[0-9a-f]{40}", revision)
                 or not filename.startswith("autopsy-win-") or not filename.endswith("-x64.exe")
                 or installer.parent.resolve() != manifest.parent.resolve()
+                or (accepted_installer is not None and installer != accepted_installer)
                 or not installer.is_file() or sha256(installer) != accepted.get("sha256")
                 or not any(item == {"name": "fork-fixtures", "result": "passed", "source_revision": revision}
                            for item in accepted.get("checks", []))):
@@ -707,6 +716,9 @@ def main() -> None:
     parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--build-dir", type=Path, default=get_installer_build_directory())
     parser.add_argument("--receipt-file", type=Path, help="Write the completed installer result to this file.")
+    parser.add_argument("--artifact-directory", type=Path, help="Place the installer and its version manifest in this allocated directory.")
+    parser.add_argument("--accepted-artifacts", help="Use these accepted package files for installation or publication.")
+    parser.add_argument("--install-accepted", action="store_true")
     parser.add_argument("--test-existing-build", action="store_true")
     parser.add_argument("--publish-installer", action="store_true")
     parser.add_argument("--repository", default="Ceratops-Code/AuTopsy")
@@ -716,16 +728,45 @@ def main() -> None:
                         help="Extra prepackage native scope; in test-only mode, defaults to fork-fixtures.")
     parser.add_argument("--inno-compiler", type=Path, default=Path(inno_default))
     args = parser.parse_args()
-    if args.receipt_file and (args.test_existing_build or args.publish_installer):
+    if sum((args.test_existing_build, args.publish_installer, args.install_accepted)) > 1:
+        parser.error("Choose only one installer operation.")
+    if args.artifact_directory and not args.receipt_file:
+        parser.error("--artifact-directory requires --receipt-file")
+    if args.receipt_file and (args.test_existing_build or args.publish_installer or args.install_accepted):
         parser.error("--receipt-file applies only when building the installer")
     if sys.platform != "win32":
         parser.error("The Windows installer requires a Windows build host.")
+    accepted_installer = None
+    if args.accepted_artifacts is not None:
+        if not (args.publish_installer or args.install_accepted):
+            parser.error("--accepted-artifacts requires installation or publication")
+        mapping = json.loads(args.accepted_artifacts)
+        paths = mapping.get("deliverables.packages.windows-installer") if isinstance(mapping, dict) else None
+        if not isinstance(paths, list) or len(paths) != 2 or not all(isinstance(path, str) for path in paths):
+            parser.error("The accepted AuTopsy package must contain its installer and build manifest.")
+        files = [Path(path) for path in paths]
+        installers = [path for path in files if path.match("autopsy-win-*-x64.exe")]
+        if len(installers) != 1 or not all(path.is_absolute() and path.is_file() for path in files):
+            parser.error("The accepted package is missing the AuTopsy Windows installer.")
+        accepted_installer = installers[0]
+        if accepted_installer.with_name("_build-manifest.json") not in files:
+            parser.error("The build manifest must belong to the accepted installer directory.")
+    if args.install_accepted:
+        if accepted_installer is None:
+            parser.error("Installation requires the accepted package.")
+        command = [str(accepted_installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+        installed = subprocess.run(command, cwd=args.source_dir, capture_output=True, text=True, errors="replace")
+        if installed.returncode:
+            raise RuntimeError(f"Installing {command!r} exited {installed.returncode}; "
+                               f"stdout: {installed.stdout or '<absent>'}; stderr: {installed.stderr or '<absent>'}")
+        print("OK")
+        return
     if args.publish_installer:
         if args.test_existing_build or not args.release_tag or not args.release_notes:
             parser.error("Publication requires a release tag and notes, with no test-only mode.")
         try:
             result = publish_installer(args.source_dir, args.build_dir, args.repository,
-                                       args.release_tag, args.release_notes)
+                                       args.release_tag, args.release_notes, accepted_installer=accepted_installer)
         except Exception as error:
             raise RuntimeError(f"Preview publication {args.repository}@{args.release_tag} failed: {error}") from error
         print(json.dumps(result))
@@ -733,17 +774,20 @@ def main() -> None:
     if args.test_existing_build:
         print(json.dumps(test_existing_installer_build(args.source_dir, args.build_dir, args.test_name or "^fork-fixtures$")))
         return
-    result = build_installer(args.source_dir, args.build_dir, args.inno_compiler, args.test_name)
+    package = args.artifact_directory.resolve() if args.artifact_directory else (args.build_dir / "package").resolve()
+    result = build_installer(args.source_dir, args.build_dir, args.inno_compiler, args.test_name,
+                             artifact_directory=args.artifact_directory)
     if args.receipt_file:
-        report = {"schema": "autopsy-installer-build", "status": "passed",
-                  "installer": str((args.build_dir / "package" / result["filename"]).resolve()),
-                  "manifest": str((args.build_dir / "package/_build-manifest.json").resolve())}
+        report = {"schema": "ceratops-builder-output", "status": "passed",
+                  "installationArtifactPath": result["filename"],
+                  "artifacts": [{"type": "windows-installer", "path": result["filename"]},
+                                {"type": "build-manifest", "path": "_build-manifest.json"}]}
         args.receipt_file.write_text(json.dumps(report) + "\n", encoding="utf-8")
     print(json.dumps(result, separators=(",", ":")))
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a", encoding="utf-8") as stream:
-            stream.write("installer=" + str((args.build_dir / "package" / result["filename"]).resolve()) + "\n")
-            stream.write("manifest=" + str((args.build_dir / "package/_build-manifest.json").resolve()) + "\n")
+            stream.write("installer=" + str(package / result["filename"]) + "\n")
+            stream.write("manifest=" + str(package / "_build-manifest.json") + "\n")
 
 
 if __name__ == "__main__":
