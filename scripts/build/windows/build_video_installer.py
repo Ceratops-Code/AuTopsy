@@ -2,6 +2,8 @@
 
 The selected build directory owns _video-dependencies (one current SDK copy per
 component), pending extraction/downloads, and package/_build-manifest.json.
+With --receipt-file, the completed build also reports the installer and manifest
+paths to the supplied file. Its caller owns that report.
 Fresh calls inspect SDK identities, remove only owned abandoned staging, and
 let CMake rebuild unmet targets. Publication consumes only a completed installer
 and its manifest, inspecting the selected GitHub tag/assets before each effect.
@@ -704,6 +706,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--build-dir", type=Path, default=get_installer_build_directory())
+    parser.add_argument("--receipt-file", type=Path, help="Write the completed installer result to this file.")
     parser.add_argument("--test-existing-build", action="store_true")
     parser.add_argument("--publish-installer", action="store_true")
     parser.add_argument("--repository", default="Ceratops-Code/AuTopsy")
@@ -713,6 +716,8 @@ def main() -> None:
                         help="Extra prepackage native scope; in test-only mode, defaults to fork-fixtures.")
     parser.add_argument("--inno-compiler", type=Path, default=Path(inno_default))
     args = parser.parse_args()
+    if args.receipt_file and (args.test_existing_build or args.publish_installer):
+        parser.error("--receipt-file applies only when building the installer")
     if sys.platform != "win32":
         parser.error("The Windows installer requires a Windows build host.")
     if args.publish_installer:
@@ -729,6 +734,11 @@ def main() -> None:
         print(json.dumps(test_existing_installer_build(args.source_dir, args.build_dir, args.test_name or "^fork-fixtures$")))
         return
     result = build_installer(args.source_dir, args.build_dir, args.inno_compiler, args.test_name)
+    if args.receipt_file:
+        report = {"schema": "autopsy-installer-build", "status": "passed",
+                  "installer": str((args.build_dir / "package" / result["filename"]).resolve()),
+                  "manifest": str((args.build_dir / "package/_build-manifest.json").resolve())}
+        args.receipt_file.write_text(json.dumps(report) + "\n", encoding="utf-8")
     print(json.dumps(result, separators=(",", ":")))
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a", encoding="utf-8") as stream:

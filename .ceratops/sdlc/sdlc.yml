@@ -234,6 +234,8 @@ deliverables:
                 - scripts/build/windows/build_video_installer.py
                 - --build-dir
                 - .build/_windows-installer
+                - --receipt-file
+                - '{build_receipt}'
         pre-build-checks:
           check-groups:
             tests:

@@ -177,6 +177,13 @@ class InstallerBuildTests(unittest.TestCase):
                         builder.main()
                     self.assertEqual(build.call_args.args[2], expected)
                     self.assertEqual(build.call_args.args[1], Path(".build/_windows-installer"))
+            report = root / "installer-result.json"
+            with mock.patch.object(builder.sys, "platform", "win32"), \
+                    mock.patch.object(builder.sys, "argv", ["build", "--build-dir", str(root / "out"), "--receipt-file", str(report)]), \
+                    mock.patch.object(builder, "build_installer", return_value={"filename": "demo.exe"}), \
+                    mock.patch("builtins.print"):
+                builder.main()
+            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["installer"], str(root / "out/package/demo.exe"))
             user_compiler.unlink()
             with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}, clear=True), \
                     mock.patch.object(builder.sys, "platform", "win32"), \
