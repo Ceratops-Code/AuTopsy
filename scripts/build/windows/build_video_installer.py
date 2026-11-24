@@ -371,7 +371,7 @@ def build_installer(source: Path, build: Path, inno: Path, native_tests: str | N
     dependency_root.mkdir(exist_ok=True)
     diagnostics = build / "_build_command_failure.json"
     product_version = read_product_version(source)
-    version = artifact_version or product_version.replace("-autopsy.", "+autopsy.")
+    version = artifact_version or product_version.replace("-autopsy.", "b")
     revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
     dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
     source_changes = run_command(["git", "diff", "--binary", "HEAD", "--"], source, diagnostics)
@@ -743,8 +743,8 @@ def main() -> None:
     checkout = "primary" if registration == common else registration.name
     primary = common.parent
     scratch = primary.parent / "tmp" / primary.name / checkout / "_installer-build" / "windows-installer"
-    version = args.version or read_product_version(source).replace("-autopsy.", "+autopsy.")
-    if not re.fullmatch(r"(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2}(?:(?:a|b|rc)\d+)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?", version):
+    version = args.version or read_product_version(source).replace("-autopsy.", "b")
+    if not re.fullmatch(r"(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2}(?:(?:a|b|rc)\d+)?", version):
         raise RuntimeError(f"Invalid installer artifact version: {version}")
     if args.artifact_directory:
         package = args.artifact_directory.resolve(strict=True)

@@ -623,8 +623,8 @@ build. A Windows job stops compiler children when their worker exits.
 Direct builds publish the EXE to the Git common directory under
 `ceratops/artifacts/worktrees/<checkout>/members/packages/windows-installer/<version>/native`.
 On `release/local`, the pool is `beta-stable/members/packages`.
-The package version uses the numeric product version with a local suffix such
-as `3.7.10+autopsy.2`. The installer retains the public product version from
+The package version maps AuTopsy previews to standard beta versions, such as
+`3.7.10b2` for `3.7.10-autopsy.2`. The installer retains the public version from
 `resources/autopsy-release.json`. If the destination already exists, the build
 fails before compiling and leaves the existing artifact intact. Ceratops owns
 retention when it runs. The builder returns the artifact directory, filename,

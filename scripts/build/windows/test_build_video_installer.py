@@ -167,7 +167,7 @@ class InstallerBuildTests(unittest.TestCase):
             for compiler in (user_compiler, machine_compiler, path_compiler):
                 compiler.parent.mkdir(parents=True, exist_ok=True)
                 compiler.write_bytes(b"test compiler, never executed")
-            version = "3.7.10+autopsy.2"
+            version = "3.7.10b2"
             installer = package / f"autopsy-win-{version}-x64.exe"
             manifest = package / builder.MANIFEST_NAME.format(version=version)
             args = ["builder", "--source-dir", str(source), "--version", version,
@@ -421,7 +421,7 @@ class InstallerBuildTests(unittest.TestCase):
                     source = root / "source"
                     registration = source / ".git"
                     build = root / "tmp/source/primary/_installer-build/windows-installer"
-                    artifact_version = "3.7.10+autopsy.2"
+                    artifact_version = "3.7.10b2"
                     slots = registration / "ceratops/artifacts"
                     pool = slots / ("worktrees/primary" if after else "beta-stable")
                     native = pool / "members/packages/windows-installer" / artifact_version / "native"
