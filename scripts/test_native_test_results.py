@@ -1,4 +1,8 @@
-"""Behavior cases for impact selection and immutable, bounded result ownership."""
+"""Behavior cases for impact selection and immutable, bounded result ownership.
+
+Environment fixtures replace Python's mapping without changing inherited process
+settings; cleanup assertions cover empty values and interrupted calls.
+"""
 from __future__ import annotations
 
 import json
@@ -36,6 +40,7 @@ class NativeReceiptTests(unittest.TestCase):
                 "observations": {"native_object_seen": True}}
 
     def test_native_buttons_use_their_own_click_protocol_without_replaying_effects(self):
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         from types import SimpleNamespace
         from unittest.mock import Mock
 
@@ -60,7 +65,7 @@ class NativeReceiptTests(unittest.TestCase):
                                   SendMessageTimeoutW=Mock(return_value=True))
             window: Any = object.__new__(edits.PreviewNativeWindows)
             window.api, window.owner, window.enabled = api, lambda _h: 123, lambda _h: True
-            with patch.dict(os.environ, {"AUTOPSY_OWNED_APP_PID": "123"}):
+            with patch.object(os, "environ", {**os.environ, "AUTOPSY_OWNED_APP_PID": "123"}):
                 for _ in range(2):
                     window.click(9)
             expected = [0xF5] * 2 if kind == "Button" else [0x201, 0x202, 0x202] * 2
@@ -74,7 +79,7 @@ class NativeReceiptTests(unittest.TestCase):
                 def ready(condition, _description):
                     if not condition():
                         raise RuntimeError("inactive dialog")
-                with patch.dict(os.environ, {"AUTOPSY_OWNED_APP_PID": "123"}), patch.object(edits, "wait_for_native_state", side_effect=ready):
+                with patch.object(os, "environ", {**os.environ, "AUTOPSY_OWNED_APP_PID": "123"}), patch.object(edits, "wait_for_native_state", side_effect=ready):
                     with self.assertRaisesRegex(RuntimeError, "inactive dialog"):
                         window.click(9)
                 api.SendMessageTimeoutW.assert_not_called()

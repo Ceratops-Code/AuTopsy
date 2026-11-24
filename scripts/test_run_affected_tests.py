@@ -1,4 +1,8 @@
-"""Behavior cases for impact selection and immutable, bounded result ownership."""
+"""Behavior cases for impact selection and immutable, bounded result ownership.
+
+Environment fixtures replace Python's mapping without changing inherited process
+settings; cleanup assertions cover empty values and interrupted calls.
+"""
 from __future__ import annotations
 
 import io
@@ -70,6 +74,7 @@ class SelectionTests(unittest.TestCase):
 
 
     def test_owned_display_waits_for_same_device_and_stops_before_effects(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         import ctypes
 
         import run_fork_test_harness as harness
@@ -78,7 +83,7 @@ class SelectionTests(unittest.TestCase):
         second = {"device": r"\\.\DISPLAY2", "primary": False, "work": [-1920, 0, 0, 1040]}
         api = Mock()
         for _ in range(2):
-            with patch.dict(os.environ, {"AUTOPSY_TEST_DISPLAY": second["device"]}), \
+            with patch.object(os, "environ", {**os.environ, "AUTOPSY_TEST_DISPLAY": second["device"]}), \
                     patch.object(harness, "connected_test_displays", side_effect=[[first], [first, second]]), \
                     patch.object(harness.time, "monotonic", side_effect=[0, 0.5]), \
                     patch.object(harness.time, "sleep") as sleep, \
@@ -86,7 +91,7 @@ class SelectionTests(unittest.TestCase):
                     patch.object(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE, create=True):
                 self.assertEqual(harness.assert_owned_test_display(721), [])
                 sleep.assert_called_once_with(0.02)
-            with patch.dict(os.environ, {"AUTOPSY_TEST_DISPLAY": second["device"]}), \
+            with patch.object(os, "environ", {**os.environ, "AUTOPSY_TEST_DISPLAY": second["device"]}), \
                     patch.object(harness, "connected_test_displays", return_value=[first]), \
                     patch.object(harness.time, "monotonic", side_effect=[0, 3]), \
                     patch.object(ctypes, "WinDLL", create=True) as windows, \
@@ -140,6 +145,7 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(sessions.WTSQuerySessionInformationW.call_count, 2 if identify else 0)
 
     def test_native_crash_trace_owns_only_its_app_and_bounded_log(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         import run_fork_test_harness as harness
 
         for status in (0, 9):
@@ -160,7 +166,7 @@ class SelectionTests(unittest.TestCase):
                     kwargs["stdout"].write(b"x"*300000)
                     return child
 
-                with patch.dict(os.environ, {"AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
+                with patch.object(os, "environ", {**os.environ, "AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
                         patch.object(harness.subprocess, "Popen", side_effect=launch):
                     trace = harness.NativeCrashDebugger(app, root)
                     with self.assertRaisesRegex(RuntimeError, "Stop the private app"):
@@ -176,6 +182,7 @@ class SelectionTests(unittest.TestCase):
                     self.assertFalse(log.exists())
 
     def test_native_crash_trace_failure_before_launch_removes_empty_output(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         import run_fork_test_harness as harness
 
         with tempfile.TemporaryDirectory(prefix="_crash-trace-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
@@ -184,7 +191,7 @@ class SelectionTests(unittest.TestCase):
             cdb.write_bytes(b"not an executable")
             app = SimpleNamespace(pid=719, poll=lambda: None)
             for _ in range(2):
-                with patch.dict(os.environ, {"AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
+                with patch.object(os, "environ", {**os.environ, "AUTOPSY_TEST_NATIVE_DEBUGGER": str(cdb)}), \
                         patch.object(harness.subprocess, "Popen", side_effect=OSError("test startup failure")), \
                         self.assertRaisesRegex(RuntimeError, "Exit: <not started>"):
                     harness.NativeCrashDebugger(app, root)
@@ -370,6 +377,7 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(any(command[:2] == ["git", "fetch"] for command in calls), source is not None)
 
     def test_native_session_never_accepts_current_portable_sources_against_an_old_binary(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         calls = []
 
         def execute(command, cwd):
@@ -378,7 +386,7 @@ class SelectionTests(unittest.TestCase):
                 return json.dumps({"tests": [{"name": "fork-test-runner"}, {"name": "fork-native-media-session"}]})
             return ""
 
-        with patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "private-build",
+        with patch.object(os, "environ", {**os.environ, "AUTOPSY_VIDEO_BUILD_DIR": "private-build",
                                      "AUTOPSY_VIDEO_TEST_NAME": "^fork-cursor-recording-save-before$"}), \
              patch.object(runner, "changed_paths", return_value=(["scripts/run_affected_tests.py"], "commit")), \
              patch.object(runner.shutil, "which", return_value="available"), \
@@ -483,25 +491,28 @@ class SelectionTests(unittest.TestCase):
                 app.poll.assert_not_called()
 
     def test_invalid_soak_duration_blocks_before_gui_or_file_work(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         for value in ("0", "59", "241", "nan", "inf", "not-a-duration"):
-            with self.subTest(value=value), patch.dict(os.environ, {"AUTOPSY_PREVIEW_SOAK_SECONDS": value}), \
+            with self.subTest(value=value), patch.object(os, "environ", {**os.environ, "AUTOPSY_PREVIEW_SOAK_SECONDS": value}), \
                  patch.object(sys, "argv", ["test_fork_features.py", "--case", "preview-soak"]), \
                  patch.object(native, "connected_test_displays", side_effect=AssertionError("opened the desktop")):
                 with self.assertRaises(ValueError):
                     native.main()
 
     def test_capture_needs_explicit_device_before_reading_hardware(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         import test_clip_actions
 
-        with patch.dict(os.environ, {}, clear=False):
+        with patch.object(os, "environ", {**os.environ}):
             os.environ.pop("AUTOPSY_TEST_RECORDING_DEVICE", None)
             with patch.object(test_clip_actions, "read_recording_devices", side_effect=AssertionError("read hardware")), \
                  self.assertRaisesRegex(RuntimeError, "AUTOPSY_TEST_RECORDING_DEVICE"):
                 test_clip_actions.require_recording_device()
 
     def test_native_catalogue_is_side_effect_free_and_capture_is_explicit(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         for device in (None, "explicit test microphone"):
-            with self.subTest(device=device), patch.dict(os.environ, {}, clear=False):
+            with self.subTest(device=device), patch.object(os, "environ", {**os.environ}):
                 if device is None:
                     os.environ.pop("AUTOPSY_TEST_RECORDING_DEVICE", None)
                 else:
@@ -703,12 +714,13 @@ class SelectionTests(unittest.TestCase):
                 runner.read_native_acceptance("1: " + json.dumps(value), test, build)
 
     def test_unpainted_track_keeps_original_state_when_optional_capture_fails(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         harness = sys.modules[native.painted_video_tracks.__module__]
         info = {"videoTrackThumbnails": False, "videoTrackRows": [{"dataWidth": 0}],
                 "videoTrackPanelHandle": 123}
         client = SimpleNamespace(data=lambda command: info)
         for failure in (ModuleNotFoundError("PIL"), OSError("capture interrupted")):
-            with self.subTest(failure=str(failure)), patch.dict(os.environ, {"AUTOPSY_BEHAVIOR_ROOT": "."}), \
+            with self.subTest(failure=str(failure)), patch.object(os, "environ", {**os.environ, "AUTOPSY_BEHAVIOR_ROOT": "."}), \
                     patch.object(harness.time, "monotonic", side_effect=[0, 6]), \
                     patch.object(harness, "capture_owned_project", side_effect=failure) as capture:
                 with self.assertRaises(AssertionError) as observed:
@@ -1028,6 +1040,7 @@ class ReceiptTests(unittest.TestCase):
         self.assertFalse((root / "_command-failure.json").exists())
 
     def test_native_failure_refers_to_its_existing_report_without_copying_streams(self) -> None:
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         native_build = self.root / "_native"
         native_build.mkdir()
         report = native_build / "_test_command_failure.json"
@@ -1036,7 +1049,7 @@ class ReceiptTests(unittest.TestCase):
         report.write_text(json.dumps(child))
         failure = runner.CommandFailure(["ctest"], subprocess.CompletedProcess(
             ["ctest"], 8, "Windows installer check failed; details: " + str(report), "<absent>"))
-        with patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": str(native_build)}):
+        with patch.object(os, "environ", {**os.environ, "AUTOPSY_VIDEO_BUILD_DIR": str(native_build)}):
             with self.assertRaises(runner.CommandFailure):
                 with runner.ReceiptStore(self.root / "_results"):
                     raise failure

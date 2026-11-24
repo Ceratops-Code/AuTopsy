@@ -1,4 +1,8 @@
-"""Behavior cases for installer builds and interrupted SDK publication."""
+"""Behavior cases for installer builds and interrupted SDK publication.
+
+Environment fixtures replace Python's mapping without changing inherited process
+settings; cleanup assertions cover empty values and interrupted calls.
+"""
 from __future__ import annotations
 
 import itertools
@@ -42,6 +46,7 @@ class InstallerBuildTests(unittest.TestCase):
                 self.assertNotEqual(builder.compiled_runtime_inputs(source, build, [str(second), "-B", str(build)], {}, root / "_failure.json"), original)
 
     def test_compiled_runtime_inputs_distinguish_product_changes_from_check_edits(self):
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         with tempfile.TemporaryDirectory(prefix="_compile-inputs-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
             root = Path(temporary)
             source, build = root / "source", root / "build"
@@ -68,7 +73,7 @@ class InstallerBuildTests(unittest.TestCase):
                     path.write_bytes(b"changed product input")
                     self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
                     path.write_bytes(original)
-                with mock.patch.dict(os.environ, {"CL": "/fsanitize=address"}):
+                with mock.patch.object(os, "environ", {**os.environ, "CL": "/fsanitize=address"}):
                     self.assertNotEqual(builder.compiled_runtime_inputs(source, build, configure, {}, root / "_failure.json"), initial)
 
     def test_compiled_runtime_repeats_and_interruptions_keep_only_completed_provenance(self):
@@ -145,11 +150,12 @@ class InstallerBuildTests(unittest.TestCase):
                     "fork-fixtures", "fork-preview", "fork-project-compatibility")]}
 
     def test_default_tool_and_package_paths_do_not_activate_native_tests(self):
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         for _ in range(2):
-            with mock.patch.dict(os.environ, {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
-                                              "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
+            with mock.patch.object(os, "environ", {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
+                                              "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}):
                 self.assertEqual(builder.get_installer_build_directory(), Path("_accepted-build"))
-            with mock.patch.dict(os.environ, {"AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}, clear=True):
+            with mock.patch.object(os, "environ", {"AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}):
                 self.assertEqual(builder.get_installer_build_directory(), Path("build/_windows-installer"))
         with tempfile.TemporaryDirectory(prefix="_installer-tools-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
             root = Path(temporary)
@@ -168,7 +174,7 @@ class InstallerBuildTests(unittest.TestCase):
                     values = {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}
                     if environment:
                         values["AUTOPSY_INNO_COMPILER"] = environment
-                    with mock.patch.dict(os.environ, values, clear=True), \
+                    with mock.patch.object(os, "environ", {**values}), \
                             mock.patch.object(builder.sys, "platform", "win32"), \
                             mock.patch.object(builder.sys, "argv", ["build_video_installer.py", *(["--inno-compiler", explicit] if explicit else [])]), \
                             mock.patch.object(builder.shutil, "which", return_value=on_path), \
@@ -207,7 +213,7 @@ class InstallerBuildTests(unittest.TestCase):
                 builder.main()
                 self.assertEqual(install.call_args.args[0][0], str(installer))
             user_compiler.unlink()
-            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}, clear=True), \
+            with mock.patch.object(os, "environ", {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}), \
                     mock.patch.object(builder.sys, "platform", "win32"), \
                     mock.patch.object(builder.sys, "argv", ["build_video_installer.py"]), \
                     mock.patch.object(builder.shutil, "which", return_value=None), \
@@ -412,6 +418,7 @@ class InstallerBuildTests(unittest.TestCase):
                     builder.read_product_version(source)
 
     def test_repeat_and_interrupt_each_build_command(self):
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         for boundary in range(1, 13):
             for after in (False, True):
                 with self.subTest(boundary=boundary, after=after), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
@@ -474,7 +481,7 @@ class InstallerBuildTests(unittest.TestCase):
                     with mock.patch.object(builder, "prepare_sdk", return_value=root), \
                          mock.patch.object(builder.shutil, "which", return_value=str(driver)), \
                          mock.patch.object(builder, "run_command", side_effect=run), \
-                         mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                         mock.patch.object(os, "environ", {**os.environ, "GITHUB_ACTIONS": "false"}):
                         with self.assertRaises(InterruptedError):
                             builder.build_installer(source, build, inno)
                         first = builder.build_installer(source, build, inno)
@@ -532,6 +539,7 @@ class InstallerBuildTests(unittest.TestCase):
                                 self.assertTrue(any("innosetup" in command for command in commands[previous_commands:]))
 
     def test_failed_media_check_cannot_package_an_installer(self):
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         with tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
             root = Path(temporary)
             source, build = root / "source", root / "build"
@@ -552,13 +560,14 @@ class InstallerBuildTests(unittest.TestCase):
             with mock.patch.object(builder, "prepare_sdk", return_value=root), \
                     mock.patch.object(builder.shutil, "which", return_value="cmake"), \
                     mock.patch.object(builder, "run_command", side_effect=run), \
-                    mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                    mock.patch.object(os, "environ", {**os.environ, "GITHUB_ACTIONS": "false"}):
                 with self.assertRaisesRegex(RuntimeError, "encoded-media check failed"):
                     builder.build_installer(source, build, inno)
             self.assertFalse(any("innosetup" in arguments for arguments in commands))
             self.assertFalse((build / "package/_build-manifest.json").exists())
 
     def test_desktop_gate_blocks_packaging_on_failure_missing_acceptance_and_changed_payload(self):
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         for fault in ("desktop failure", "missing check", "changed payload", "changed source"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="_gate-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
                 root = Path(temporary)
@@ -594,7 +603,7 @@ class InstallerBuildTests(unittest.TestCase):
                 with mock.patch.object(builder, "prepare_sdk", return_value=root), \
                         mock.patch.object(builder.shutil, "which", return_value="cmake"), \
                         mock.patch.object(builder, "run_command", side_effect=run), \
-                        mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+                        mock.patch.object(os, "environ", {**os.environ, "GITHUB_ACTIONS": "false"}):
                     with self.assertRaises(RuntimeError):
                         builder.build_installer(source, build, inno)
                 self.assertFalse(any("innosetup" in arguments for arguments in commands))
