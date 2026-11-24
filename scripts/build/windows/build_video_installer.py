@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import urllib.request
@@ -62,12 +63,24 @@ def write_json(path: Path, data: dict) -> None:
     pending.replace(path)
 
 
-def remove_owned_tree(path: Path, root: Path) -> None:
-    """Check resolved boundaries and ownership before recursive Windows deletion."""
-    if not path.exists():
+def remove_owned_tree(path: Path, root: Path, *, require_sdk_marker: bool = True) -> None:
+    """Remove an exact owned child; SDK storage also requires its owner marker."""
+    if not os.path.lexists(path):
         return
-    if path.is_symlink() or path.resolve().parent != root.resolve():
-        raise RuntimeError(f"Refusing cleanup outside dependency root: {path}")
+    if path.is_symlink() or path.is_junction() or path.resolve().parent != root.resolve():
+        raise RuntimeError(f"Refusing cleanup outside its owning directory: {path}")
+    if not require_sdk_marker:
+        # CMake can clone dependencies with read-only Git object packfiles.
+        # Clear that attribute only on regular files in this scratch tree.
+        for directory, subdirectories, files in path.walk():
+            subdirectories[:] = [name for name in subdirectories if not (directory / name).is_junction()]
+            for name in files:
+                file = directory / name
+                mode = file.lstat().st_mode
+                if stat.S_ISREG(mode) and not mode & stat.S_IWRITE:
+                    file.chmod(mode | stat.S_IWRITE)
+        shutil.rmtree(path)
+        return
     marker = path / "_owner"
     children = list(path.iterdir())
     if not marker.exists() and not children:
@@ -756,8 +769,7 @@ def main() -> None:
             raise RuntimeError(f"Unsafe installer destination: {package}")
     if scratch.resolve() != scratch or scratch.is_symlink() or scratch.is_junction():
         raise RuntimeError(f"Unsafe installer scratch: {scratch}")
-    if os.path.lexists(scratch):
-        shutil.rmtree(scratch)
+    remove_owned_tree(scratch, scratch.parent, require_sdk_marker=False)
     try:
         if args.artifact_directory is None and os.path.lexists(package):
             raise RuntimeError(f"Installer output already exists: {package}")
@@ -783,8 +795,7 @@ def main() -> None:
             print(diagnostics.read_text(encoding="utf-8"), file=sys.stderr, end="")
         raise
     finally:
-        if scratch.is_dir():
-            shutil.rmtree(scratch)
+        remove_owned_tree(scratch, scratch.parent, require_sdk_marker=False)
     print(json.dumps({**result, "artifact_directory": str(package)}, separators=(",", ":")))
 
 

@@ -9,6 +9,7 @@ import itertools
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -438,7 +439,9 @@ class InstallerBuildTests(unittest.TestCase):
                     sibling.mkdir(parents=True)
                     (sibling / "keep").write_text("unrelated build")
                     build.mkdir()
-                    (build / "abandoned").write_text("interrupted worker")
+                    abandoned = build / "abandoned"
+                    abandoned.write_text("interrupted worker")
+                    abandoned.chmod(stat.S_IREAD)
                     calls = 0
                     interrupted = False
                     revision = "a" * 40
@@ -467,6 +470,9 @@ class InstallerBuildTests(unittest.TestCase):
                             self.native_report(build)
                         elif "-S" in arguments:
                             cache.write_text(f"CMAKE_COMMAND:INTERNAL={driver}\nCMAKE_CXX_FLAGS:STRING=/O2\n")
+                            index = build / "sdk-pack.idx"
+                            index.write_bytes(b"temporary CMake dependency Git index")
+                            index.chmod(stat.S_IREAD)
                         result = calls_revision + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
                         if arguments[1:3] == ["ls-files", "-z"]:
                             result = "CMakeLists.txt\0resources/autopsy-release.json\0"
