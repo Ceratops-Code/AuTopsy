@@ -45,8 +45,8 @@ endif()
 # leftovers from an earlier successful build or continue after staging fails.
 get_filename_component(_build_root "${BUILD_DIR}" ABSOLUTE)
 get_filename_component(_staging_root "${OUTPUT_DIR}" ABSOLUTE)
-# The caller owns its allocated package directory. Standalone builds rotate
-# their own installers under the CMake build tree.
+# The Python builder supplies its private package staging directory. An
+# explicit CMake-only build owns any packages inside its chosen build tree.
 if(DEFINED ENV{AUTOPSY_INSTALLER_OUTPUT} AND NOT "$ENV{AUTOPSY_INSTALLER_OUTPUT}" STREQUAL "")
     get_filename_component(_package_root "$ENV{AUTOPSY_INSTALLER_OUTPUT}" ABSOLUTE)
 else()
@@ -55,9 +55,11 @@ endif()
 if(NOT _staging_root STREQUAL "${_build_root}/innosetup")
     message(FATAL_ERROR "Installer staging must be BUILD_DIR/innosetup")
 endif()
-file(LOCK "${_build_root}/_installer.lock" GUARD PROCESS TIMEOUT 0 RESULT_VARIABLE _lock_result)
-if(NOT _lock_result EQUAL 0)
-    message(FATAL_ERROR "Another installer build owns this build directory: ${_lock_result}")
+if(_package_root STREQUAL "${_build_root}/package")
+    file(LOCK "${_build_root}/_installer.lock" GUARD PROCESS TIMEOUT 0 RESULT_VARIABLE _lock_result)
+    if(NOT _lock_result EQUAL 0)
+        message(FATAL_ERROR "Another installer build owns this build directory: ${_lock_result}")
+    endif()
 endif()
 file(REMOVE_RECURSE "${_staging_root}")
 file(MAKE_DIRECTORY "${_staging_root}")

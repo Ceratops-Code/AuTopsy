@@ -111,7 +111,15 @@ jobs:
         id: installer
         env:
           GH_TOKEN: ${{ github.token }}
-        run: uv run --project scripts --locked python scripts/build/windows/build_video_installer.py --build-dir build/_windows-installer
+        shell: pwsh
+        run: |
+          $json = uv run --project scripts --locked python scripts/build/windows/build_video_installer.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $result = $json | ConvertFrom-Json -ErrorAction Stop
+          "installer=$(Join-Path $result.artifact_directory $result.filename)" >> $env:GITHUB_OUTPUT
+          $manifest = Join-Path $env:RUNNER_TEMP '_build-manifest.json'
+          Set-Content -LiteralPath $manifest -Value $json -Encoding utf8
+          "manifest=$manifest" >> $env:GITHUB_OUTPUT
       - name: Upload unsigned installer and source manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -122,17 +130,6 @@ jobs:
           path: |
             ${{ steps.installer.outputs.installer }}
             ${{ steps.installer.outputs.manifest }}
-      - name: Upload build failure details
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-installer-failure
-          if-no-files-found: ignore
-          include-hidden-files: true
-          retention-days: 7
-          path: |
-            build/_windows-installer/_build_command_failure.json
-            build/_windows-installer/_test_command_failure.json
 
   dependency-configuration:
     name: Dependency configuration

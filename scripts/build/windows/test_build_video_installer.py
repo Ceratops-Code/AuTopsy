@@ -153,59 +153,52 @@ class InstallerBuildTests(unittest.TestCase):
         self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         for _ in range(2):
             with mock.patch.object(os, "environ", {"AUTOPSY_INSTALLER_BUILD_DIR": "_accepted-build",
-                                              "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}):
+                                                   "AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}):
                 self.assertEqual(builder.get_installer_build_directory(), Path("_accepted-build"))
-            with mock.patch.object(os, "environ", {"AUTOPSY_VIDEO_BUILD_DIR": "_native-tests"}):
-                self.assertEqual(builder.get_installer_build_directory(), Path("build/_windows-installer"))
         with tempfile.TemporaryDirectory(prefix="_installer-tools-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
+            source, package, report = root / "source", root / "accepted", root / "installer-result.json"
+            package.mkdir()
+            registration = source / ".git"
+            scratch = root / "tmp/source/primary/_installer-build/windows-installer"
             user_compiler = root / "user/Programs/Inno Setup 6/ISCC.exe"
             machine_compiler = root / "machine/Inno Setup 6/ISCC.exe"
-            for compiler in (user_compiler, machine_compiler):
-                compiler.parent.mkdir(parents=True)
+            path_compiler = root / "path-compiler.exe"
+            for compiler in (user_compiler, machine_compiler, path_compiler):
+                compiler.parent.mkdir(parents=True, exist_ok=True)
                 compiler.write_bytes(b"test compiler, never executed")
+            version = "3.7.10+autopsy.2"
+            installer = package / f"autopsy-win-{version}-x64.exe"
+            manifest = package / builder.MANIFEST_NAME.format(version=version)
+            args = ["builder", "--source-dir", str(source), "--version", version,
+                    "--artifact-directory", str(package), "--receipt-file", str(report)]
             for _ in range(2):
                 for explicit, environment, on_path, expected in (
                         (None, None, None, user_compiler),
-                        (None, None, str(root / "path-compiler.exe"), root / "path-compiler.exe"),
+                        (None, None, str(path_compiler), path_compiler),
                         (None, str(root / "explicit-env.exe"), None, root / "explicit-env.exe"),
                         (str(root / "explicit-cli.exe"), str(root / "explicit-env.exe"), None, root / "explicit-cli.exe")):
-                    (root / "path-compiler.exe").write_bytes(b"test compiler, never executed")
                     values = {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}
                     if environment:
                         values["AUTOPSY_INNO_COMPILER"] = environment
-                    with mock.patch.object(os, "environ", {**values}), \
-                            mock.patch.object(builder.sys, "platform", "win32"), \
-                            mock.patch.object(builder.sys, "argv", ["build_video_installer.py", *(["--inno-compiler", explicit] if explicit else [])]), \
-                            mock.patch.object(builder.shutil, "which", return_value=on_path), \
-                            mock.patch.object(builder, "build_installer", return_value={}) as build, \
-                            mock.patch("builtins.print"):
+                    probes = [subprocess.CompletedProcess([], 0, stdout=path) for path in (str(registration), str(registration), "main")]
+                    with (mock.patch.object(os, "environ", values),
+                          mock.patch.object(builder.sys, "platform", "win32"),
+                          mock.patch.object(builder.sys, "argv", [*args, *(["--inno-compiler", explicit] if explicit else [])]),
+                          mock.patch.object(builder.subprocess, "run", side_effect=probes),
+                          mock.patch.object(builder.shutil, "which", return_value=on_path),
+                          mock.patch.object(builder, "build_installer", return_value={"filename": installer.name}) as build,
+                          mock.patch("builtins.print")):
                         builder.main()
-                    self.assertEqual(build.call_args.args[2], expected)
-                    self.assertEqual(build.call_args.args[1], Path("build/_windows-installer"))
-            report = root / "installer-result.json"
-            with mock.patch.object(builder.sys, "platform", "win32"), \
-                    mock.patch.object(builder.sys, "argv", ["build", "--build-dir", str(root / "out"), "--receipt-file", str(report)]), \
-                    mock.patch.object(builder, "build_installer", return_value={"filename": "demo.exe"}), \
-                    mock.patch("builtins.print"):
-                builder.main()
-            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["installationArtifactPath"], "demo.exe")
-            package = root / "accepted"
-            package.mkdir()
-            installer = package / "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
+                    self.assertEqual(build.call_args.args, (source, scratch, expected, None))
+                    self.assertEqual(build.call_args.kwargs, {"artifact_directory": package, "artifact_version": version})
+                    self.assertFalse(scratch.exists())
+                    result = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual(result["installationArtifactPath"], installer.name)
+                    self.assertEqual({p["path"] for p in result["artifacts"]}, {installer.name, manifest.name})
+                    self.assertEqual(result["schema"], "ceratops-builder-output")
             installer.write_bytes(b"test installer")
-            manifest = package / "_build-manifest.json"
             manifest.write_text("{}", encoding="utf-8")
-            with (mock.patch.object(builder.sys, "platform", "win32"), mock.patch("builtins.print"),
-                  mock.patch.object(builder, "build_installer", return_value={"filename": installer.name}) as build,
-                  mock.patch.object(builder.sys, "argv", ["builder", "--artifact-directory", str(package),
-                                                         "--receipt-file", str(report)])):
-                builder.main()
-                self.assertEqual(build.call_args.kwargs["artifact_directory"], package)
-                result = json.loads(report.read_text(encoding="utf-8"))
-                self.assertEqual(result["installationArtifactPath"], installer.name)
-                self.assertEqual({p["path"] for p in result["artifacts"]}, {installer.name, manifest.name})
-                self.assertEqual(result["schema"], "ceratops-builder-output")
             inputs = json.dumps({"deliverables.packages.windows-installer": [str(installer), str(manifest)]})
             with (mock.patch.object(builder.sys, "argv", ["delivery", "--install-accepted", "--accepted-artifacts", inputs]),
                   mock.patch.object(builder.sys, "platform", "win32"), mock.patch("builtins.print"),
@@ -213,12 +206,14 @@ class InstallerBuildTests(unittest.TestCase):
                 builder.main()
                 self.assertEqual(install.call_args.args[0][0], str(installer))
             user_compiler.unlink()
-            with mock.patch.object(os, "environ", {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}), \
-                    mock.patch.object(builder.sys, "platform", "win32"), \
-                    mock.patch.object(builder.sys, "argv", ["build_video_installer.py"]), \
-                    mock.patch.object(builder.shutil, "which", return_value=None), \
-                    mock.patch.object(builder, "build_installer", return_value={}) as build, \
-                    mock.patch("builtins.print"):
+            probes = [subprocess.CompletedProcess([], 0, stdout=path) for path in (str(registration), str(registration), "main")]
+            with (mock.patch.object(os, "environ", {"LOCALAPPDATA": str(root / "user"), "ProgramFiles(x86)": str(root / "machine")}),
+                  mock.patch.object(builder.sys, "platform", "win32"),
+                  mock.patch.object(builder.sys, "argv", args),
+                  mock.patch.object(builder.subprocess, "run", side_effect=probes),
+                  mock.patch.object(builder.shutil, "which", return_value=None),
+                  mock.patch.object(builder, "build_installer", return_value={"filename": installer.name}) as build,
+                  mock.patch("builtins.print")):
                 builder.main()
             self.assertEqual(build.call_args.args[2], machine_compiler)
 
@@ -422,55 +417,59 @@ class InstallerBuildTests(unittest.TestCase):
         for boundary in range(1, 13):
             for after in (False, True):
                 with self.subTest(boundary=boundary, after=after), tempfile.TemporaryDirectory(prefix="_installer-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:
-                    root = Path(temporary)
-                    source, build = root / "source", root / "build"
+                    root = Path(temporary).resolve()
+                    source = root / "source"
+                    registration = source / ".git"
+                    build = root / "tmp/source/primary/_installer-build/windows-installer"
+                    artifact_version = "3.7.10+autopsy.2"
+                    slots = registration / "ceratops/artifacts"
+                    pool = slots / ("worktrees/primary" if after else "beta-stable")
+                    native = pool / "members/packages/windows-installer" / artifact_version / "native"
                     source.mkdir()
                     (source / "CMakeLists.txt").write_text("project(test)")
                     (source / "resources").mkdir()
                     (source / "resources/autopsy-release.json").write_text('{"version":"3.7.10-autopsy.2"}')
-                    (source / "README.md").write_text("bundled readme")
-                    (source / "BUILDING.md").write_text("build instructions")
-                    (source / ".github").mkdir()
-                    (source / ".github/ci.yml").write_text("initial CI")
                     inno = root / "ISCC.exe"
                     inno.write_bytes(b"test compiler")
-                    build.mkdir()
                     driver = root / "cmake.exe"
                     driver.write_bytes(b"test CMake engine")
                     cache = build / "CMakeCache.txt"
-                    cache.write_text(f"CMAKE_COMMAND:INTERNAL={driver}\nCMAKE_CXX_FLAGS:STRING=/O2\n")
+                    sibling = build.with_name("other-deliverable")
+                    sibling.mkdir(parents=True)
+                    (sibling / "keep").write_text("unrelated build")
+                    build.mkdir()
+                    (build / "abandoned").write_text("interrupted worker")
                     calls = 0
                     interrupted = False
                     revision = "a" * 40
-                    state = {"revision": revision}
-                    commands: list[list[str]] = []
 
-                    def run(arguments, _source, _diagnostics, *, boundary=boundary, after=after, build=build,
-                            state=state, observed=commands):
+                    def run(arguments, _source, _diagnostics, *, boundary=boundary, after=after,
+                            build=build, cache=cache, driver=driver, calls_revision=revision):
                         nonlocal calls, interrupted
                         calls += 1
-                        observed.append(arguments)
                         stop = calls == boundary and not interrupted
                         if stop and not after:
                             interrupted = True
                             raise InterruptedError("before command")
+                        self.assertFalse((build / "abandoned").exists())
                         if "innosetup" in arguments:
                             package = build / "package"
                             package.mkdir(exist_ok=True)
                             name = "autopsy-win-3.7.10-autopsy.2-test-x64.exe"
-                            destination = next((Path(arg.split("=", 1)[1]) for arg in arguments
-                                                if arg.startswith("AUTOPSY_INSTALLER_OUTPUT=")), package)
+                            destination = next(Path(arg.split("=", 1)[1]) for arg in arguments
+                                               if arg.startswith("AUTOPSY_INSTALLER_OUTPUT="))
+                            destination.mkdir(exist_ok=True)
                             target = destination / name
                             target.write_bytes(b"completed installer")
                             builder.write_json(package / "_installer-x64.json",
                                                {"filename": name, "sha256": builder.sha256(target)})
                         elif "--build" in arguments:
                             self.native_report(build)
-                        result = state["revision"] + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
+                        elif "-S" in arguments:
+                            cache.write_text(f"CMAKE_COMMAND:INTERNAL={driver}\nCMAKE_CXX_FLAGS:STRING=/O2\n")
+                        result = calls_revision + "\n" if arguments[1:3] == ["rev-parse", "HEAD"] else ""
                         if arguments[1:3] == ["ls-files", "-z"]:
-                            result = "CMakeLists.txt\0resources/autopsy-release.json\0README.md\0BUILDING.md\0.github/ci.yml\0"
-                        if arguments[1:3] == ["diff", "--name-only"]:
-                            result = "README.md" if (_source / "README.md").read_text() != "bundled readme" else ""
+                            result = "CMakeLists.txt\0resources/autopsy-release.json\0"
                         if "--before-package" in arguments:
                             result = json.dumps(self.native_report(build))
                         if stop and after:
@@ -478,65 +477,53 @@ class InstallerBuildTests(unittest.TestCase):
                             raise InterruptedError("after command")
                         return result
 
-                    with mock.patch.object(builder, "prepare_sdk", return_value=root), \
-                         mock.patch.object(builder.shutil, "which", return_value=str(driver)), \
-                         mock.patch.object(builder, "run_command", side_effect=run), \
-                         mock.patch.object(os, "environ", {**os.environ, "GITHUB_ACTIONS": "false"}):
+                    branch = "main" if after else "release/local"
+                    probes = [subprocess.CompletedProcess([], 0, stdout=path) for path in
+                              (str(registration), str(registration), branch)]
+                    args = ["builder", "--source-dir", str(source), "--inno-compiler", str(inno)]
+                    with (mock.patch.object(builder, "prepare_sdk", return_value=root),
+                          mock.patch.object(builder.shutil, "which", return_value=str(driver)),
+                          mock.patch.object(builder, "run_command", side_effect=run),
+                          mock.patch.object(builder.subprocess, "run", side_effect=itertools.cycle(probes)),
+                          mock.patch.object(builder.sys, "argv", args),
+                          mock.patch.object(builder.sys, "platform", "win32"),
+                          mock.patch.object(os, "environ", {**os.environ, "GITHUB_ACTIONS": "false"}),
+                          mock.patch("builtins.print") as output):
                         with self.assertRaises(InterruptedError):
-                            builder.build_installer(source, build, inno)
-                        first = builder.build_installer(source, build, inno)
-                        manifest = build / "package/_build-manifest.json"
-                        timestamp = manifest.stat().st_mtime_ns
-                        self.assertEqual(builder.build_installer(source, build, inno), first)
-                        self.assertEqual(manifest.stat().st_mtime_ns, timestamp)
-                        self.assertFalse(first["signed"])
-                        self.assertEqual(first["source_revision"], "a" * 40)
-                        self.assertEqual(first["checks"], [{"name": "fork-fixtures", "result": "passed",
-                                                           "source_revision": "a" * 40}])
+                            builder.main()
+                        self.assertFalse(build.exists())
+                        self.assertFalse(native.exists())
+                        self.assertFalse(output.called)
+                        builder.main()
+                        result = json.loads(output.call_args.args[0])
+                        installer = native / f"autopsy-win-{artifact_version}-x64.exe"
+                        self.assertEqual(result["filename"], installer.name)
+                        self.assertEqual(Path(result["artifact_directory"]), native)
+                        self.assertEqual(result["sha256"], builder.sha256(installer))
+                        self.assertEqual(result["source_revision"], revision)
+                        self.assertFalse(result["signed"])
+                        self.assertEqual(set(native.iterdir()), {installer})
+                        self.assertFalse(build.exists())
+                        build.mkdir()
+                        (build / "abandoned").write_text("stopped after publishing the completed slot")
+                        prior_calls = calls
+                        with self.assertRaisesRegex(RuntimeError, "Installer output already exists"):
+                            builder.main()
+                        self.assertEqual(calls, prior_calls)
+                        self.assertEqual(result["sha256"], builder.sha256(installer))
+                        self.assertFalse(build.exists())
+                        self.assertTrue((sibling / "keep").is_file())
                         if boundary == 1 and not after:
-                            allocated = root / "accepted-build-output"
+                            allocated, receipt = root / "accepted-build-output", root / "result.json"
                             allocated.mkdir()
-                            standalone_bytes = manifest.read_bytes()
-                            managed = builder.build_installer(source, build, inno, artifact_directory=allocated)
-                            self.assertEqual({path.name for path in allocated.iterdir()},
-                                             {managed["filename"], "_build-manifest.json"})
-                            self.assertEqual(manifest.read_bytes(), standalone_bytes)
-                        original_manifest = manifest.read_bytes()
-                        provenance = build / "_compiled-runtime.json"
-                        original_provenance = provenance.read_bytes()
-                        revision = "b" * 40
-                        state["revision"] = revision
-                        (source / ".github/ci.yml").write_text("fixed compiler setup")
-                        (source / "BUILDING.md").write_text("updated build instructions")
-                        previous_commands = len(commands)
-                        for _ in range(2):
-                            self.assertEqual(builder.build_installer(source, build, inno), first)
-                        self.assertTrue(all(command[0] == "git" for command in commands[previous_commands:]))
-                        self.assertEqual(manifest.read_bytes(), original_manifest)
-                        self.assertEqual(manifest.stat().st_mtime_ns, timestamp)
-                        self.assertEqual(provenance.read_bytes(), original_provenance)
-                        relocated = root / "relocated"
-                        shutil.copytree(source, relocated)
-                        self.assertEqual(builder.build_installer(relocated, build, inno), first)
-                        # Changed product/package inputs and damaged artifacts
-                        # must return to the ordinary check/package boundary.
-                        for fault in ("product", "readme", "installer", "settings", "provenance", "native selection"):
-                            with self.subTest(reuse_fault=fault):
-                                manifest.write_bytes(original_manifest)
-                                provenance.write_bytes(original_provenance)
-                                (source / "CMakeLists.txt").write_text("changed product" if fault == "product" else "project(test)")
-                                (source / "README.md").write_text("changed package text" if fault == "readme" else "bundled readme")
-                                cache.write_text(f"CMAKE_COMMAND:INTERNAL={driver}\nCMAKE_CXX_FLAGS:STRING={'/Od' if fault == 'settings' else '/O2'}\n")
-                                installer = manifest.parent / first["filename"]
-                                installer.write_bytes(b"damaged installer" if fault == "installer" else b"completed installer")
-                                if fault == "provenance":
-                                    provenance.unlink()
-                                previous_commands = len(commands)
-                                refreshed = builder.build_installer(source, build, inno,
-                                    "^extra-native-check$" if fault == "native selection" else None)
-                                self.assertEqual(refreshed["source_revision"], revision)
-                                self.assertTrue(any("--before-package" in command for command in commands[previous_commands:]))
-                                self.assertTrue(any("innosetup" in command for command in commands[previous_commands:]))
+                            with mock.patch.object(builder.sys, "argv", [*args, "--version", artifact_version,
+                                                   "--artifact-directory", str(allocated), "--receipt-file", str(receipt)]):
+                                builder.main()
+                            report = json.loads(receipt.read_text(encoding="utf-8"))
+                            manifest = builder.MANIFEST_NAME.format(version=artifact_version)
+                            self.assertEqual({path.name for path in allocated.iterdir()}, {installer.name, manifest})
+                            self.assertEqual({row["path"] for row in report["artifacts"]}, {installer.name, manifest})
+                            self.assertFalse(build.exists())
 
     def test_failed_media_check_cannot_package_an_installer(self):
         self.addCleanup(self.assertEqual, os.environ, dict(os.environ))

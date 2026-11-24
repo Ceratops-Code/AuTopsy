@@ -215,8 +215,6 @@ deliverables:
       build-after: []
       artifact:
         type: windows-installer
-        # Standalone output. The build action below uses its allocated artifact_directory.
-        output-directory: build/_windows-installer/package
         filename-pattern: autopsy-win-*-x64.exe
       actions:
         pre-build-checks:
@@ -227,7 +225,7 @@ deliverables:
               no-op: The repository tests exercise the portable installer builder. Every new installer build must pass
                 fork-fixtures before packaging and records that result in its build manifest.
         build:
-          parameters: [artifact_directory]
+          parameters: [version, artifact_directory]
           result-schema: ceratops-builder-output
           requires:
             tools: [uv, cmake, ctest, iscc]
@@ -240,6 +238,8 @@ deliverables:
                 - --locked
                 - python
                 - scripts/build/windows/build_video_installer.py
+                - --version
+                - '{version}'
                 - --artifact-directory
                 - '{artifact_directory}'
                 - --receipt-file
