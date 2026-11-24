@@ -215,6 +215,7 @@ deliverables:
       build-after: []
       artifact:
         type: windows-installer
+        output-directory: .
         filename-pattern: autopsy-win-*-x64.exe
       actions:
         pre-build-checks:
