@@ -266,8 +266,13 @@ if(TARGET video-playback-test)
        endif()
        # The behavior runner owns case identities; adding a test must not
        # require changing the application's CMake source and rebuilding it.
+       if(WIN32)
+          set(_native_platform windows)
+       else()
+          set(_native_platform ubuntu)
+       endif()
        execute_process(COMMAND "${Python3_EXECUTABLE}"
-          "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py" --list-native-cases
+          "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py" --list-native-cases --native-platform "${_native_platform}"
           RESULT_VARIABLE autopsy_cases_status OUTPUT_VARIABLE autopsy_native_cases
           ERROR_VARIABLE autopsy_cases_error OUTPUT_STRIP_TRAILING_WHITESPACE)
        if(NOT autopsy_cases_status EQUAL 0 OR NOT autopsy_native_cases)

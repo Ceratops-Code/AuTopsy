@@ -1394,6 +1394,8 @@ def main():
     )
     parser.add_argument("--ffmpeg", default="")
     parser.add_argument("--ffprobe", default="")
+    parser.add_argument("--native-platform", choices=("windows", "ubuntu"), default="windows",
+                        help="Target platform when listing registered native cases.")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--keep-app-open", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--recording-storage-recovery", action="store_true", help=argparse.SUPPRESS)
@@ -1418,7 +1420,7 @@ def main():
     if args.list_native_cases:
         if set(sessions.NATIVE_CASES) & set(sessions.MODULE_REGISTERED_NATIVE_CASES) or len(sessions.NATIVE_CASES) != len(set(sessions.NATIVE_CASES)):
             parser.error("Native cases need different registration owners and unique central names.")
-        cases = (sessions.UBUNTU_NATIVE_CASES if sys.platform.startswith("linux") else
+        cases = (sessions.UBUNTU_NATIVE_CASES if args.native_platform == "ubuntu" else
                  (*sessions.NATIVE_CASES, *(sessions.RECORDING_CASES if os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE") else ())))
         print(";".join(cases))
         return

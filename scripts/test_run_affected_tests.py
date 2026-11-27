@@ -869,16 +869,17 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(native, [path])
 
     def test_unknown_owned_executable_input_requires_a_scope_decision(self) -> None:
-        self.assertEqual(self.names([".ceratops/sdlc/sdlc.yml"]),
-                         {group.name for group in runner.GROUPS})
+        expected = {group.name for group in runner.GROUPS}
+        if sys.platform != "win32":
+            expected.remove("fork-installer-build")
+        self.assertEqual(self.names([".ceratops/sdlc/sdlc.yml"]), expected)
         for path in ("scripts/new_operation.py", "src/video/NewVideoOperation.cpp",
                      "src/video/ShowVideoNewFeature.h", "src/clip-groups/ChangeClipLinks.cpp",
                      "src/video/new-fixture.json"):
             with self.subTest(path=path):
                 with self.assertRaisesRegex(RuntimeError, "No portable check owns"):
                     self.names([path])
-        self.assertEqual(self.names(["scripts/new_operation.py"], True),
-                         {group.name for group in runner.GROUPS})
+        self.assertEqual(self.names(["scripts/new_operation.py"], True), expected)
 
     def test_native_impact_is_explicit_and_does_not_claim_desktop_acceptance(self) -> None:
         for path in ("src/tracks/ui/AffordanceHandle.cpp", "src/export/ExportAudioDialog.cpp"):

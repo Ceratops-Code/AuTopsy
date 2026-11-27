@@ -83,7 +83,7 @@ def native_test_inputs(args, executable, module, display, case_api):
                               executable_version, startup_window_messages, run_process)
         },
         "payload_dependencies": {p.name: sha(p) for p in sorted(
-            executable.parent.glob("*.dll") if sys.platform == "win32" else module.parent.parent.glob("*.so.*")
+            executable.parent.glob("*.dll") if executable.suffix.casefold() == ".exe" else module.parent.parent.glob("*.so.*")
         )},
         "execution_scope": {
             "platform": platform.platform(), "machine": platform.machine(),
