@@ -385,6 +385,8 @@ Conan resolves that package and its dependencies through ConanCenter and stages
 its Windows runtime beside AuTopsy. Export uses the FFmpeg libraries for
 probing, filtering, encoding and writing the final container. Relinking, crop
 previews, capture and media tests still use the packaged command-line tools.
+Conan also supplies the Windows Vulkan loader used by libmpv. The installer
+includes it and its license with the rest of the video runtime.
 libmpv requires the C numeric runtime locale; Windows language
 setup keeps that locale stable after capturing the regional display separator.
 

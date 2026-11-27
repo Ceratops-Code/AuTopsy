@@ -146,6 +146,11 @@ endif()
 
 # If conan is enabled, run conan_runner.py
 if( ${_OPT}conan_enabled )
+   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${CMAKE_SOURCE_DIR}/conan/conanfile.py"
+      "${CMAKE_SOURCE_DIR}/conan/conan_runner.py"
+      "${CMAKE_SOURCE_DIR}/conan/helpers/profiles.py"
+      "${CMAKE_SOURCE_DIR}/conan/helpers/remotes.py")
    # Deduce the build type
    get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 

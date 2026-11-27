@@ -225,6 +225,10 @@ class AudacityConan(ConanFile):
     def requirements(self):
         if self.options.use_autopsy_ffmpeg:
             self.requires("ffmpeg/9.0.2")
+            if self.settings.os == "Windows":
+                # The Windows libmpv build imports the Vulkan loader even
+                # when its preview runs through the software renderer.
+                self.requires("vulkan-loader/1.4.357.0")
         for dependency in self._dependencies:
             if getattr(self.options, f"use_{dependency.name}"):
                 if dependency.override:
@@ -278,6 +282,12 @@ class AudacityConan(ConanFile):
                 deps_lookup[dep.ref.name].copy_files(self, dep)
             else:
                 global_copy_files(self, dep)
+            if dep.ref.name == "vulkan-loader" and self.settings.os == "Windows":
+                runtime_dir = f"{self.build_folder}/{self.settings.build_type}"
+                if not dep.cpp_info.bindirs or not os.path.isfile(os.path.join(dep.cpp_info.bindirs[0], "vulkan-1.dll")):
+                    raise RuntimeError("The Conan Vulkan package is missing the Windows loader.")
+                shutil.copyfile(os.path.join(dep.package_folder, "licenses", "LICENSE.txt"),
+                                os.path.join(runtime_dir, "Vulkan-LICENSE.txt"))
             if dep.ref.name == "ffmpeg" and self.settings.os in ("Windows", "Linux"):
                 windows = self.settings.os == "Windows"
                 runtime_dir = (f"{self.build_folder}/{self.settings.build_type}" if windows
