@@ -8,8 +8,14 @@
 #include "commands/LoadCommands.h"
 #include "commands/CommandDispatch.h"
 #include "SettingsVisitor.h"
+#ifdef _WIN32
 #include <windows.h>
 #include <winhttp.h>
+#else
+#include <curl/curl.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -30,6 +36,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 
@@ -38,8 +45,14 @@ std::string CurrentProductVersion() { return AUTOPSY_PRODUCT_VERSION; }
 namespace {
 constexpr size_t MaximumResponse = 2 * 1024 * 1024;
 constexpr auto RequestLifetime = std::chrono::seconds(20);
+#ifdef _WIN32
+constexpr auto Platform = InstallerPlatform::Windows;
+#else
+constexpr auto Platform = InstallerPlatform::Ubuntu;
+#endif
 using Clock = std::chrono::steady_clock;
 struct FeedResult { std::vector<ReleaseOffer> offers; std::string error; };
+#ifdef _WIN32
 struct HttpHandle {
    HINTERNET value{};
    ~HttpHandle() { if (value) WinHttpCloseHandle(value); }
@@ -95,7 +108,9 @@ void CALLBACK Receive(HINTERNET request, DWORD_PTR opaque, DWORD status, void *d
    }
    catch (...) { Fail(*state, ERROR_NOT_ENOUGH_MEMORY); }
 }
+#endif
 std::string ReadPage(int page, const std::atomic<bool> &cancelled, Clock::time_point deadline) {
+#ifdef _WIN32
    HttpHandle session{WinHttpOpen(L"AuTopsy update check", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC)};
    if (!session.value || !WinHttpSetTimeouts(session.value, 5000, 5000, 5000, 5000))
@@ -143,6 +158,61 @@ std::string ReadPage(int page, const std::atomic<bool> &cancelled, Clock::time_p
    if (state->status == 403 || state->status == 429) throw std::runtime_error("GitHub has limited update requests. Try again later or open the release page.");
    if (state->error) throw std::runtime_error("Cannot read GitHub updates (Windows error " + std::to_string(state->error) + "). Editing is unaffected.");
    return state->body;
+#else
+   const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+   if (cancelled) throw std::runtime_error("Update check cancelled.");
+   if (remaining <= 0) throw std::runtime_error("GitHub did not respond before the update-check time limit.");
+   const auto url = "https://api.github.com/repos/" + std::string(GitHubRepository) +
+      "/releases?per_page=100&page=" + std::to_string(page);
+   std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> request{curl_easy_init(), curl_easy_cleanup};
+   std::unique_ptr<CURLM, decltype(&curl_multi_cleanup)> transfer{curl_multi_init(), curl_multi_cleanup};
+   std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers{
+      curl_slist_append(nullptr, "Accept: application/vnd.github+json"), curl_slist_free_all};
+   if (!request || !transfer || !headers || !curl_slist_append(headers.get(), "X-GitHub-Api-Version: 2026-03-10"))
+      throw std::runtime_error("Cannot start the GitHub update request.");
+   char *bytes = nullptr;
+   size_t length{};
+   auto *stream = ::open_memstream(&bytes, &length);
+   if (!stream) throw std::runtime_error("Cannot allocate the GitHub update response.");
+   // libcurl caps the uncompressed feed bytes written to this memory stream.
+   // HTTPS is required and there is no redirect or credential discovery.
+   const bool configured =
+      curl_easy_setopt(request.get(), CURLOPT_URL, url.c_str()) == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_NETRC, long(CURL_NETRC_IGNORED)) == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_HTTPHEADER, headers.get()) == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_USERAGENT, "AuTopsy update check") == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_CONNECTTIMEOUT_MS, 5000L) == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_TIMEOUT_MS, static_cast<long>(remaining)) == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_MAXFILESIZE_LARGE, curl_off_t(MaximumResponse)) == CURLE_OK &&
+      curl_easy_setopt(request.get(), CURLOPT_WRITEDATA, stream) == CURLE_OK;
+   auto state = configured ? curl_multi_add_handle(transfer.get(), request.get()) : CURLM_BAD_HANDLE;
+   const bool attached = state == CURLM_OK;
+   int active = attached ? 1 : 0;
+   while (active && state == CURLM_OK && !cancelled && Clock::now() < deadline) {
+      state = curl_multi_perform(transfer.get(), &active);
+      if (active && state == CURLM_OK) state = curl_multi_poll(transfer.get(), nullptr, 0, 50, nullptr);
+   }
+   int queued{};
+   const auto *message = attached ? curl_multi_info_read(transfer.get(), &queued) : nullptr;
+   const auto result = message && message->msg == CURLMSG_DONE ? message->data.result : CURLE_FAILED_INIT;
+   long status{};
+   curl_easy_getinfo(request.get(), CURLINFO_RESPONSE_CODE, &status);
+   if (attached) curl_multi_remove_handle(transfer.get(), request.get());
+   const int closed = std::fclose(stream);
+   const std::unique_ptr<char, decltype(&std::free)> body{bytes, std::free};
+   if (cancelled) throw std::runtime_error("Update check cancelled.");
+   if (status == 403 || status == 429)
+      throw std::runtime_error("GitHub has limited update requests. Try again later or open the release page.");
+   if ((active && state == CURLM_OK) || result == CURLE_OPERATION_TIMEDOUT)
+      throw std::runtime_error("GitHub did not respond before the update-check time limit.");
+   if (result == CURLE_FILESIZE_EXCEEDED || length > MaximumResponse)
+      throw std::runtime_error("The update response exceeds its size limit.");
+   if (state != CURLM_OK || result != CURLE_OK || !body || closed || status != 200)
+      throw std::runtime_error("Cannot read GitHub updates. Editing is unaffected.");
+   return {body.get(), length};
+#endif
 }
 std::string Text(const rapidjson::Value &object, const char *name, size_t maximum = 65536) {
    const auto field = object.FindMember(name);
@@ -160,7 +230,7 @@ size_t ReadOffers(const std::string &body, std::vector<ReleaseOffer> &offers) {
       ReleaseOffer offer{Text(release, "tag_name", 128), Text(release, "body", 16384), Text(release, "html_url", 1024), {},
          release["draft"].GetBool(), release["prerelease"].GetBool()};
       if (release.HasMember("assets") && release["assets"].IsArray()) for (const auto &asset : release["assets"].GetArray()) {
-         if (!asset.IsObject() || !IsWindowsX64Installer(Text(asset, "name", 256)) || Text(asset, "state") != "uploaded" ||
+         if (!asset.IsObject() || !IsX64InstallerForPlatform(Text(asset, "name", 256), Platform) || Text(asset, "state") != "uploaded" ||
              !asset.HasMember("size") || !asset["size"].IsUint64() || !asset["size"].GetUint64()) continue;
          offer.download = Text(asset, "browser_download_url", 2048); break;
       }
@@ -239,10 +309,10 @@ public:
       if (!latest->error.empty()) return;
       const auto current = ParseReleaseVersion(CurrentProductVersion());
       const auto offer = current ? ChooseProductUpdate(latest->offers, *current,
-         gPrefs->ReadBool("/AuTopsy/Updates/Previews", true)) : std::optional<ReleaseOffer>{};
+         gPrefs->ReadBool("/AuTopsy/Updates/Previews", true), Platform) : std::optional<ReleaseOffer>{};
       if (automaticRequest && !dialogs && offer && gPrefs->Read("/AuTopsy/Updates/LastNotice", "") != wxString::FromUTF8(offer->tag)) {
          // A passive notice never stops editing or starts a download. A later
-         // manual check offers the same release if Windows suppresses balloons.
+         // manual check offers the same release if the desktop hides notifications.
          notice = std::make_unique<wxNotificationMessage>(_("AuTopsy update available"),
             wxString::FromUTF8(offer->tag) + _(" is available on GitHub. Use Help > Check for AuTopsy Updates."),
             wxTheApp->GetTopWindow());
@@ -288,9 +358,14 @@ void ShowUpdates(const CommandContext &) {
       if (!monitor->latest) { status->SetLabel(_("Checking GitHub...")); return; }
       if (!monitor->latest->error.empty()) { status->SetLabel(wxString::FromUTF8(monitor->latest->error)); notes->Clear(); return; }
       const auto current = ParseReleaseVersion(CurrentProductVersion());
-      selected = current ? ChooseProductUpdate(monitor->latest->offers, *current, previews->GetValue()) : std::optional<ReleaseOffer>{};
+      selected = current ? ChooseProductUpdate(monitor->latest->offers, *current, previews->GetValue(), Platform) : std::optional<ReleaseOffer>{};
+#ifdef _WIN32
+      const auto unavailable = _("No newer Windows x64 installer is available in the selected channel.");
+#else
+      const auto unavailable = _("No newer Ubuntu amd64 installer is available in the selected channel.");
+#endif
       status->SetLabel(selected ? _("New release: ") + wxString::FromUTF8(selected->tag)
-         : _("No newer Windows x64 installer is available in the selected channel."));
+         : unavailable);
       notes->ChangeValue(selected ? wxString::FromUTF8(selected->notes) : wxString{}); download->Enable(bool(selected));
       status->Wrap(580); dialog.Layout();
    };
@@ -310,7 +385,7 @@ class GetProductUpdatesCommand final : public AudacityCommand {
 public:
    static const ComponentInterfaceSymbol Symbol;
    ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
-   TranslatableString GetDescription() const override { return XO("Read newer AuTopsy Windows releases from GitHub without downloading or installing anything."); }
+   TranslatableString GetDescription() const override { return XO("Check GitHub for newer AuTopsy releases for this platform."); }
    template<bool Const> bool Settings(SettingsVisitorBase<Const> &v) { v.Define(previews, wxT("Previews"), true); return true; }
    bool VisitSettings(SettingsVisitor &v) override { return Settings(v); }
    bool VisitSettings(ConstSettingsVisitor &v) override { return Settings(v); }
@@ -319,7 +394,7 @@ public:
       try { feed = ReadFeed(cancelled, TestFeed()); }
       catch (const std::exception &error) { feed.error = error.what(); }
       const auto current = ParseReleaseVersion(CurrentProductVersion());
-      const auto selected = current && feed.error.empty() ? ChooseProductUpdate(feed.offers, *current, previews) : std::optional<ReleaseOffer>{};
+      const auto selected = current && feed.error.empty() ? ChooseProductUpdate(feed.offers, *current, previews, Platform) : std::optional<ReleaseOffer>{};
       rapidjson::StringBuffer buffer; rapidjson::Writer<rapidjson::StringBuffer> out(buffer);
       out.StartObject(); out.Key("current"); out.String(CurrentProductVersion().c_str()); out.Key("error"); out.String(feed.error.c_str());
       out.Key("available"); out.Bool(bool(selected));

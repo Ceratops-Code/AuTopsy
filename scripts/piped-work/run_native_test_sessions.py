@@ -55,7 +55,7 @@ from test_video_recording import VIDEO_RECORDING_CASES
 
 UBUNTU_NATIVE_CASES = ("fixtures", "video-range-export", "video-export-timing",
                        "video-vfr-export", "video-encoder-boundaries", "video-recording",
-                       "video-caption-interchange")
+                       "video-caption-interchange", "product-updates")
 
 
 def native_test_inputs(args, executable, module, display, case_api):

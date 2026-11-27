@@ -370,10 +370,11 @@ or copy the VST3 SDK to `vst3sdk` directory in the AuTopsy source tree.
 
 Pass `-Daudacity_use_vst3sdk=system` to CMake. CMake will build the SDK during the configuration.
 
-## Video tracks (Windows fork)
+## Building video support on Windows
 
 The video module is opt-in, so the base build does not require video SDKs.
-The configuration below enables the AuTopsy video features explicitly.
+The configuration below enables the AuTopsy video features explicitly. The
+[Ubuntu package](#ubuntu-2404-installer) enables the same feature at build time.
 
 Use the C++ workload and Windows SDK from Visual Studio 2022, and an extracted
 64-bit libmpv development package matching the build architecture. The package
@@ -416,8 +417,7 @@ Set audacity_has_video_preview=OFF to build without the video feature or SDKs.
 The inherited binary updater is excluded from AuTopsy builds; its service offers
 upstream releases rather than AuTopsy builds. Product help and feedback link to
 this fork's repository. Upstream source updates use the manual process in README.md.
-The preview code is currently Windows-only; other platforms keep their existing
-build behavior. The transport CTest case covers transport ownership, repeated
+The transport CTest case covers transport ownership, repeated
 calls, interruptions before and after each player command, asynchronous seeks,
 loop boundaries, frame quantization, and invalid clock values.
 The timeline case exercises the owned value model without a host editor.

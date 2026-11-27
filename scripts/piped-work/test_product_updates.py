@@ -5,6 +5,7 @@ profile. No browser, installer, network request or user project is involved.
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 from test_clip_actions import with_native_dialog
@@ -19,9 +20,14 @@ def check_product_updates(client, root):
         return
     fixture = root / "_updates.json"
 
-    def offer(tag, *, draft=False, architecture="x64", foreign=False):
+    ubuntu = sys.platform.startswith("linux")
+
+    def offer(tag, *, draft=False, supported_architecture=True, foreign=False, other_platform=False):
         page = "https://github.com/Ceratops-Code/AuTopsy/releases"
-        name = f"autopsy-win-3.7.10-test-{architecture}.exe"
+        if ubuntu != other_platform:
+            name = "autopsy-editor_3.7.10~b1_" + ("amd64" if supported_architecture else "arm64") + ".deb"
+        else:
+            name = "autopsy-win-3.7.10-test-" + ("x64" if supported_architecture else "arm64") + ".exe"
         return {"tag_name": tag, "draft": draft, "prerelease": "-autopsy." in tag,
             "html_url": page + "/tag/" + tag, "body": "Neutral release notes for a newer AuTopsy preview.",
             "assets": [{"name": name, "state": "uploaded", "size": 1234,
@@ -37,12 +43,13 @@ def check_product_updates(client, root):
     tag = f"v{core}-autopsy.1"
     future = f"v{core}-autopsy.2"
     good = [offer("v" + current), offer(tag), offer(future, draft=True),
-            offer(future, architecture="arm64"), offer(future, foreign=True)]
+            offer(future, supported_architecture=False), offer(future, foreign=True), offer(future, other_platform=True)]
     before = client.data("GetInfo: Type=Tracks Format=JSON")
     for _ in range(2):
         fixture.write_text(json.dumps(good), encoding="utf-8")
         result = client.data("GetAuTopsyUpdates")
         assert result["available"] and result["tag"] == tag and not result["error"], result
+        assert result["download"].endswith("_amd64.deb" if ubuntu else "-x64.exe"), result
         assert not client.data("GetAuTopsyUpdates: Previews=0")["available"]
         fixture.write_text("not-json", encoding="utf-8")
         result = client.data("GetAuTopsyUpdates")
@@ -51,6 +58,8 @@ def check_product_updates(client, root):
         result = client.data("GetAuTopsyUpdates")
         assert not result["error"] and not result["available"], result
         assert client.data("GetInfo: Type=Tracks Format=JSON") == before
+    if ubuntu:
+        return
     fixture.write_text(json.dumps(good), encoding="utf-8")
 
     def inspect(windows, dialog):

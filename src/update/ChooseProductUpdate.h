@@ -50,13 +50,19 @@ inline bool IsOwnedReleaseLink(const std::string &url, bool download = false) {
    return url.size() > prefix.size() && url.compare(0, prefix.size(), prefix) == 0 &&
       url.find_first_of("\r\n\\?#") == std::string::npos && url.find("/../") == std::string::npos;
 }
-inline bool IsWindowsX64Installer(const std::string &name) {
-   return name.size() > 20 && name.compare(0, 12, "autopsy-win-") == 0 &&
-      name.compare(name.size()-8, 8, "-x64.exe") == 0 &&
-      name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == std::string::npos;
+enum class InstallerPlatform { Windows, Ubuntu };
+inline bool IsX64InstallerForPlatform(const std::string &name, InstallerPlatform platform) {
+   const bool ubuntu = platform == InstallerPlatform::Ubuntu;
+   const std::string_view prefix = ubuntu ? "autopsy-editor_" : "autopsy-win-";
+   const std::string_view suffix = ubuntu ? "_amd64.deb" : "-x64.exe";
+   const auto allowed = ubuntu ? "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-~"
+      : "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-";
+   return name.size() > prefix.size() + suffix.size() && name.compare(0, prefix.size(), prefix) == 0 &&
+      name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0 &&
+      name.find_first_not_of(allowed) == std::string::npos;
 }
 inline std::optional<ReleaseOffer> ChooseProductUpdate(const std::vector<ReleaseOffer> &offers,
-   const ReleaseVersion &current, bool includePreviews) {
+   const ReleaseVersion &current, bool includePreviews, InstallerPlatform platform) {
    std::optional<ReleaseOffer> result; auto newest = current;
    for (const auto &offer : offers) {
       const auto version = ParseReleaseVersion(offer.tag);
@@ -64,7 +70,7 @@ inline std::optional<ReleaseOffer> ChooseProductUpdate(const std::vector<Release
       const auto prefix = ProductReleasesPage() + "/download/" + offer.tag + '/';
       if (offer.draft || !version || (!includePreviews && (offer.prerelease || version->preview)) ||
           offer.page != page || offer.download.compare(0, prefix.size(), prefix) != 0 ||
-          !IsWindowsX64Installer(offer.download.substr(prefix.size())) || !(newest < *version)) continue;
+          !IsX64InstallerForPlatform(offer.download.substr(prefix.size()), platform) || !(newest < *version)) continue;
       newest = *version; result = offer;
    }
    return result;

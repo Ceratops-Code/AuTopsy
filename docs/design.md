@@ -1152,7 +1152,7 @@ before implementing advanced ramps/effects over a fragile preview path.
 
 Public menus, keyboard gestures and scripting call the same semantic operations.
 The existing scripting commands and parameter contracts are documented in the
-[README video guide](../README.md#video-tracks-windows-fork). New operations get
+[README video guide](../README.md#video-tracks). New operations get
 explicit names and useful invalid/missing/ambiguous-target errors. IDs used by the
 kernel never depend on native class names, pane coordinates or track indices.
 Track indices in today's public scripting are resolved once by the boundary.

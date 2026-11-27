@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="#video-tracks-windows-fork">Video guide</a> ·
+  <a href="#video-tracks">Video guide</a> ·
   <a href="BUILDING.md">Build AuTopsy</a> ·
   <a href="https://github.com/Ceratops-Code/AuTopsy/issues">Report a problem</a> ·
   <a href="CONTRIBUTING.md">Contribute</a> ·
@@ -95,14 +95,15 @@ move commands, to move the whole group. **Ungroup Tracks** and the header's **x*
 remove the grouping while keeping the member tracks and audio. Groups are flat.
 Ordinary audio stays in standard AUP3 tracks, so stock Audacity opens it without
 the optional group headers.
-Local deployments use the installer, including locally built releases; source
-and build directories are not installation inputs. A local installation runs from
-`%ProgramFiles%\AuTopsy\AuTopsy.exe`. See the video guide below for picture editing
+Local deployments use the installer, including locally built releases. On
+Windows, the installed program is `%ProgramFiles%\AuTopsy\AuTopsy.exe`. On
+Ubuntu 24.04, install the [Ubuntu package](BUILDING.md#ubuntu-2404-installer)
+and launch **AuTopsy** from the desktop menu. See the video guide below for picture editing
 and [AuTopsy issues](https://github.com/Ceratops-Code/AuTopsy/issues) for support.
 The inherited audio tools are covered by the
 [upstream Audacity manual](https://manual.audacityteam.org/).
-The video extension is currently Windows-only; other platforms retain the
-upstream audio build. Video source files stay external to the saved project.
+The video extension runs on Windows and Ubuntu 24.04. Video source files stay
+external to the saved project.
 To locate a moved source, stop playback, choose **File > Relink Video Media...**,
 select the old source and then its replacement file. Clip positions, trims and
 links are retained; the already imported audio remains independently editable.
@@ -306,7 +307,7 @@ AuTopsy never executes an installer or closes an editing session. Preview instal
 remain unsigned under the code-signing policy above. App, installer and release
 tag share the product identity in `resources/autopsy-release.json`.
 
-## Video tracks (Windows fork)
+## Video tracks
 
 This fork follows upstream's audacity3 branch and adds native video tracks in
 the same scrolling track pane as audio. Each track can hold clips from several
@@ -561,14 +562,15 @@ media to distribute or the authority for saved edits.
 Reopening uses an available cache without a nested loading dialog.
 `GetVideoPreviewInfo` reports decoded size and a bounded observation of the last
 playback, including dropped frames and video/audio clock positions.
-Soundtrack import uses Audacity's existing FFmpeg importer with bundled FFmpeg
-8.1 shared libraries. Video export uses bundled `ffmpeg.exe` and `ffprobe.exe`; if a source
-video codec cannot be copied into MP4, export MKV instead. Export cannot replace
-the source video. A cancelled or failed export preserves an existing destination.
+Soundtrack import uses Audacity's existing FFmpeg importer. Video export calls
+the packaged FFmpeg libraries directly for probing, filtering, encoding, and
+writing MP4 or MKV. If a source video codec cannot be copied into MP4, export
+MKV instead. Export protects the source video and preserves an existing
+destination if the user cancels or the export fails.
 
 The export component owns one temporary `_autopsy-video-export-*` directory
-beside the destination, containing `_owner`, `_mix.wav`, optional rendering
-instructions in `_filters.txt`, and `_result.mp4` or `_result.mkv`.
+beside the destination, containing `_owner`, `_mix.wav`, and
+`_result.mp4` or `_result.mkv`.
 `/VideoExport/Workspace` in the active settings profile records
 only that directory. Project startup and each export remove abandoned work;
 an exclusive owner-file lock protects a live export. Success and cancellation
@@ -579,7 +581,7 @@ version history is produced by the application.
 
 Windows scripting clients use the names
 `AuTopsyToSrvPipe` and `AuTopsyFromSrvPipe`.
-See [BUILDING.md](BUILDING.md#video-tracks-windows-fork) for the SDK
+See [BUILDING.md](BUILDING.md#building-video-support-on-windows) for the SDK
 and focused test commands.
 
 The `ImportVideo: Filename="..."` and

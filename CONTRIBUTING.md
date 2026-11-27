@@ -48,7 +48,7 @@ Describe the editing task and the result you need.
 
 Help other users in [AuTopsy issues](https://github.com/Ceratops-Code/AuTopsy/issues).
 The [upstream audio manual](https://manual.audacityteam.org/) covers inherited
-audio tools; AuTopsy's video guide is in [README.md](README.md#video-tracks-windows-fork).
+audio tools; AuTopsy's video guide is in [README.md](README.md#video-tracks).
 
 ### Making video tutorials
 
