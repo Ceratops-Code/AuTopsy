@@ -222,7 +222,7 @@ sudo apt install ./autopsy-editor_*_amd64.deb
 autopsy-editor
 ```
 
-The application appears as AuTopsy in the desktop menu. The `autopsy-editor` package and command let it coexist with Ubuntu's `autopsy` forensic tool and with Audacity. On a Wayland desktop, the editor window uses Ubuntu's XWayland support. Full-screen recording requires selecting **Ubuntu on Xorg** at sign-in.
+The application appears as AuTopsy in the desktop menu. The `autopsy-editor` package and command let it coexist with Ubuntu's `autopsy` forensic tool and with Audacity. The package uses Ubuntu's libmpv and PulseAudio client libraries. On a Wayland desktop, the editor window uses Ubuntu's XWayland support. Full-screen recording requires selecting **Ubuntu on Xorg** at sign-in.
 
 The SDLC declares the `ubuntu-installer` alongside `windows-installer`. Both use `scripts/build/build_video_installer.py`. Each build uses a disposable `_installer-build` directory for its platform and reports the finished package to Ceratops through the same receipt format. The finished `.deb` goes into the `ubuntu-installer` package slot in the shared Git directory. GitHub uploads the checked package for 14 days.
 

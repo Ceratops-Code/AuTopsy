@@ -277,6 +277,10 @@ class AudacityConan(ConanFile):
         deps_lookup = { dependency.name: dependency for dependency in self._dependencies }
 
         for dep in self.dependencies.host.values():
+            if self.settings.os == "Linux" and dep.ref.name == "pulseaudio":
+                # FFmpeg uses the stable libpulse.so.0 client ABI. The
+                # distribution owns that runtime and its private libraries.
+                continue
             self.output.info(f"Copying files for {dep.ref.name}...")
             if dep.ref.name in deps_lookup:
                 deps_lookup[dep.ref.name].copy_files(self, dep)
