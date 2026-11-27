@@ -4,6 +4,11 @@
 #include <iomanip>
 #include <map>
 #include <stdexcept>
+#ifdef __linux__
+#include <cerrno>
+#include <cstdio>
+#include <fcntl.h>
+#endif
 
 namespace ProjectMedia {
 namespace fs = std::filesystem;
@@ -129,7 +134,16 @@ fs::path CollectMediaFiles(const CollectionRequest &request, const CollectionFin
       desired.projectDigest = fingerprint(stage / ProjectName);
       if (desired.projectDigest.empty()) throw std::runtime_error("The collected project was not saved completely.");
       effect("write-manifest", stage / ManifestName, [&] { WriteManifest(stage, desired); });
-      effect("publish-folder", destination, [&] { fs::rename(stage, destination); });
+      effect("publish-folder", destination, [&] {
+#ifdef __linux__
+         // POSIX rename can replace a foreign empty directory at this path.
+         if (::renameat2(AT_FDCWD, stage.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE) != 0)
+            throw fs::filesystem_error("Publishing a collected project", stage, destination,
+               std::error_code(errno, std::generic_category()));
+#else
+         fs::rename(stage, destination);
+#endif
+      });
       return destination / ProjectName;
    }
    catch (...) {

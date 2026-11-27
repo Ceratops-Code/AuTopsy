@@ -58,11 +58,21 @@ TEST_CASE("Collection repeats and interrupts before and after each published eff
       CAPTURE(boundary, after);
       Workspace work; auto request = work.Request();
       int effects{};
+      const bool folderAppearsBeforePublish = boundary == 8 && !after;
       REQUIRE_THROWS_AS(ProjectMedia::CollectMediaFiles(request, Fingerprint, Save,
          [&](const char*, const fs::path&, bool finished) {
             if (!finished) ++effects;
+            if (folderAppearsBeforePublish && effects == boundary && !finished) {
+               REQUIRE(fs::create_directory(request.destination));
+               return;
+            }
             if (effects == boundary && finished == after) throw std::runtime_error("interrupted file effect");
          }), std::runtime_error);
+      if (folderAppearsBeforePublish) {
+         REQUIRE(fs::is_directory(request.destination));
+         REQUIRE(fs::is_empty(request.destination));
+         REQUIRE(fs::remove(request.destination));
+      }
       const auto result = ProjectMedia::CollectMediaFiles(request, Fingerprint, Save);
       REQUIRE(Bytes(result) == "complete native audio and project document");
       REQUIRE(Bytes(request.destination / "Media/first.mp4") == Bytes(work.root / "one.mp4"));

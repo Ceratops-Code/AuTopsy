@@ -13,14 +13,19 @@
 #include "commands/AudacityCommand.h"
 #include "commands/CommandDispatch.h"
 #include "commands/LoadCommands.h"
+#include "crypto/SHA256.h"
 #include <wx/dirdlg.h>
 #include <wx/filename.h>
 #include <wx/progdlg.h>
 #include <wx/textdlg.h>
 #include <wx/msgdlg.h>
+#ifdef _WIN32
 #include <windows.h>
-#include <bcrypt.h>
-#include <array>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <wx/file.h>
+#endif
 #include <fstream>
 #include <map>
 #include <set>
@@ -35,48 +40,44 @@ using SourceMap = std::map<std::string, std::string>;
 std::map<const AudacityProject*, const SourceMap*> collectionSources;
 std::string Utf8(const wxString &value) { const auto text = value.ToUTF8(); return {text.data(), text.length()}; }
 class Digest final {
-   BCRYPT_ALG_HANDLE algorithm{};
-   BCRYPT_HASH_HANDLE hash{};
+   crypto::SHA256 hash;
 public:
-   Digest() {
-      if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-         throw std::runtime_error("Windows could not open its SHA-256 provider.");
-      if (BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) < 0) {
-         BCryptCloseAlgorithmProvider(algorithm, 0); algorithm = nullptr;
-         throw std::runtime_error("Windows could not create the media fingerprint.");
-      }
-   }
-   ~Digest() { if (hash) BCryptDestroyHash(hash); if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0); }
-   void Add(const char *data, size_t size) {
-      while (size) {
-         const auto count = static_cast<ULONG>(std::min<size_t>(size, 1024 * 1024));
-         if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(data)), count, 0) < 0)
-            throw std::runtime_error("Windows could not fingerprint the media bytes.");
-         data += count; size -= count;
-      }
-   }
+   void Add(const char *data, size_t size) { if (size) hash.Update(data, size); }
    std::string Finish() {
-      std::array<unsigned char, 32> bytes{};
-      if (BCryptFinishHash(hash, bytes.data(), static_cast<ULONG>(bytes.size()), 0) < 0)
-         throw std::runtime_error("Windows could not finish the media fingerprint.");
-      constexpr auto digits = "0123456789abcdef";
-      std::string value;
-      for (const auto byte : bytes) { value += digits[byte >> 4]; value += digits[byte & 15]; }
+      auto value = hash.Finalize();
+      // Collected projects already use lowercase SHA-256 in names and manifests.
+      for (auto &digit : value)
+         if (digit >= 'A' && digit <= 'F') digit += 'a' - 'A';
       return value;
    }
 };
 class DestinationLock final {
+#ifdef _WIN32
    HANDLE handle{INVALID_HANDLE_VALUE};
+#else
+   wxFile parent;
+#endif
 public:
    explicit DestinationLock(const fs::path &destination) {
+#ifdef _WIN32
       auto path = destination.parent_path() / fs::u8path("_" + destination.filename().u8string() + ".collection.lock");
       // Delete-on-close releases a killed worker's lock without progress files.
       // CREATE_NEW refuses a foreign file instead of deleting it on close.
       handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW,
          FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-      if (handle == INVALID_HANDLE_VALUE) throw std::runtime_error("This project folder is already being collected or is not writable.");
+      if (handle == INVALID_HANDLE_VALUE)
+#else
+      // A directory lock protects recovery of the deterministic staging path.
+      // It is released on process exit and leaves no persistent lock file.
+      const auto fd = ::open(destination.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      if (fd >= 0) parent.Attach(fd);
+      if (!parent.IsOpened() || ::flock(parent.fd(), LOCK_EX | LOCK_NB) != 0)
+#endif
+         throw std::runtime_error("A project folder is already being collected here or this location is inaccessible.");
    }
+#ifdef _WIN32
    ~DestinationLock() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+#endif
 };
 class CollectionSources final {
    const AudacityProject *project;
@@ -93,7 +94,7 @@ std::string OpenVideoSourcePath(const AudacityProject *project, const std::strin
    if (!project || path.empty()) return path;
    const auto projectPath = ProjectFileIO::Get(*project).GetFileName();
    if (!projectPath.empty() && !localPath.empty() && fs::u8path(localPath).is_relative()) {
-      const auto local = (fs::path(projectPath.ToStdWstring()).parent_path() / fs::u8path(localPath)).lexically_normal();
+      const auto local = (fs::u8path(Utf8(projectPath)).parent_path() / fs::u8path(localPath)).lexically_normal();
       if (fs::is_regular_file(local)) {
          // Keep an unchanged absolute spelling stable across save/reopen. The
          // local hint wins only when the collection actually moved or differs.
@@ -104,7 +105,7 @@ std::string OpenVideoSourcePath(const AudacityProject *project, const std::strin
    }
    if (fs::u8path(path).is_absolute()) return path;
    if (projectPath.empty()) throw std::runtime_error("Relative video media requires a saved project location.");
-   return (fs::path(projectPath.ToStdWstring()).parent_path() / fs::u8path(path)).lexically_normal().u8string();
+   return (fs::u8path(Utf8(projectPath)).parent_path() / fs::u8path(path)).lexically_normal().u8string();
 }
 std::string StoreVideoSourcePath(const AudacityProject *project, const std::string &path)
 {
@@ -125,7 +126,7 @@ std::string StoreLocalVideoSourcePath(const AudacityProject *project, const std:
    }
    const auto projectPath = ProjectFileIO::Get(*project).GetFileName();
    if (projectPath.empty()) return {};
-   const auto base = fs::path(projectPath.ToStdWstring()).parent_path();
+   const auto base = fs::u8path(Utf8(projectPath)).parent_path();
    const auto relative = fs::u8path(path).lexically_normal().lexically_relative(base.lexically_normal());
    if (!relative.empty() && *relative.begin() != "..") return relative.generic_u8string();
    return {};
@@ -153,16 +154,16 @@ public:
          _("Name of the new folder. It will contain Project.aup3 and its Media folder."),
          _("Collect Project Media"), _("AuTopsy project")};
       if (name.ShowModal() != wxID_OK) return false;
-      const auto leaf = fs::path(name.GetValue().ToStdWstring());
+      const auto leaf = fs::u8path(Utf8(name.GetValue()));
       if (leaf.empty() || leaf.filename() != leaf || leaf == "." || leaf == "..") return false;
-      mDirectory = wxString((fs::path(dialog.GetPath().ToStdWstring()) / leaf).wstring()); return true;
+      mDirectory = wxString::FromUTF8((fs::u8path(Utf8(dialog.GetPath())) / leaf).u8string()); return true;
    }
    bool Apply(const CommandContext &context) override {
       try {
          auto &project = context.project;
          if (ProjectAudioIO::Get(project).IsAudioActive()) throw std::runtime_error("Stop playback or recording before collecting project media.");
          if (mDirectory.empty()) throw std::runtime_error("Choose a new collection folder.");
-         const auto destination = fs::absolute(fs::path(mDirectory.ToStdWstring())).lexically_normal();
+         const auto destination = fs::absolute(fs::u8path(Utf8(mDirectory))).lexically_normal();
          if (!fs::is_directory(destination.parent_path())) throw std::runtime_error("Choose a folder inside an existing parent.");
          DestinationLock lock(destination);
          ClipActions::MediaDialogCommandGuard commands;
@@ -204,11 +205,11 @@ public:
          Digest identity; identity.Add(doc.data(), doc.size()); request.documentIdentity = identity.Finish();
          const auto copy = CollectMediaFiles(request, fingerprint, [&](const fs::path &target) {
             pulse();
-            if (!ProjectFileIO::Get(project).SaveCopy(wxString(target.wstring())))
+            if (!ProjectFileIO::Get(project).SaveCopy(wxString::FromUTF8(target.u8string())))
                throw std::runtime_error("The project copy could not be saved. No collection was published.");
          }, [&](const char *, const fs::path &, bool) { pulse(); });
-         context.Status(wxString(copy.wstring()));
-         if (mInteractive) wxMessageBox(_("Portable copy saved here:\n") + wxString(copy.wstring()) +
+         context.Status(wxString::FromUTF8(copy.u8string()));
+         if (mInteractive) wxMessageBox(_("Portable copy saved here:\n") + wxString::FromUTF8(copy.u8string()) +
             _("\n\nMove or back up the whole folder, including Media. Your original project is still open."),
             _("Collect Project Media"), wxOK | wxICON_INFORMATION, &ProjectWindow::Get(project));
          return true;
