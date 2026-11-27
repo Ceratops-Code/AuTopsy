@@ -233,6 +233,10 @@ class AudacityConan(ConanFile):
                     # These packages are also dependencies of the ConanCenter
                     # FFmpeg build. Keep the existing Audacity runtime and channel.
                     shared_with_ffmpeg = dependency.name in {"zlib", "libpng", "libmp3lame", "ogg", "vorbis"}
+                    # FFmpeg's Linux input uses PulseAudio 14.2, which supports
+                    # libsndfile >= 1.0.20. Reuse AuTopsy's existing 1.0.31.
+                    if self.settings.os == "Linux" and dependency.name == "libsndfile":
+                        shared_with_ffmpeg = True
                     self.requires(dependency.reference(self),
                                   force=bool(self.options.use_autopsy_ffmpeg and shared_with_ffmpeg))
 
