@@ -91,7 +91,7 @@ jobs:
     name: Windows x64 installer (unsigned)
     if: (github.event_name == 'workflow_dispatch' && inputs.build_installer) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-windows-installer'))
     needs: validate-repository
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 360
     steps:
       - name: Check out repository
