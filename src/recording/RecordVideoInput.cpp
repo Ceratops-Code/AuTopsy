@@ -29,10 +29,12 @@
 #else
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
+#include <X11/extensions/Xrandr.h>
 #endif
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 
 namespace VideoRecording {
@@ -42,6 +44,9 @@ std::string Utf8(const wxString &value) {
    const auto bytes = value.ToUTF8(); return {bytes.data(), bytes.length()};
 }
 struct DisplaySource { std::wstring id; ScreenRegion region; bool primary; };
+#ifndef _WIN32
+constexpr auto UnavailableScreenCapture = "Full-screen recording requires an available Xorg display.";
+#endif
 std::vector<DisplaySource> DisplaySources() {
    std::vector<DisplaySource> result;
 #ifdef _WIN32
@@ -61,18 +66,30 @@ std::vector<DisplaySource> DisplaySources() {
    if (previous) SetThreadDpiAwarenessContext(previous);
    if (!succeeded) throw std::runtime_error("Windows could not list recording displays.");
 #else
+   // XWayland can capture the editor's own window. Its root window does not
+   // represent the Wayland desktop, so do not offer it as a screen source.
+   wxString desktopSession, waylandDisplay;
+   wxGetEnv("XDG_SESSION_TYPE", &desktopSession);
+   wxGetEnv("WAYLAND_DISPLAY", &waylandDisplay);
+   if (desktopSession == "wayland" || (desktopSession.empty() && !waylandDisplay.empty()))
+      return result;
    auto *display = gdk_display_get_default();
-   if (!display || !GDK_IS_X11_DISPLAY(display)) return result;
-   const auto *primary = gdk_display_get_primary_monitor(display);
-   for (int index = 0; index < gdk_display_get_n_monitors(display); ++index) {
-      auto *monitor = gdk_display_get_monitor(display, index);
-      const auto output = gdk_x11_monitor_get_output(monitor);
-      if (!output) continue;
-      GdkRectangle geometry{};
-      gdk_monitor_get_geometry(monitor, &geometry);
-      const int scale = gdk_monitor_get_scale_factor(monitor);
-      result.push_back({L"X11 " + std::to_wstring(output), {geometry.x * scale, geometry.y * scale,
-         geometry.width * scale, geometry.height * scale}, monitor == primary});
+   if (!display) return result;
+#if GTK_MAJOR_VERSION >= 3
+   if (!GDK_IS_X11_DISPLAY(display)) return result;
+#endif
+   auto *xDisplay = GDK_DISPLAY_XDISPLAY(display);
+   int major{}, minor{}, count{};
+   if (!XRRQueryVersion(xDisplay, &major, &minor) || (major == 1 && minor < 5))
+      return result;
+   // XRandR reports physical pixels directly, including on a scaled desktop.
+   const std::unique_ptr<XRRMonitorInfo, decltype(&XRRFreeMonitors)> monitors{
+      XRRGetMonitors(xDisplay, DefaultRootWindow(xDisplay), True, &count), XRRFreeMonitors};
+   for (int index = 0; monitors && index < count; ++index) {
+      const auto &monitor = monitors.get()[index];
+      if (monitor.width <= 0 || monitor.height <= 0) continue;
+      result.push_back({L"X11 " + std::to_wstring(monitor.name),
+         {monitor.x, monitor.y, monitor.width, monitor.height}, bool(monitor.primary)});
    }
 #endif
    return result;
@@ -181,7 +198,13 @@ public:
             mCamera = wxString::FromUTF8(cameras.at(camera->GetSelection()));
          }
          if (selected == 1) {
-            if (display->GetSelection() == wxNOT_FOUND) throw std::runtime_error("No recording display is available.");
+            if (display->GetSelection() == wxNOT_FOUND) {
+#ifndef _WIN32
+               throw std::runtime_error(UnavailableScreenCapture);
+#else
+               throw std::runtime_error("No recording display is available.");
+#endif
+            }
             mDisplay = displays.at(display->GetSelection()).id;
          }
          mAudio = audio->GetSelection() > 0 ? wxString::FromUTF8(microphones.at(audio->GetSelection()-1)) : wxString{};
@@ -202,7 +225,11 @@ public:
 #ifndef _WIN32
          options.backend = CaptureBackend::Linux;
          auto *display = gdk_display_get_default();
+#if GTK_MAJOR_VERSION >= 3
          const bool x11 = display && GDK_IS_X11_DISPLAY(display);
+#else
+         const bool x11 = display != nullptr;
+#endif
          if (x11) options.x11Display = gdk_display_get_name(display);
 #endif
          options.projectStart = ViewInfo::Get(context.project).selectedRegion.t0();
@@ -214,11 +241,12 @@ public:
          else if (mQuality != "720p") throw std::invalid_argument("Choose 720p, 1080p or Original recording quality.");
          if (mSource == "Webcam") options.source = SourceKind::Webcam;
          else if (mSource == "Screen") {
+            const auto displays = DisplaySources();
 #ifndef _WIN32
-            if (!x11) throw std::runtime_error("This recording requires an X11 desktop session.");
+            if (displays.empty()) throw std::runtime_error(UnavailableScreenCapture);
 #endif
             options.source = SourceKind::Screen; bool found{};
-            for (const auto &display : DisplaySources()) if (display.id == mDisplay.ToStdWstring()) { options.region = display.region; found = true; break; }
+            for (const auto &display : displays) if (display.id == mDisplay.ToStdWstring()) { options.region = display.region; found = true; break; }
             if (!found) throw std::runtime_error("The selected recording display is unavailable. Choose a display again.");
          }
          else if (mSource == "AuTopsyWindow") {
@@ -229,7 +257,7 @@ public:
             if (!x11) throw std::runtime_error("This recording requires an X11 desktop session.");
             auto *window = gtk_widget_get_window(ProjectWindow::Get(context.project).GetHandle());
             if (!window) throw std::runtime_error("The selected recording window is unavailable.");
-            options.window = gdk_x11_window_get_xid(window);
+            options.window = GDK_WINDOW_XID(window);
 #endif
          }
          else if (mSource == "GeneratedTest") options.source = SourceKind::GeneratedTest;

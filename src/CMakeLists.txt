@@ -1238,9 +1238,6 @@ else()
 
    # Create the desktop file
    set(AUTOPSY_DESKTOP_ENVIRONMENT "env GDK_BACKEND=x11 UBUNTU_MENUPROXY=0")
-   if(autopsy_package_ubuntu)
-      set(AUTOPSY_DESKTOP_ENVIRONMENT "env UBUNTU_MENUPROXY=0")
-   endif()
    configure_file( audacity.desktop.in ${_INTDIR}/audacity.desktop )
 
    if(${_OPT}has_url_schemes_support)
