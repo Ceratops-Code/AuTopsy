@@ -187,6 +187,12 @@ class Profiles:
         if args.download_cache:
             profile['conf']['tools.files.download:download_cache']= args.download_cache
 
+        # The hosted Ubuntu installer worker is disposable. Let Conan's
+        # recipes own which development packages their components require.
+        if sys.platform.startswith("linux") and os.environ.get("AUTOPSY_CONAN_INSTALL_SYSTEM_PACKAGES") == "1":
+            profile['conf']['tools.system.package_manager:mode'] = "install"
+            profile['conf']['tools.system.package_manager:sudo'] = "True"
+
         with open(profile_path, 'w') as f:
             f.write('# This file is auto-generated. \n\n')
             profile.write(f)
