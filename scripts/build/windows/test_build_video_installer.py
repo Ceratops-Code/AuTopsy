@@ -447,7 +447,7 @@ class InstallerBuildTests(unittest.TestCase):
                     interrupted = False
                     revision = "a" * 40
 
-                    def run(arguments, _source, _diagnostics, *, boundary=boundary, after=after,
+                    def run(arguments, _source, _diagnostics, *, child_failure=None, boundary=boundary, after=after,
                             build=build, cache=cache, driver=driver, calls_revision=revision):
                         nonlocal calls, interrupted
                         calls += 1
@@ -545,7 +545,7 @@ class InstallerBuildTests(unittest.TestCase):
             inno.write_bytes(b"test compiler")
             commands = []
 
-            def run(arguments, _source, _diagnostics):
+            def run(arguments, _source, _diagnostics, *, child_failure=None):
                 commands.append(arguments)
                 if "--before-package" in arguments:
                     raise RuntimeError("encoded-media check failed")
@@ -575,7 +575,7 @@ class InstallerBuildTests(unittest.TestCase):
                 commands: list[list[str]] = []
                 checked = False
 
-                def run(arguments, _source, _diagnostics, commands=commands, fault=fault, build=build):
+                def run(arguments, _source, _diagnostics, *, child_failure=None, commands=commands, fault=fault, build=build):
                     nonlocal checked
                     commands.append(arguments)
                     if arguments[1:3] == ["rev-parse", "HEAD"]:
