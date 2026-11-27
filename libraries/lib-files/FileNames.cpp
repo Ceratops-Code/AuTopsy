@@ -256,11 +256,13 @@ static_assert(
 
 FilePath GetXDGTargetDir(DirTarget target)
 {
+#if !defined(AUTOPSY_UBUNTU_PACKAGE)
    static const auto oldUnixDataDir = wxFileName::GetHomeDir() + wxT("/.audacity-data");
    static const auto oldUnixDataDirExists = wxDirExists(oldUnixDataDir);
    // Compatibility: Use old user data dir folder, if it already exists
    if (oldUnixDataDirExists)
       return oldUnixDataDir;
+#endif
 
    // see if the XDG_*_HOME env var is defined. if it is, use its value.
    // if it isn't, use the default XDG-specified value.

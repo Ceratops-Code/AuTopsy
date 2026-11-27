@@ -35,3 +35,6 @@ set(DEFINES
       -DAUDACITY_VERSION=${AUDACITY_VERSION}
 )
 audacity_library( lib-files "${SOURCES}" "${LIBRARIES}" "${DEFINES}" "")
+if(autopsy_package_ubuntu)
+   target_compile_definitions(lib-files PRIVATE AUTOPSY_UBUNTU_PACKAGE=1)
+endif()

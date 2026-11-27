@@ -1264,6 +1264,9 @@ if(${_OPT}has_whats_new)
 endif()
 
 set_target_property_all( ${TARGET} RUNTIME_OUTPUT_NAME ${AUDACITY_NAME} )
+if(autopsy_package_ubuntu)
+   target_compile_definitions(${TARGET} PRIVATE AUTOPSY_UBUNTU_PACKAGE=1)
+endif()
 
 organize_source( "${TARGET_ROOT}/.." "include" "${HEADERS}" )
 organize_source( "${TARGET_ROOT}/../resources" "resources" "${RESOURCES}" )

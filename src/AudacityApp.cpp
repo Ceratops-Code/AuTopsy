@@ -1451,7 +1451,11 @@ void AudacityApp::OnInit0()
                        "widget_class \"*GtkCombo*\" style \"audacity\"");
 #endif
 
+#if defined(AUTOPSY_UBUNTU_PACKAGE)
+   wxTheApp->SetAppName(wxString::FromUTF8(AUDACITY_NAME));
+#else
    wxTheApp->SetAppName(AppName);
+#endif
    // Explicitly set since OSX will use it for the "Quit" menu item
    wxTheApp->SetAppDisplayName(AppName);
    wxTheApp->SetVendorName(AppName);

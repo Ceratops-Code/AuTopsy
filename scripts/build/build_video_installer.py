@@ -698,9 +698,14 @@ def build_ubuntu_installer(source: Path, build: Path, version: str, artifact_dir
     checks = []
     try:
         media = Path("/usr/lib/autopsy-editor")
-        for case in ("fixtures", "video-range-export", "video-export-timing", "video-vfr-export", "video-encoder-boundaries"):
+        behavior_runner = str(source / "scripts/piped-work/test_fork_features.py")
+        catalogue = run_command([sys.executable, behavior_runner, "--list-native-cases", "--native-platform", "ubuntu"],
+                                source, diagnostics, operation="Selecting installed Ubuntu media checks").strip()
+        if not catalogue:
+            raise RuntimeError("The installed Ubuntu app requires named native media checks.")
+        for case in catalogue.split(";"):
             output = run_command(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable,
-                                  str(source / "scripts/piped-work/test_fork_features.py"), "--case", case,
+                                  behavior_runner, "--case", case,
                                   "--executable", "/usr/bin/autopsy-editor", "--work-root", str(build / "_fork-tests"),
                                   "--ffmpeg", str(media / "ffmpeg"), "--ffprobe", str(media / "ffprobe")],
                                  source, diagnostics, operation=f"Installed Ubuntu media check {case}")

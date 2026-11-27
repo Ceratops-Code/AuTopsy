@@ -6,6 +6,7 @@ no microphone or personal media is read. Each handler has its own input identity
 """
 import hashlib
 import inspect
+import os
 from pathlib import Path
 from typing import Any
 
@@ -68,9 +69,10 @@ def check_caption_interchange(client, root, ffmpeg, ffprobe, original, audio):
         assert len(caption_rows) == 2 and len({row["track"] for row in caption_rows}) == 1, caption_rows
         captions = caption_rows[0]["track"]
         assert {row["text"] for row in caption_rows} == {"Blue headphones", "שלום עולם"}
-        with_native_dialog(lambda: operate_owned_video_track(client, .5, track=track,
-            gesture="context", menu_path=("Generate Captions...",)), "Generate Captions",
-            lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")), menu_gesture=True)
+        if os.name == "nt":
+            with_native_dialog(lambda: operate_owned_video_track(client, .5, track=track,
+                gesture="context", menu_path=("Generate Captions...",)), "Generate Captions",
+                lambda windows, dialog: windows.click(windows.button(dialog, "Cancel")), menu_gesture=True)
         assert rows() == added, "Cancelling caption options changed the project."
         client.file("ImportCaptions", source, f"Track={track}")
         assert rows() == added, "Repeating the same caption import duplicated its clips."

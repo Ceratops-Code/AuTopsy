@@ -54,7 +54,8 @@ from test_video_navigation import NAVIGATION_CASES
 from test_video_recording import VIDEO_RECORDING_CASES
 
 UBUNTU_NATIVE_CASES = ("fixtures", "video-range-export", "video-export-timing",
-                       "video-vfr-export", "video-encoder-boundaries")
+                       "video-vfr-export", "video-encoder-boundaries", "video-recording",
+                       "video-caption-interchange")
 
 
 def native_test_inputs(args, executable, module, display, case_api):
@@ -153,7 +154,7 @@ def native_test_inputs(args, executable, module, display, case_api):
     if args.case in RECORDING_CASES:
         from test_clip_actions import require_recording_device
         inputs["execution_scope"]["recording_device"] = require_recording_device()
-    if args.case == "video-encoder-boundaries":
+    if args.case == "video-encoder-boundaries" and executable.suffix.casefold() == ".exe":
         from test_video_export_timing import video_hardware_scope
         inputs["execution_scope"]["video_hardware"] = video_hardware_scope()
     if args.case == "display-guard":

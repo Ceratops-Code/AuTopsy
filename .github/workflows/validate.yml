@@ -138,7 +138,6 @@ jobs:
   build-ubuntu-installer:
     name: Ubuntu 24.04 x64 installer and media checks
     if: (github.event_name == 'workflow_dispatch' && inputs.build_ubuntu_installer) || (github.event_name == 'pull_request' && github.base_ref == 'main')
-    needs: validate-repository
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
