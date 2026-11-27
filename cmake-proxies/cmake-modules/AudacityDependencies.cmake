@@ -137,6 +137,13 @@ endfunction()
 # Process the list of the 3d party libraries
 include (DependenciesList)
 
+if(audacity_has_video_preview)
+   if(NOT ${_OPT}conan_enabled)
+      message(FATAL_ERROR "AuTopsy video requires the Conan FFmpeg runtime.")
+   endif()
+   list(APPEND conan_package_options "use_autopsy_ffmpeg=True")
+endif()
+
 # If conan is enabled, run conan_runner.py
 if( ${_OPT}conan_enabled )
    # Deduce the build type

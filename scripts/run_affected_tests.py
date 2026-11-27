@@ -79,7 +79,7 @@ GROUPS = (
     CheckGroup("product-branding-core", (
         "libraries/lib-strings/ApplyProductBranding.*", "libraries/lib-strings/tests/TestProductBranding.cpp"),
         "product-branding-core-test"),
-    CheckGroup("fork-installer-build", ("scripts/build/windows/*.py", "win/Inno_Setup_Wizard/*"),
+    CheckGroup("fork-installer-build", ("scripts/build/build_video_installer.py", "scripts/build/windows/*.py", "win/Inno_Setup_Wizard/*"),
         host_platform="win32"),
     CheckGroup("fork-display-policy", (
         "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
@@ -153,7 +153,7 @@ NATIVE_INPUTS = (
     "libraries/lib-project-history/*", "libraries/lib-project-file-io/*", "libraries/lib-viewport/*",
     "CMakeLists.txt", "CMakePresets.json",
 )
-OWNED_INPUTS = ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*", "resources/autopsy-release.json", "src/video/*", "src/media/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/windows/*")
+OWNED_INPUTS = ("src/update/ChooseProductUpdate.h", "src/update/CheckProductUpdates.*", "resources/autopsy-release.json", "src/video/*", "src/media/*", "src/clip-groups/*", "src/track-groups/*", "src/recording/*", "scripts/*.py", "scripts/build/build_video_installer.py", "scripts/build/windows/*")
 DOCUMENT_SUFFIXES = {".md", ".rst"}
 
 # Native names are adapter contracts checked against CTest's structured catalogue.

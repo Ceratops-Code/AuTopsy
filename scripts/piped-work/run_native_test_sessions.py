@@ -13,6 +13,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -52,6 +53,9 @@ from test_video_generators import GENERATOR_CASES
 from test_video_navigation import NAVIGATION_CASES
 from test_video_recording import VIDEO_RECORDING_CASES
 
+UBUNTU_NATIVE_CASES = ("fixtures", "video-range-export", "video-export-timing",
+                       "video-vfr-export", "video-encoder-boundaries")
+
 
 def native_test_inputs(args, executable, module, display, case_api):
     """Read affecting files and scope; Git HEAD and unrelated docs are not inputs.
@@ -78,7 +82,9 @@ def native_test_inputs(args, executable, module, display, case_api):
             for operation in (read_audio_project_state, select_audio_project_tracks,
                               executable_version, startup_window_messages, run_process)
         },
-        "payload_dependencies": {p.name: sha(p) for p in sorted(executable.parent.glob("*.dll"))},
+        "payload_dependencies": {p.name: sha(p) for p in sorted(
+            executable.parent.glob("*.dll") if sys.platform == "win32" else module.parent.parent.glob("*.so.*")
+        )},
         "execution_scope": {
             "platform": platform.platform(), "machine": platform.machine(),
             "python": sys.version, "python_executable_sha256": sha(Path(sys.executable)),
@@ -647,7 +653,9 @@ def prepare_case_media(args, root):
 
 def execute_case(args, root, executable, module, display, kernel, pipe, case_api, run_id, identities, shared=None):
     """Run one fresh-process scenario under the caller's existing profile mutex."""
-    require_unlocked_desktop()
+    windows = sys.platform == "win32"
+    if windows:
+        require_unlocked_desktop()
     marker = root / "_owner"
     signature = "AuTopsy behavior tests 1"
     shared_cache = root.parent / "_preview_media"
@@ -678,7 +686,7 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
     prepare_case_media(args, root)
     version_numbers = executable_version(executable)
     version = ".".join(str(x) for x in version_numbers)
-    profile = executable.parent / "Portable Settings"
+    profile = executable.parent / "Portable Settings" if windows else root / "_gui_temp" / executable.name
     profile_owner = profile / "_autopsy_tests"
     left, top, right, bottom = display["work"]
     if shared is None or shared.app is None:
@@ -690,14 +698,14 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
                     "An unrelated Portable Settings profile exists: " + str(profile)
                 )
             shutil.rmtree(profile)
-        profile.mkdir()
+        profile.mkdir(parents=not windows)
         profile_owner.write_text(str(args.work_root.resolve()))
         if args.case == "preview" and shared_cache.is_dir():
             shutil.copytree(shared_cache, profile / "_video-previews")
         audio = root / "_audio_temp"
         audio.mkdir()
         gui = root / "_gui_temp"
-        gui.mkdir()
+        gui.mkdir(exist_ok=not windows)
         stamp = datetime.fromtimestamp(module.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: DTZ006 -- matches the upstream module preference in local time
         left, top, right, bottom = display["work"]
         width, height = min(1100, right - left - 32), min(650, bottom - top - 32)
@@ -730,6 +738,8 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
             if args.reject_display is not True
             else "missing-test-display",
         )
+        if not windows:
+            environment.update(dict.fromkeys(("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"), str(gui)))
         if args.case == "product-updates":
             environment.pop("AUTOPSY_TEST_UPDATES_JSON", None)
             if os.environ.get("AUTOPSY_TEST_UPDATES_SOURCE", "fixture") == "fixture":
@@ -749,8 +759,9 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
     else:
         environment = shared.environment
         assert environment is not None
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    user = ctypes.WinDLL("user32", use_last_error=True) if windows else None
+    if user is not None:
+        user.WaitForInputIdle.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     with (shared.output(root) if shared else (root / "_app.log").open("w")) as log:
         if shared is not None and shared.app is not None:
             app, debugger = shared.app, shared.debugger
@@ -789,18 +800,19 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
                     "display-rejection: PASS (missing screen stopped before the first window)"
                 )
                 return
-            startup = user.WaitForInputIdle(int(app._handle), 30000)  # type: ignore[attr-defined]  # CPython's Windows process handle.
+            startup = 0 if user is None else user.WaitForInputIdle(int(app._handle), 30000)  # type: ignore[attr-defined]  # CPython's Windows process handle.
             if startup != 0:
                 raise RuntimeError(
                     f"Owned app startup status {startup}; PID {app.pid}; "
                     + startup_window_messages(app.pid)
                 )
             deadline = time.monotonic() + 30
-            while not kernel.WaitNamedPipeW(pipe, 100):
+            while not (kernel.WaitNamedPipeW(pipe, 100) if windows else pipe.is_fifo()):
                 if app.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError(
                         f"The owned test app did not expose its scripting pipe; exit={app.poll()}; "
-                        + startup_window_messages(app.pid)
+                        + (startup_window_messages(app.pid) if windows else
+                           (root / "_app.log").read_text(encoding="utf-8", errors="replace")[-4000:])
                     )
                 time.sleep(0.05)
             if app.poll() is not None:
@@ -809,14 +821,14 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
             previous_display = os.environ.get("AUTOPSY_TEST_DISPLAY")
             os.environ["AUTOPSY_TEST_DISPLAY"] = display["device"]
             try:
-                windows = assert_owned_test_display(app.pid)
+                startup_windows = assert_owned_test_display(app.pid)
             finally:
                 if previous_display is None:
                     os.environ.pop("AUTOPSY_TEST_DISPLAY", None)
                 else:
                     os.environ["AUTOPSY_TEST_DISPLAY"] = previous_display
             (root / "_display.json").write_text(
-                json.dumps({"display": display, "startup_windows": windows}, indent=2)
+                json.dumps({"display": display, "startup_windows": startup_windows}, indent=2)
             )
             worker_command = [
                 sys.executable,
@@ -874,6 +886,9 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
                     (root / "_errors.log").write_text(errors, encoding="utf-8")
             if args.case in RECORDING_CASES[1:]:
                 from test_clip_actions import run_recording_save_faults
+                if user is None:
+                    raise RuntimeError("The MME recording recovery test requires Windows.")
+                window_api = user
 
                 def restart_recording_app(fault_enabled):
                     # Only stopped private test processes reach this boundary.
@@ -886,7 +901,7 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
                     restarted = subprocess.Popen([str(executable)], cwd=executable.parent,
                         env=next_environment, stdout=log, stderr=subprocess.STDOUT)
                     try:
-                        if user.WaitForInputIdle(int(restarted._handle), 30000):  # type: ignore[attr-defined]
+                        if window_api.WaitForInputIdle(int(restarted._handle), 30000):  # type: ignore[attr-defined]
                             raise RuntimeError("Reopened private recording app did not become idle.")
                         deadline = time.monotonic() + 30
                         while not kernel.WaitNamedPipeW(pipe, 100):
@@ -924,7 +939,8 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
                     status = app.wait(timeout=20)
             except subprocess.TimeoutExpired as error:
                 raise RuntimeError(
-                    "Owned app did not exit; " + startup_window_messages(app.pid)
+                    "Owned app did not exit; " + (startup_window_messages(app.pid) if windows else
+                        (root / "_app.log").read_text(encoding="utf-8", errors="replace")[-4000:])
                 ) from error
             if status:
                 if debugger:
@@ -949,7 +965,8 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
                 app_output,
                 re.MULTILINE,
             )
-            assert shows, "No pre-show placement observations were recorded."
+            if windows:
+                assert shows, "No pre-show placement observations were recorded."
             for _, x, y, w, h in shows:
                 x, y, w, h = map(int, (x, y, w, h))
                 assert left <= x and top <= y and x + w <= right and y + h <= bottom, (
@@ -1061,32 +1078,50 @@ def run_case_batch(args, work_root, case_api, read_case_inputs, execute_case_wor
 
 
 def run_requested_cases(args, root, case_api):
-    """Resolve the private Windows boundary and apply the case's receipt owner."""
-    if os.name != "nt":
-        raise RuntimeError("The scripting integration cases require Windows.")
-    contain_native_children()
+    """Resolve the installed application's process boundary and check owner."""
+    linux_host = sys.platform.startswith("linux")
     executable = args.executable.resolve(strict=True)
-    module = executable.parent / "modules/mod-script-pipe.dll"
-    require_test_display_guard(module)
-    display = select_test_display(connected_test_displays())
+    kernel, mutex, pipes = None, None, []
+    pipe: str | Path
+    display: dict
+    if linux_host:
+        from pipeclient import READ_NAME, WRITE_NAME
+
+        if (os.environ.get("GITHUB_ACTIONS") != "true" or not os.environ.get("XAUTHORITY")
+                or not re.fullmatch(r":\d+(\.\d+)?", os.environ.get("DISPLAY", ""))):
+            raise RuntimeError("Run the Ubuntu integration checks in the isolated GitHub Xvfb session.")
+        if args.case not in UBUNTU_NATIVE_CASES or args.cases or args.interrupt_cache or args.reject_display:
+            raise RuntimeError("Choose a supported Ubuntu media check.")
+        module = (Path(args.ffmpeg).parent / "modules/mod-script-pipe.so").resolve(strict=True)
+        pipes = [Path(WRITE_NAME), Path(READ_NAME)]
+        if any(os.path.lexists(path) for path in pipes):
+            raise RuntimeError("A scripting pipe already exists for the runner account.")
+        display = {"device": os.environ["DISPLAY"], "work": [0, 0, 1280, 800]}
+        pipe = pipes[0]
+    elif os.name != "nt":
+        raise RuntimeError("Run the scripting integration cases on Windows or Ubuntu.")
+    else:
+        contain_native_children()
+        module = executable.parent / "modules/mod-script-pipe.dll"
+        require_test_display_guard(module)
+        display = select_test_display(connected_test_displays())
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.WaitNamedPipeW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+        kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        kernel.CreateMutexW.restype = ctypes.c_void_p
+        # All native Windows cases share its pipe and portable profile.
+        mutex = kernel.CreateMutexW(None, True, "Local\\AuTopsyBehaviorTests")
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        if not mutex or ctypes.get_last_error() == 183:
+            if mutex:
+                kernel.CloseHandle(mutex)
+            raise RuntimeError("Another AuTopsy behavior-test runner is active.")
+        pipe = r"\\.\pipe\AuTopsyTestToSrvPipe"
     print("GUI test display: " + display["device"], flush=True)
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.WaitNamedPipeW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
-    kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
-    kernel.CreateMutexW.restype = ctypes.c_void_p
-    # All cases share the native app's pipe/profile boundary; refuse concurrent
-    # callers before touching either, including separate manual CTest runs.
-    mutex = kernel.CreateMutexW(None, True, "Local\\AuTopsyBehaviorTests")
-    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-    if not mutex or ctypes.get_last_error() == 183:
-        if mutex:
-            kernel.CloseHandle(mutex)
-        raise RuntimeError("Another AuTopsy behavior-test runner is active.")
     previous_display = os.environ.get("AUTOPSY_TEST_DISPLAY")
     os.environ["AUTOPSY_TEST_DISPLAY"] = display["device"]
     try:
-        pipe = r"\\.\pipe\AuTopsyTestToSrvPipe"
-        if kernel.WaitNamedPipeW(pipe, 1) or ctypes.get_last_error() not in (2,):
+        if kernel is not None and (kernel.WaitNamedPipeW(pipe, 1) or ctypes.get_last_error() not in (2,)):
             raise RuntimeError("An AuTopsy scripting session is already active.")
         root.parent.mkdir(parents=True, exist_ok=True)
         args.executable = executable
@@ -1109,7 +1144,15 @@ def run_requested_cases(args, root, case_api):
             return 0
         return run_case_batch(args, root.parent, case_api, read_inputs, execute)
     finally:
-        kernel.CloseHandle(mutex)
+        if kernel is not None:
+            kernel.CloseHandle(mutex)
+        for path in pipes:
+            try:
+                info = path.lstat()
+                if stat.S_ISFIFO(info.st_mode) and info.st_uid == Path("/proc/self").stat().st_uid:
+                    path.unlink()
+            except FileNotFoundError:
+                continue
         if previous_display is None:
             os.environ.pop("AUTOPSY_TEST_DISPLAY", None)
         else:

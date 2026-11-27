@@ -48,26 +48,47 @@ private:
          );
       }
 
-      message += wxString::FormatV(wxString::FromUTF8(fmt), vl);
+      // FFmpeg's variadic arguments use the narrow C printf conventions.
+      char buffer[1024];
+      va_list args;
+      va_copy(args, vl);
+      const int length = std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+      va_end(args);
+      if (length < 0)
+         return;
+
+      if (static_cast<size_t>(length) < sizeof(buffer))
+         message += wxString::FromUTF8(buffer, length);
+      else
+      {
+         std::string fullMessage(static_cast<size_t>(length) + 1, '\0');
+         va_copy(args, vl);
+         const int result = std::vsnprintf(
+            fullMessage.data(), fullMessage.size(), fmt, args);
+         va_end(args);
+         if (result != length)
+            return;
+         message += wxString::FromUTF8(fullMessage.data(), length);
+      }
 
       wxString cpt;
       switch (level)
       {
       case 0:
          cpt = wxT("Error");
-         wxLogError(message);
+         wxLogError(wxT("%s"), message);
          break;
       case 1:
          cpt = wxT("Info");
-         wxLogInfo(message);
+         wxLogInfo(wxT("%s"), message);
          break;
       case 2:
          cpt = wxT("Debug");
-         wxLogInfo(message);
+         wxLogInfo(wxT("%s"), message);
          break;
       default:
          cpt = wxT("Log");
-         wxLogInfo(message);
+         wxLogInfo(wxT("%s"), message);
          break;
       }
 

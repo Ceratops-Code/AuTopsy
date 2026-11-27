@@ -28,7 +28,7 @@ def add_remote(name:str, url:str) -> None:
     subprocess.check_call([get_conan(), 'remote', 'add', name, url], stdin=subprocess.DEVNULL)
 
 
-def validate_remotes():
+def validate_remotes(use_autopsy_ffmpeg=False):
     old_remotes = 'audacity', 'conan-center-cache', 'audacity-recipes', 'audacity-binaries'
 
     for remote in old_remotes:
@@ -39,3 +39,5 @@ def validate_remotes():
 
     add_remote('audacity-recipes-conan2', 'https://artifactory.audacityteam.org/artifactory/api/conan/audacity-recipes-conan2')
     add_remote('audacity-binaries-conan2', 'https://artifactory.audacityteam.org/artifactory/api/conan/audacity-binaries-conan2')
+    if use_autopsy_ffmpeg:
+        add_remote('conancenter', 'https://center2.conan.io')

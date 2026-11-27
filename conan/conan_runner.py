@@ -16,7 +16,7 @@ from helpers.remotes import validate_remotes
 from helpers.profiles import Profiles
 
 required_conan_version = (2, 0, 0)
-runner_version = 2
+runner_version = 3
 
 
 def get_conanfile_path():
@@ -52,10 +52,8 @@ def get_conan_venv(build_dir):
 
 
 def generate_args_string(args):
-    if args.options is None:
-        return ''
-
-    return ';'.join(args.options) + ';' + get_conanfile_hash() + ';' + str(runner_version)
+    build_types = tuple(dict.fromkeys(args.build_types or ('Release',)))
+    return ';'.join((*build_types, *(args.options or ()), get_conanfile_hash(), str(runner_version)))
 
 
 def migrate(args):
@@ -91,7 +89,8 @@ if __name__ == '__main__':
     conan_version = validate_conan(required_conan_version)
     with ConanEnv():
         print(f'Using Conan version {".".join(map(str, conan_version))} ({get_conan()})', flush=True)
-        validate_remotes()
+        use_autopsy_ffmpeg = 'use_autopsy_ffmpeg=True' in (args.options or ())
+        validate_remotes(use_autopsy_ffmpeg)
         safe_rm_tree(os.path.join(directories.build_dir, 'generators'))
 
         profiles = Profiles(args)
@@ -105,6 +104,13 @@ if __name__ == '__main__':
                 '--profile:build', profiles.build_profile_path,
                 '--profile:host', host_profile,
             ]
+            if use_autopsy_ffmpeg:
+                conan_options.extend(['--remote', 'conancenter'])
+                if args.compiler == 'MSVC' and build_type != 'Debug':
+                    # ConanCenter ships these codecs for Release, which uses
+                    # the same MSVC runtime as RelWithDebInfo.
+                    for codec in ('libx264', 'libx265', 'libsvtav1', 'libvpx'):
+                        conan_options.extend(['--settings:host', f'{codec}/*:build_type=Release'])
 
             subprocess.check_call(conan_options, stdin=subprocess.DEVNULL)
 

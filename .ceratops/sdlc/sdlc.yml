@@ -226,7 +226,7 @@ deliverables:
       # CMake builds the inherited audio engine and owned extensions together.
       # Keep product/packaging inputs explicit; repository metadata is not payload.
       root-dir: src
-      additional-source-files: &windows-product-inputs
+      additional-source-files: &installer-product-inputs
         - CMakeLists.txt
         - CMakePresets.json
         - LICENSE.txt
@@ -246,7 +246,8 @@ deliverables:
         - resources/**
         - tests/journals/**
         - win/**
-        - scripts/build/windows/build_video_installer.py
+        - linux/**
+        - scripts/build/build_video_installer.py
         - scripts/build/windows/PfxSign.cmake
         - scripts/build/windows/PfxSign.ps1
         - scripts/pyproject.toml
@@ -277,7 +278,7 @@ deliverables:
                 - scripts
                 - --locked
                 - python
-                - scripts/build/windows/build_video_installer.py
+                - scripts/build/build_video_installer.py
                 - --version
                 - '{version}'
                 - --artifact-directory
@@ -295,17 +296,39 @@ deliverables:
                 - scripts
                 - --locked
                 - python
-                - scripts/build/windows/build_video_installer.py
+                - scripts/build/build_video_installer.py
                 - --publish-installer
                 - --accepted-artifacts
                 - '{artifacts}'
+    ubuntu-installer:
+      version: {mode: receipt-only}
+      root-dir: src
+      additional-source-files: *installer-product-inputs
+      build-after: []
+      artifact:
+        type: ubuntu-installer
+        output-directory: .
+        filename-pattern: autopsy-editor_*_amd64.deb
+      actions:
+        pre-build-checks:
+          check-groups:
+            tests:
+              no-op: The Ubuntu builder installs its candidate in GitHub Actions and runs the native audio and video checks before accepting the package.
+        build:
+          parameters: [version, artifact_directory]
+          result-schema: ceratops-builder-output
+          requires:
+            tools: [uv, cmake, ctest]
+          steps:
+            - run: [uv, run, --project, scripts, --locked, python, scripts/build/build_video_installer.py,
+                    --version, '{version}', --artifact-directory, '{artifact_directory}', --receipt-file, '{build_receipt}']
   apps:
     autopsy:
       version:
         file: resources/autopsy-release.json
         field: version
       root-dir: src
-      additional-source-files: *windows-product-inputs
+      additional-source-files: *installer-product-inputs
       manifest: win/Inno_Setup_Wizard/audacity.iss.in
       build-after:
         - deliverables.packages.windows-installer
@@ -326,5 +349,5 @@ deliverables:
           requires:
             tools: [uv]
           steps:
-            - run: [uv, run, --project, scripts, --locked, python, scripts/build/windows/build_video_installer.py,
+            - run: [uv, run, --project, scripts, --locked, python, scripts/build/build_video_installer.py,
                     --install-accepted, --accepted-artifacts, '{artifacts}']

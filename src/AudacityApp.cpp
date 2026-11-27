@@ -2019,9 +2019,19 @@ bool AudacityApp::CreateSingleInstanceChecker(const wxString &dir)
       auto root = wxFileName::DirName(testRoot); root.MakeAbsolute();
       wxFFile marker(settings.GetPathWithSep() + "_autopsy_tests", "rb");
       wxString owner;
-      if (!settings.SameAs(portable) || !marker.IsOpened() || !marker.ReadAll(&owner) || owner != testRoot ||
-          !temporary.GetPathWithSep().Lower().StartsWith(root.GetPathWithSep().Lower())) {
-         std::fprintf(stderr, "AuTopsy behavior tests require their owned portable profile and private audio directory.\n");
+      bool ownedSettings = settings.SameAs(portable);
+      auto temporaryPath = temporary.GetPathWithSep();
+      auto rootPath = root.GetPathWithSep();
+#if defined(__WXGTK__)
+      // Installed tests use a marked XDG data directory under the private case root.
+      ownedSettings = ownedSettings || settings.GetPathWithSep().StartsWith(rootPath);
+#else
+      temporaryPath.MakeLower();
+      rootPath.MakeLower();
+#endif
+      if (!ownedSettings || !marker.IsOpened() || !marker.ReadAll(&owner) || owner != testRoot ||
+          !temporaryPath.StartsWith(rootPath)) {
+         std::fprintf(stderr, "AuTopsy behavior tests require their owned profile and private audio directory.\n");
          return false;
       }
       name = wxString::Format("autopsy-behavior-tests-lock-%s", wxGetUserId());

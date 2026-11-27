@@ -23,7 +23,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    if(DEFINED ENV{AUTOPSY_VIDEO_BUILD_DIR} AND DEFINED ENV{AUTOPSY_VIDEO_TEST_NAME})
       add_test(NAME fork-native-media-session COMMAND uv run --project
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked
-         python "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows/build_video_installer.py"
+         python "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/build_video_installer.py"
          --test-existing-build --build-dir "$ENV{AUTOPSY_VIDEO_BUILD_DIR}"
          --test-name "$ENV{AUTOPSY_VIDEO_TEST_NAME}")
       set_tests_properties(fork-native-media-session PROPERTIES RUN_SERIAL TRUE TIMEOUT 660)
@@ -114,43 +114,28 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
    return()
 endif()
 
-option(audacity_has_video_preview "Build video preview and clip editing" OFF)
 if(NOT audacity_has_video_preview)
    return()
 endif()
 
-set(audacity_video_mpv_sdk "" CACHE PATH "Extracted libmpv development package")
-find_path(audacity_video_mpv_include mpv/client.h
-   HINTS "${audacity_video_mpv_sdk}/include")
-find_file(audacity_video_mpv_library libmpv-2.dll
-   HINTS "${audacity_video_mpv_sdk}" NO_DEFAULT_PATH)
-if(NOT audacity_video_mpv_include OR NOT audacity_video_mpv_library)
-   message(FATAL_ERROR
-      "Video preview needs an extracted libmpv SDK. Set audacity_video_mpv_sdk "
-      "to the directory containing include/mpv/client.h and libmpv-2.dll, "
-      "or set audacity_has_video_preview=OFF.")
+if(WIN32)
+   set(audacity_video_mpv_sdk "" CACHE PATH "Extracted libmpv development package")
+   find_path(audacity_video_mpv_include mpv/client.h HINTS "${audacity_video_mpv_sdk}/include")
+   find_file(audacity_video_mpv_library libmpv-2.dll HINTS "${audacity_video_mpv_sdk}" NO_DEFAULT_PATH)
+   if(NOT audacity_video_mpv_include OR NOT audacity_video_mpv_library)
+      message(FATAL_ERROR "Set audacity_video_mpv_sdk to the extracted libmpv Windows SDK.")
+   endif()
+else()
+   find_path(audacity_video_mpv_include NAMES mpv/render.h REQUIRED)
+   find_package(PkgConfig REQUIRED)
+   pkg_check_modules(AUTOPSY_GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
+   find_package(CURL 8.4 REQUIRED)
 endif()
 
-# The normal Audacity FFmpeg importer decodes the soundtrack directly into
-# project audio. Keep its compatible shared runtime beside the executable.
-set(audacity_video_ffmpeg_runtime "" CACHE PATH "FFmpeg 8.1 shared runtime directory")
 if(audacity_use_ffmpeg STREQUAL "off")
    message(FATAL_ERROR "Video soundtrack import requires audacity_use_ffmpeg=loaded.")
 endif()
-set(_video_ffmpeg_libraries)
-foreach(_video_ffmpeg_name avformat-62.dll avcodec-62.dll avutil-60.dll
-   swresample-6.dll swscale-9.dll avfilter-11.dll avdevice-62.dll ffmpeg.exe ffprobe.exe)
-   set(_video_ffmpeg_file "${audacity_video_ffmpeg_runtime}/${_video_ffmpeg_name}")
-   if(NOT EXISTS "${_video_ffmpeg_file}")
-      message(FATAL_ERROR
-         "Video soundtrack import needs FFmpeg 8.1 shared libraries. Set "
-         "audacity_video_ffmpeg_runtime to their directory (missing ${_video_ffmpeg_name}).")
-   endif()
-   list(APPEND _video_ffmpeg_libraries "${_video_ffmpeg_file}")
-endforeach()
-if(NOT EXISTS "${audacity_video_ffmpeg_runtime}/LICENSE.txt")
-   message(FATAL_ERROR "Keep the FFmpeg distribution LICENSE.txt with its shared runtime.")
-endif()
+find_package(ffmpeg CONFIG REQUIRED)
 
 target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVideoClips.cpp JoinVideoClips.h
    EditCaptionCues.cpp EditCaptionCues.h GenerateVideoCaptions.cpp GenerateVideoCaptions.h
@@ -177,7 +162,17 @@ target_sources(Audacity PRIVATE EditVideoContent.cpp EditVideoContent.h JoinVide
    ../clip-groups/PlanRippleDeletion.h
    ../clip-groups/EditClipMarkers.cpp ../clip-groups/EditClipMarkers.h)
 target_include_directories(Audacity PRIVATE "${audacity_video_mpv_include}")
-target_link_libraries(Audacity PRIVATE bcrypt winhttp)
+target_link_libraries(Audacity PRIVATE lib-crypto ffmpeg::avformat ffmpeg::avcodec ffmpeg::avfilter ffmpeg::avutil)
+if(WIN32)
+   target_link_libraries(Audacity PRIVATE winhttp)
+   set(_media_tools "$<TARGET_FILE_DIR:Audacity>")
+else()
+   target_compile_definitions(Audacity PRIVATE AUTOPSY_MEDIA_RUNTIME_DIRECTORY="${_PKGLIB}")
+   target_link_libraries(Audacity PRIVATE PkgConfig::AUTOPSY_GTK3 CURL::libcurl ${CMAKE_DL_LIBS})
+   set(_media_tools "${_DEST}/${_PKGLIB}")
+   install(PROGRAMS "${_media_tools}/ffmpeg" "${_media_tools}/ffprobe" DESTINATION "${_PKGLIB}")
+   install(FILES "${_media_tools}/FFmpeg-LICENSE.txt" DESTINATION "${_DATADIR}/doc/${AUDACITY_NAME}")
+endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/BuildSpeechEngine.cmake")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/autopsy-release.json" _autopsy_release_metadata)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -218,17 +213,14 @@ get_target_property(_video_executable_dir Audacity RUNTIME_OUTPUT_DIRECTORY)
 if(CMAKE_CONFIGURATION_TYPES)
    string(APPEND _video_executable_dir "/$<CONFIG>")
 endif()
+if(WIN32)
 add_custom_target(copy-video-player
    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_video_executable_dir}"
    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${audacity_video_mpv_library}" "${_video_executable_dir}/libmpv-2.dll"
-   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      ${_video_ffmpeg_libraries} "${_video_executable_dir}"
-   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      "${audacity_video_ffmpeg_runtime}/LICENSE.txt"
-      "${_video_executable_dir}/FFmpeg-LICENSE.txt"
    VERBATIM)
 add_dependencies(Audacity copy-video-player)
+endif()
 
 add_unit_test(
    NAME video-playback
@@ -265,11 +257,13 @@ if(TARGET video-playback-test)
        add_test(NAME fork-worker-lifecycle COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"
           --case worker-lifecycle --work-root "${CMAKE_BINARY_DIR}/_fork-tests")
+       if(CMAKE_HOST_WIN32)
        add_test(NAME fork-display-rejection COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"
           --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
           --case branding --reject-display)
        set_tests_properties(fork-display-rejection PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
+       endif()
        # The behavior runner owns case identities; adding a test must not
        # require changing the application's CMake source and rebuilding it.
        execute_process(COMMAND "${Python3_EXECUTABLE}"
@@ -286,11 +280,13 @@ if(TARGET video-playback-test)
                --executable "$<TARGET_FILE:Audacity>"
                --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
                --case "${_case}"
-               --ffmpeg "${audacity_video_ffmpeg_runtime}/ffmpeg.exe"
-               --ffprobe "${audacity_video_ffmpeg_runtime}/ffprobe.exe")
+               --ffmpeg "${_media_tools}/ffmpeg${CMAKE_EXECUTABLE_SUFFIX}"
+               --ffprobe "${_media_tools}/ffprobe${CMAKE_EXECUTABLE_SUFFIX}")
          set_tests_properties(fork-${_case} PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
       endforeach()
-      set_tests_properties(fork-preview-soak PROPERTIES TIMEOUT 360)
-      set_tests_properties(fork-project-compatibility PROPERTIES TIMEOUT 600)
+      if(CMAKE_HOST_WIN32)
+         set_tests_properties(fork-preview-soak PROPERTIES TIMEOUT 360)
+         set_tests_properties(fork-project-compatibility PROPERTIES TIMEOUT 600)
+      endif()
    endif()
 endif()

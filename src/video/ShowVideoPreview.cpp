@@ -72,7 +72,9 @@
 #include <wx/textdlg.h>
 #include <wx/utils.h>
 #include <wx/weakref.h>
+#ifdef _WIN32
 #include <wx/msw/wrapwin.h>
+#endif
 
 #include <cstdint>
 #include <cstdio>

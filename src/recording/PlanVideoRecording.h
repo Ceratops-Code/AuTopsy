@@ -14,10 +14,13 @@ struct CaptureDevice {
    { return kind == DeviceKind::Video || kind == DeviceKind::Unknown; }
 };
 enum class SourceKind { Webcam, Screen, Window, GeneratedTest };
+enum class CaptureBackend { DirectShow, Linux };
 struct ScreenRegion { int left{}, top{}, width{}, height{}; };
 struct RecordingOptions {
    SourceKind source{SourceKind::Webcam};
+   CaptureBackend backend{CaptureBackend::DirectShow};
    std::string camera, audio;
+   std::string x11Display;
    ScreenRegion region;
    uint64_t window{};
    double frameRate{30}, duration{}, projectStart{};

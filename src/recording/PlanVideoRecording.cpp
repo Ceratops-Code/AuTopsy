@@ -5,6 +5,7 @@
 #include <locale>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 
 namespace VideoRecording {
@@ -87,6 +88,16 @@ std::vector<std::string> PrepareVideoRecordingArguments(const RecordingOptions &
    int audioInput{};
    switch (o.source) {
    case SourceKind::Webcam: {
+      if (o.backend == CaptureBackend::Linux) {
+         RequireText(o.camera, true);
+         constexpr auto prefix = std::string_view{"/dev/video"};
+         if (o.camera.rfind(prefix, 0) != 0 || o.camera.size() == prefix.size() ||
+             o.camera.find_first_not_of("0123456789", prefix.size()) != std::string::npos)
+            throw std::invalid_argument("Choose a Video4Linux camera device.");
+         add({"-thread_queue_size", "64", "-use_wallclock_as_timestamps", "1", "-f", "v4l2",
+            "-framerate", Number(o.frameRate), "-i", o.camera});
+         break;
+      }
       // One DirectShow input shares its hardware clock with the microphone.
       auto input = "video=" + DeviceToken(o.camera);
       if (audio) input += ":audio=" + DeviceToken(o.audio);
@@ -95,20 +106,31 @@ std::vector<std::string> PrepareVideoRecordingArguments(const RecordingOptions &
    }
    case SourceKind::Screen:
    case SourceKind::Window:
-      add({"-thread_queue_size", "64", "-use_wallclock_as_timestamps", "1", "-f", "gdigrab",
+      if (o.backend == CaptureBackend::Linux) RequireText(o.x11Display, true);
+      add({"-thread_queue_size", "64", "-use_wallclock_as_timestamps", "1", "-f",
+         o.backend == CaptureBackend::Linux ? "x11grab" : "gdigrab",
          "-framerate", Number(o.frameRate), "-draw_mouse", o.includePointer ? "1" : "0"});
       if (o.source == SourceKind::Screen) {
          if (o.region.width < 2 || o.region.height < 2 || o.region.width > 32768 || o.region.height > 32768 ||
              std::abs(int64_t(o.region.left)) > 131072 || std::abs(int64_t(o.region.top)) > 131072)
             throw std::invalid_argument("The selected display has no usable recording rectangle.");
-         add({"-offset_x", std::to_string(o.region.left), "-offset_y", std::to_string(o.region.top),
-            "-video_size", std::to_string(o.region.width)+"x"+std::to_string(o.region.height), "-i", "desktop"});
+         const auto size = std::to_string(o.region.width) + "x" + std::to_string(o.region.height);
+         if (o.backend == CaptureBackend::Linux) {
+            if (o.region.left < 0 || o.region.top < 0)
+               throw std::invalid_argument("The selected X11 recording rectangle is outside the desktop.");
+            add({"-video_size", size, "-i", o.x11Display + "+" +
+               std::to_string(o.region.left) + "," + std::to_string(o.region.top)});
+         }
+         else add({"-offset_x", std::to_string(o.region.left), "-offset_y", std::to_string(o.region.top),
+            "-video_size", size, "-i", "desktop"});
       }
       else {
          if (!o.window) throw std::invalid_argument("The selected recording window is unavailable.");
-         add({"-i", "hwnd=" + std::to_string(o.window)});
+         if (o.backend == CaptureBackend::Linux)
+            add({"-window_id", std::to_string(o.window), "-i", o.x11Display});
+         else add({"-i", "hwnd=" + std::to_string(o.window)});
       }
-      if (audio) {
+      if (audio && o.backend == CaptureBackend::DirectShow) {
          audioInput = 1;
          add({"-thread_queue_size", "64", "-use_wallclock_as_timestamps", "1", "-isync", "0",
             "-f", "dshow", "-i", "audio=" + DeviceToken(o.audio)});
@@ -122,6 +144,11 @@ std::vector<std::string> PrepareVideoRecordingArguments(const RecordingOptions &
       if (audio) add({"-re", "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000"});
       break;
    default: throw std::invalid_argument("Choose a supported video recording source.");
+   }
+   if (audio && o.backend == CaptureBackend::Linux && o.source != SourceKind::GeneratedTest) {
+      audioInput = 1;
+      add({"-thread_queue_size", "64", "-use_wallclock_as_timestamps", "1", "-isync", "0",
+         "-f", "pulse", "-i", o.audio});
    }
    add({"-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
       "-pix_fmt", "yuv420p", "-r", Number(o.frameRate), "-g", std::to_string(int(std::ceil(o.frameRate))),

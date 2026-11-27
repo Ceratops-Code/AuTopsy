@@ -3,6 +3,7 @@ from conan import ConanFile
 from conan.tools.cmake import cmake_layout
 from conan.tools.files import copy
 import os
+import shutil
 import subprocess
 
 required_conan_version = ">=2.0.0"
@@ -175,8 +176,10 @@ class CurlDependency(AudacityDependency):
 class AudacityConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     generators = "CMakeDeps"
-    options = { "use_asio": [True, False], "use_jack": [True, False], "lib_dir": [None, "ANY"]}
-    default_options = { "use_asio": True, "use_jack": False, "lib_dir": None }
+    options = { "use_asio": [True, False], "use_jack": [True, False], "lib_dir": [None, "ANY"],
+                "use_autopsy_ffmpeg": [True, False] }
+    default_options = { "use_asio": True, "use_jack": False, "lib_dir": None,
+                        "use_autopsy_ffmpeg": False }
 
     # List of Audacity dependencies
     _dependencies = [
@@ -220,12 +223,18 @@ class AudacityConan(ConanFile):
     default_options.update({f"use_{dependency.name}": dependency.default_enabled for dependency in _dependencies})
 
     def requirements(self):
+        if self.options.use_autopsy_ffmpeg:
+            self.requires("ffmpeg/9.0.2")
         for dependency in self._dependencies:
             if getattr(self.options, f"use_{dependency.name}"):
                 if dependency.override:
                     self.requires(dependency.reference(self), override=True)
                 else:
-                    self.requires(dependency.reference(self))
+                    # These packages are also dependencies of the ConanCenter
+                    # FFmpeg build. Keep the existing Audacity runtime and channel.
+                    shared_with_ffmpeg = dependency.name in {"zlib", "libpng", "libmp3lame", "ogg", "vorbis"}
+                    self.requires(dependency.reference(self),
+                                  force=bool(self.options.use_autopsy_ffmpeg and shared_with_ffmpeg))
 
     def build_requirements(self):
         if self.settings.os not in ["Windows", "Macos"]:
@@ -233,6 +242,17 @@ class AudacityConan(ConanFile):
 
     def configure(self):
         self.options["*"].shared = True
+        if self.options.use_autopsy_ffmpeg:
+            ffmpeg = self.options["ffmpeg"]
+            ffmpeg.with_programs = True  # Relinking, crop, capture and media fixtures still use them.
+            ffmpeg.with_libx264 = True
+            ffmpeg.with_libx265 = True
+            ffmpeg.with_libsvtav1 = True
+            # ConanCenter marks its GPL build nonredistributable when either
+            # external AAC or TLS support is enabled. AuTopsy uses native AAC
+            # and supplies local media paths and device inputs.
+            ffmpeg.with_libfdk_aac = False
+            ffmpeg.with_ssl = False
 
         for dependency in self._dependencies:
             if getattr(self.options, f"use_{dependency.name}"):
@@ -252,3 +272,18 @@ class AudacityConan(ConanFile):
                 deps_lookup[dep.ref.name].copy_files(self, dep)
             else:
                 global_copy_files(self, dep)
+            if dep.ref.name == "ffmpeg" and self.settings.os in ("Windows", "Linux"):
+                windows = self.settings.os == "Windows"
+                runtime_dir = (f"{self.build_folder}/{self.settings.build_type}" if windows
+                               else f"{self.build_folder}/{self.options.lib_dir}")
+                suffix = ".exe" if windows else ""
+                for program in ("ffmpeg", "ffprobe"):
+                    name = program + suffix
+                    if not copy(self, name, dep.cpp_info.bindirs[0], runtime_dir, keep_path=False):
+                        raise RuntimeError(f"The Conan FFmpeg package is missing {name}.")
+                    if not windows:
+                        patchelf = os.path.join(self.dependencies.build["patchelf"].cpp_info.bindirs[0], "patchelf")
+                        subprocess.check_call([patchelf, "--set-rpath", "$ORIGIN", os.path.join(runtime_dir, name)],
+                                              stdin=subprocess.DEVNULL)
+                shutil.copyfile(os.path.join(dep.package_folder, "licenses", "LICENSE.md"),
+                                os.path.join(runtime_dir, "FFmpeg-LICENSE.txt"))

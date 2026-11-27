@@ -1,10 +1,18 @@
 #include "PrepareCaptionModels.h"
 #include "PrepareVideoPreview.h"
 #include "FileNames.h"
+#include "crypto/SHA256.h"
 #include <wx/progdlg.h>
+#ifdef _WIN32
 #include <wx/msw/wrapwin.h>
-#include <bcrypt.h>
 #include <winhttp.h>
+#else
+#include <curl/curl.h>
+#include <cstdio>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -12,8 +20,6 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
-#include <iomanip>
-#include <sstream>
 #include <thread>
 
 namespace VideoCaptions {
@@ -29,55 +35,66 @@ constexpr Model Models[] = {
    {"small", "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", 487601967}
 };
 constexpr auto ModelRevision = "5359861c739e955e79d9a303bcbc70fb988958b1";
-fs::path Root() { return fs::path(FileNames::DataDir().ToStdWstring()) / L"_captions"; }
+fs::path Root() { return fs::u8path(FileNames::DataDir().ToStdString(wxConvUTF8)) / "_captions"; }
 struct Handle {
+#ifdef _WIN32
    HANDLE value{INVALID_HANDLE_VALUE};
    ~Handle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+#else
+   int value{-1};
+   ~Handle() { if (value >= 0) ::close(value); }
+#endif
 };
 void CleanOwnedChildren(const fs::path &root)
 {
    // The exclusive _lease handle excludes every live producer. Only exact owned
    // child names are cleaned; installed weights and unrelated files are retained.
-   const auto work = root/L"_work";
+   const auto work = root / "_work";
    if (fs::is_symlink(work)) throw std::runtime_error("The caption workspace cannot be a symbolic link.");
    if (fs::exists(work)) fs::remove_all(work);
    for (const auto &model : Models) fs::remove(root/(std::string{"_"}+model.quality+".part"));
 }
 std::string HashModel(const fs::path &path)
 {
-   BCRYPT_ALG_HANDLE algorithm{}; BCRYPT_HASH_HANDLE hash{};
-   if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-      throw std::runtime_error("Windows cannot start the caption model integrity check.");
-   struct Close { BCRYPT_ALG_HANDLE &a; BCRYPT_HASH_HANDLE &h;
-      ~Close() { if (h) BCryptDestroyHash(h); BCryptCloseAlgorithmProvider(a, 0); } } close{algorithm, hash};
-   if (BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) < 0)
-      throw std::runtime_error("Windows cannot create the caption model hash.");
-   std::ifstream file(path, std::ios::binary); std::array<unsigned char, 65536> buffer;
+   crypto::SHA256 hash;
+   std::ifstream file(path, std::ios::binary);
+   std::array<char, 65536> buffer;
    if (!file) throw std::runtime_error("Cannot read the local caption model.");
    while (file) {
-      file.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
-      if (file.gcount() && BCryptHashData(hash, buffer.data(), ULONG(file.gcount()), 0) < 0)
-         throw std::runtime_error("Windows cannot hash the caption model.");
+      file.read(buffer.data(), buffer.size());
+      if (file.gcount()) hash.Update(buffer.data(), static_cast<size_t>(file.gcount()));
    }
-   if (!file.eof()) throw std::runtime_error("Cannot finish reading the caption model.");
-   std::array<unsigned char, 32> digest;
-   if (BCryptFinishHash(hash, digest.data(), ULONG(digest.size()), 0) < 0)
-      throw std::runtime_error("Windows cannot finish the caption model hash.");
-   std::ostringstream result; result << std::hex << std::setfill('0');
-   for (auto byte : digest) result << std::setw(2) << int(byte);
-   return result.str();
+   if (file.bad() || !file.eof()) throw std::runtime_error("Cannot finish reading the caption model.");
+   return wxString::FromUTF8(hash.Finalize()).Lower().ToStdString(wxConvUTF8);
 }
 struct HttpHandle {
+#ifdef _WIN32
    HINTERNET value{};
    ~HttpHandle() { if (value) WinHttpCloseHandle(value); }
+#else
+   CURLM *multi{curl_multi_init()};
+   CURL *easy{curl_easy_init()};
+   bool active{};
+   ~HttpHandle()
+   {
+      if (active) curl_multi_remove_handle(multi, easy);
+      if (easy) curl_easy_cleanup(easy);
+      if (multi) curl_multi_cleanup(multi);
+   }
+#endif
 };
 void RequireHttp(bool success, const char *operation)
 {
+#ifdef _WIN32
    if (!success) throw std::runtime_error(std::string{operation}+" (Windows error "+std::to_string(GetLastError())+").");
+#else
+   if (!success) throw std::runtime_error(operation);
+#endif
 }
 bool DownloadModel(const Model &model, const fs::path &pending,
    std::atomic<bool> &cancelled, std::atomic<uint64_t> &received)
 {
+#ifdef _WIN32
    // Windows' HTTPS client keeps this worker independent of optional host
    // networking modules. Bounded request timeouts also bound cancellation waits.
    HttpHandle session{WinHttpOpen(L"AuTopsy caption models", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -115,8 +132,54 @@ bool DownloadModel(const Model &model, const fs::path &pending,
       received += count;
    }
    output.close();
+   if (!output) throw std::runtime_error("Cannot finish writing the caption model.");
+#else
+   const auto url = std::string{"https://huggingface.co/ggerganov/whisper.cpp/resolve/"} +
+      ModelRevision + "/ggml-" + model.quality + ".bin";
+   std::unique_ptr<std::FILE, decltype(&std::fclose)> output{
+      std::fopen(pending.c_str(), "wb"), std::fclose};
+   RequireHttp(bool(output), "Cannot create the caption model download.");
+   HttpHandle request;
+   RequireHttp(request.multi && request.easy, "Cannot start the caption download.");
+   auto *easy = request.easy;
+   RequireHttp(curl_easy_setopt(easy, CURLOPT_URL, url.c_str()) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_STR, "https") == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_MAXREDIRS, 8L) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT, 5L) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_LOW_SPEED_LIMIT, 1L) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, 5L) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_NETRC, CURL_NETRC_IGNORED) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(model.bytes)) == CURLE_OK &&
+      curl_easy_setopt(easy, CURLOPT_WRITEDATA, output.get()) == CURLE_OK,
+      "Cannot configure the HTTPS caption download.");
+   request.active = curl_multi_add_handle(request.multi, easy) == CURLM_OK;
+   RequireHttp(request.active, "Cannot start the HTTPS caption download.");
+   int running{1};
+   while (running && !cancelled) {
+      const auto result = curl_multi_perform(request.multi, &running);
+      if (result != CURLM_OK) throw std::runtime_error(curl_multi_strerror(result));
+      const auto bytes = std::ftell(output.get());
+      if (bytes < 0) throw std::runtime_error("Cannot read the caption download progress.");
+      received = static_cast<uint64_t>(bytes);
+      if (running && (curl_multi_poll(request.multi, nullptr, 0, 50, nullptr) != CURLM_OK))
+         throw std::runtime_error("Cannot wait for the caption download.");
+   }
    if (cancelled) return false;
-   if (!output || received != model.bytes || HashModel(pending) != model.digest)
+   int remaining{};
+   const auto *completed = curl_multi_info_read(request.multi, &remaining);
+   RequireHttp(completed && completed->msg == CURLMSG_DONE, "The caption download did not finish.");
+   if (completed->data.result != CURLE_OK)
+      throw std::runtime_error(std::string{"The caption download failed: "} + curl_easy_strerror(completed->data.result));
+   long status{};
+   if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK || status != 200)
+      throw std::runtime_error("Caption model download failed (HTTP " + std::to_string(status) + ").");
+   if (std::fclose(output.release()) != 0) throw std::runtime_error("Cannot finish writing the caption model.");
+#endif
+   if (cancelled) return false;
+   if (received != model.bytes || HashModel(pending) != model.digest)
       throw std::runtime_error("The downloaded caption model does not match its published size and SHA-256.");
    return true;
 }
@@ -127,11 +190,16 @@ struct CaptionWorkspace::State {
    State() {
       fs::create_directories(root);
       if (fs::is_symlink(root)) throw std::runtime_error("The caption cache cannot be a symbolic link.");
-      lease.value = CreateFileW((root/L"_lease").c_str(), GENERIC_READ|GENERIC_WRITE,
+#ifdef _WIN32
+      lease.value = CreateFileW((root / "_lease").c_str(), GENERIC_READ|GENERIC_WRITE,
          0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
       if (lease.value == INVALID_HANDLE_VALUE)
+#else
+      lease.value = ::open((root / "_lease").c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+      if (lease.value < 0 || ::flock(lease.value, LOCK_EX | LOCK_NB) != 0)
+#endif
          throw std::runtime_error("Another AuTopsy caption job is running. Finish or cancel it first.");
-      CleanOwnedChildren(root); fs::create_directory(root/L"_work");
+      CleanOwnedChildren(root); fs::create_directory(root / "_work");
    }
    ~State() { try { CleanOwnedChildren(root); } catch (...) {} }
 };
@@ -140,18 +208,23 @@ void CleanCaptionWorkspace()
    try {
       const auto root = Root(); if (!fs::is_directory(root) || fs::is_symlink(root)) return;
       Handle lease;
-      lease.value = CreateFileW((root/L"_lease").c_str(), GENERIC_READ|GENERIC_WRITE,
+#ifdef _WIN32
+      lease.value = CreateFileW((root / "_lease").c_str(), GENERIC_READ|GENERIC_WRITE,
          0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
       if (lease.value != INVALID_HANDLE_VALUE) CleanOwnedChildren(root);
+#else
+      lease.value = ::open((root / "_lease").c_str(), O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+      if (lease.value >= 0 && ::flock(lease.value, LOCK_EX | LOCK_NB) == 0) CleanOwnedChildren(root);
+#endif
    } catch (...) { /* A later normal caption call reports any persistent error. */ }
 }
 CaptionWorkspace::CaptionWorkspace() : mState{std::make_unique<State>()} {}
 CaptionWorkspace::~CaptionWorkspace() = default;
 wxString CaptionWorkspace::File(const wxString &name) const
 {
-   const fs::path child{name.ToStdWstring()};
+   const auto child = fs::u8path(name.ToStdString(wxConvUTF8));
    if (child.has_parent_path() || child.empty()) throw std::runtime_error("Use a simple caption work-file name.");
-   return wxString((mState->root/L"_work"/child).wstring());
+   return wxString((mState->root / "_work" / child).native());
 }
 wxString CaptionWorkspace::PrepareModel(const std::string &quality, wxWindow *parent)
 {
@@ -161,7 +234,7 @@ wxString CaptionWorkspace::PrepareModel(const std::string &quality, wxWindow *pa
    const auto &model = *found;
    const auto final = mState->root/(std::string{model.quality}+"-"+model.digest+".bin");
    if (fs::is_regular_file(final) && fs::file_size(final) == model.bytes && HashModel(final) == model.digest)
-      return wxString(final.wstring());
+      return wxString(final.native());
    if (fs::exists(final)) fs::remove(final);
    // Each quality is one bounded version group. Unknown files are never removed.
    const std::string prefix = std::string{model.quality}+"-";
@@ -180,9 +253,13 @@ wxString CaptionWorkspace::PrepareModel(const std::string &quality, wxWindow *pa
    while (worker.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready)
       if (!progress.Update(std::min(999, int(received*1000/model.bytes)))) cancelled = true;
    if (cancelled || !worker.get()) throw VideoPreview::PreviewPreparationCancelled{};
+#ifdef _WIN32
    if (!MoveFileExW(pending.c_str(), final.c_str(), MOVEFILE_WRITE_THROUGH))
+#else
+   if (::renameat2(AT_FDCWD, pending.c_str(), AT_FDCWD, final.c_str(), RENAME_NOREPLACE) != 0)
+#endif
       throw std::runtime_error("Cannot publish the completed caption model.");
    if (!progress.Update(1000)) throw VideoPreview::PreviewPreparationCancelled{};
-   return wxString(final.wstring());
+   return wxString(final.native());
 }
 }

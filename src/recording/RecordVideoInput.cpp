@@ -24,7 +24,12 @@
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
 #include <wx/stdpaths.h>
+#ifdef _WIN32
 #include <wx/msw/wrapwin.h>
+#else
+#include <gtk/gtk.h>
+#include <gdk/gdkx.h>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -38,10 +43,11 @@ std::string Utf8(const wxString &value) {
 }
 struct DisplaySource { std::wstring id; ScreenRegion region; bool primary; };
 std::vector<DisplaySource> DisplaySources() {
+   std::vector<DisplaySource> result;
+#ifdef _WIN32
    // GDI capture consumes physical pixels. Ask under a per-monitor DPI context
    // rather than feeding scaled wx coordinates to FFmpeg on mixed-DPI desktops.
    const auto previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-   std::vector<DisplaySource> result;
    const auto callback = [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
       MONITORINFOEXW info{}; info.cbSize = sizeof(info);
       if (!GetMonitorInfoW(monitor, &info)) return FALSE;
@@ -54,13 +60,28 @@ std::vector<DisplaySource> DisplaySources() {
    const auto succeeded = EnumDisplayMonitors(nullptr, nullptr, callback, reinterpret_cast<LPARAM>(&result));
    if (previous) SetThreadDpiAwarenessContext(previous);
    if (!succeeded) throw std::runtime_error("Windows could not list recording displays.");
+#else
+   auto *display = gdk_display_get_default();
+   if (!display || !GDK_IS_X11_DISPLAY(display)) return result;
+   const auto *primary = gdk_display_get_primary_monitor(display);
+   for (int index = 0; index < gdk_display_get_n_monitors(display); ++index) {
+      auto *monitor = gdk_display_get_monitor(display, index);
+      const auto output = gdk_x11_monitor_get_output(monitor);
+      if (!output) continue;
+      GdkRectangle geometry{};
+      gdk_monitor_get_geometry(monitor, &geometry);
+      const int scale = gdk_monitor_get_scale_factor(monitor);
+      result.push_back({L"X11 " + std::to_wstring(output), {geometry.x * scale, geometry.y * scale,
+         geometry.width * scale, geometry.height * scale}, monitor == primary});
+   }
+#endif
    return result;
 }
 
 bool IsPrivateGeneratedInput(const RecordingOptions &options) {
    wxString enabled;
    if (!wxGetEnv("AUTOPSY_TEST_VIDEO_RECORDING_INPUT", &enabled) || enabled != "generated") return false;
-   const auto audio = fs::canonical(fs::path(TempDirectory::TempDir().ToStdWstring()));
+   const auto audio = fs::canonical(fs::u8path(Utf8(TempDirectory::TempDir())));
    std::ifstream marker{audio.parent_path() / "_owner", std::ios::binary};
    std::string signature{std::istreambuf_iterator<char>{marker}, {}};
    if (audio.filename() != "_audio_temp" || signature != "AuTopsy behavior tests 1") return false;
@@ -95,10 +116,21 @@ public:
       auto &parent = ProjectWindow::Get(project);
       try {
          std::string listing;
+#ifdef _WIN32
          if (!VideoExport::RunBundledVideoTool({"-hide_banner", "-sources", "dshow"}, &parent,
              _("Record Video"), _("Reading cameras and audio inputs..."), &listing,
              VideoExport::VideoTool::Encoder, 512*1024)) return false;
          const auto devices = ReadCaptureDeviceList(listing);
+#else
+         std::vector<CaptureDevice> devices;
+         for (const auto *format : {"v4l2", "pulse"}) {
+            if (!VideoExport::RunBundledVideoTool({"-hide_banner", "-sources", format}, &parent,
+                _("Record Video"), _("Reading cameras and audio inputs..."), &listing,
+                VideoExport::VideoTool::Encoder, 512*1024)) return false;
+            auto entries = ReadCaptureDeviceList(listing);
+            devices.insert(devices.end(), entries.begin(), entries.end());
+         }
+#endif
          const auto displays = DisplaySources();
          std::vector<std::string> cameras, microphones;
          wxDialog dialog{&parent, wxID_ANY, _("Record Video"), wxDefaultPosition, wxDefaultSize,
@@ -166,7 +198,13 @@ public:
    bool Apply(const CommandContext &context) override {
       try {
          RecordingOptions options;
-         options.destination = fs::path(mFilename.ToStdWstring());
+         options.destination = fs::u8path(Utf8(mFilename));
+#ifndef _WIN32
+         options.backend = CaptureBackend::Linux;
+         auto *display = gdk_display_get_default();
+         const bool x11 = display && GDK_IS_X11_DISPLAY(display);
+         if (x11) options.x11Display = gdk_display_get_name(display);
+#endif
          options.projectStart = ViewInfo::Get(context.project).selectedRegion.t0();
          options.camera = Utf8(mCamera); options.audio = Utf8(mAudio);
          options.duration = mDuration; options.frameRate = mFrameRate; options.includePointer = mPointer;
@@ -176,13 +214,23 @@ public:
          else if (mQuality != "720p") throw std::invalid_argument("Choose 720p, 1080p or Original recording quality.");
          if (mSource == "Webcam") options.source = SourceKind::Webcam;
          else if (mSource == "Screen") {
+#ifndef _WIN32
+            if (!x11) throw std::runtime_error("This recording requires an X11 desktop session.");
+#endif
             options.source = SourceKind::Screen; bool found{};
             for (const auto &display : DisplaySources()) if (display.id == mDisplay.ToStdWstring()) { options.region = display.region; found = true; break; }
             if (!found) throw std::runtime_error("The selected recording display is unavailable. Choose a display again.");
          }
          else if (mSource == "AuTopsyWindow") {
             options.source = SourceKind::Window;
+#ifdef _WIN32
             options.window = reinterpret_cast<uintptr_t>(ProjectWindow::Get(context.project).GetHandle());
+#else
+            if (!x11) throw std::runtime_error("This recording requires an X11 desktop session.");
+            auto *window = gtk_widget_get_window(ProjectWindow::Get(context.project).GetHandle());
+            if (!window) throw std::runtime_error("The selected recording window is unavailable.");
+            options.window = gdk_x11_window_get_xid(window);
+#endif
          }
          else if (mSource == "GeneratedTest") options.source = SourceKind::GeneratedTest;
          else throw std::invalid_argument("Choose Webcam, Screen or AuTopsyWindow recording.");
@@ -204,9 +252,9 @@ bool RecordVideoInput(AudacityProject &project, const RecordingOptions &options)
    const auto args = PrepareVideoRecordingArguments(options,
       options.source == SourceKind::GeneratedTest && IsPrivateGeneratedInput(options));
    std::vector<wxString> native; for (const auto &argument : args) native.push_back(wxString::FromUTF8(argument));
-   VideoExport::RecordBundledVideoInput(native, wxString{options.destination.wstring()}, &ProjectWindow::Get(project));
+   VideoExport::RecordBundledVideoInput(native, wxString{options.destination.native()}, &ProjectWindow::Get(project));
    // A failed import keeps the completed user recording. No temporary recovery
    // project, hidden media directory or second Undo transaction is produced.
-   return VideoTimeline::ImportRecordedVideoAtCursor(project, wxString{options.destination.wstring()}, options.projectStart);
+   return VideoTimeline::ImportRecordedVideoAtCursor(project, wxString{options.destination.native()}, options.projectStart);
 }
 }

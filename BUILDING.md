@@ -213,6 +213,21 @@ to configure AuTopsy.
    $ sudo make install
    ```
 
+### Ubuntu 24.04 installer
+
+Download the `AuTopsy-Ubuntu-24.04-amd64` artifact from a completed GitHub Actions run and extract the `.deb` from it. In the directory containing the package, run:
+
+```sh
+sudo apt install ./autopsy-editor_*_amd64.deb
+autopsy-editor
+```
+
+The application appears as AuTopsy in the desktop menu. The `autopsy-editor` package and command let it coexist with Ubuntu's `autopsy` forensic tool and with Audacity.
+
+The SDLC declares the `ubuntu-installer` alongside `windows-installer`. Both use `scripts/build/build_video_installer.py`. Each build uses a disposable `_installer-build` directory for its platform and reports the finished package to Ceratops through the same receipt format. The finished `.deb` goes into the `ubuntu-installer` package slot in the shared Git directory. GitHub uploads the checked package for 14 days.
+
+The Ubuntu job installs the `.deb` and opens that installed editor on a private virtual display. It imports real media files and checks exported MP4 and MKV streams, audio and picture timing, variable frame rates, and the supported encoder presets. On both platforms video export calls Conan's FFmpeg libraries directly. The installers also include the FFmpeg and FFprobe commands used for media preparation, relinking, recording, and the test fixtures.
+
 ## Advanced
 
 ### CMake options
@@ -364,22 +379,17 @@ Use the C++ workload and Windows SDK from Visual Studio 2022, and an extracted
 64-bit libmpv development package matching the build architecture. The package
 must contain include/mpv/client.h and libmpv-2.dll at its top level.
 Windows package links are listed on [mpv's installation page](https://mpv.io/installation/).
-Also provide the Windows x64 FFmpeg 8.1 GPL shared runtime, including libx264,
-libx265 and libsvtav1 encoders, available from
-[FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases).
-The automated builder pins a monthly archive and its checksum; upstream retains
-monthly builds for two years, while ordinary daily builds expire after fourteen
-days. Refresh that pin before its retention window ends.
-Keep ffmpeg.exe, ffprobe.exe, avformat-62.dll, avcodec-62.dll, avutil-60.dll,
-swresample-6.dll, swscale-9.dll, avfilter-11.dll, avdevice-62.dll, and the
-distribution's LICENSE.txt together in the selected runtime directory.
-The command-line encoder and picture probe ship beside AuTopsy and run without a
-console window. libmpv requires the C numeric runtime locale; Windows language
+The video build uses the shared FFmpeg package selected in `conan/conanfile.py`.
+Conan resolves that package and its dependencies through ConanCenter and stages
+its Windows runtime beside AuTopsy. Export uses the FFmpeg libraries for
+probing, filtering, encoding and writing the final container. Relinking, crop
+previews, capture and media tests still use the packaged command-line tools.
+libmpv requires the C numeric runtime locale; Windows language
 setup keeps that locale stable after capturing the regional display separator.
 
 Configure the normal AuTopsy build with these additional options:
 
-    cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -Daudacity_has_tests=ON -Daudacity_has_video_preview=ON -Daudacity_video_mpv_sdk="<extracted-mpv-sdk>" -Daudacity_video_ffmpeg_runtime="<ffmpeg-runtime>"
+    cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -Daudacity_has_tests=ON -Daudacity_has_video_preview=ON -Daudacity_video_mpv_sdk="<extracted-mpv-sdk>"
     cmake --build _build --config Release --parallel 4
     ctest --test-dir _build -C Release -R "^(video-playback|video-timeline|fork-groups|fork-tracks|fork-video|fork-media|fork-preview)$" --output-on-failure
     cmake -S . -B _build -DINNO_SETUP_COMPILER="<Inno-Setup-6.7.3>/ISCC.exe"
@@ -576,14 +586,11 @@ worker before project storage closes. Error text is one replaceable in-memory
 value, removed on the next successful result. Saved grouping metadata belongs
 only to the project's optional XML attributes/header.
 
-The SDK remains at the caller-selected path and is read during the build.
-CMake owns the single current libmpv-2.dll, the seven named FFmpeg DLLs,
-ffmpeg.exe, ffprobe.exe and
-FFmpeg-LICENSE.txt beside the built executable. It
-copies these files on every app build, restoring missing files and replacing
-them when building with another SDK or compatible FFmpeg package. Build outputs belong to the chosen
-build directory; no version copies or recovery checkpoints are created by this
-feature. The decoder reads the selected video without writing player
+The libmpv SDK remains at the caller-selected path. CMake refreshes
+`libmpv-2.dll` beside the executable on every build. Conan's dependency setup
+stages the FFmpeg DLLs, `ffmpeg.exe`, `ffprobe.exe`, and `FFmpeg-LICENSE.txt`
+in the same runtime directory. These files belong to the current build.
+The decoder reads the selected video without writing player
 configuration, logs or cache files. Native video tracks own their per-clip source
 references and timing in the existing .aup3 XML storage. No media copy or separate
 database is introduced. Soundtrack audio uses the existing project audio storage,
@@ -604,7 +611,7 @@ with any distributed build, alongside AuTopsy's existing license material.
 
 Run the same repository-owned builder used by the GitHub-hosted Windows job:
 
-    uv run --project scripts --locked python scripts/build/windows/build_video_installer.py
+    uv run --project scripts --locked python scripts/build/build_video_installer.py
 
 Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
 `--inno-compiler` for a nondefault compiler location. The builder uses CMake's

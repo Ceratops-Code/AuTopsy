@@ -626,7 +626,7 @@ class SelectionTests(unittest.TestCase):
                              ("src/clip-groups/ApplyRippleDeletion.cpp", "linked-ripple-delete"),
                              ("src/video/ChooseVideoExport.cpp", "video-range-export")):
             self.assertIn("fork-" + case, runner.select_installer_tests([source], catalogue))
-        self.assertEqual(set(runner.select_installer_tests(["scripts/build/windows/build_video_installer.py"], catalogue)), baseline)
+        self.assertEqual(set(runner.select_installer_tests(["scripts/build/build_video_installer.py"], catalogue)), baseline)
         for paths, extra, unknown in ((["src/video/NewOperation.cpp"], None, False),
                                       ([], "does-not-exist", False), ([], None, True)):
             with self.subTest(paths=paths, extra=extra, unknown=unknown), self.assertRaises(RuntimeError):
@@ -816,7 +816,7 @@ class SelectionTests(unittest.TestCase):
         for host, installer_checks in (("win32", {installer}), ("linux", set())):
             with self.subTest(host=host), patch.object(runner.sys, "platform", host):
                 for _ in range(2):
-                    self.assertEqual(self.names(["scripts/build/windows/build_video_installer.py"]), installer_checks)
+                    self.assertEqual(self.names(["scripts/build/build_video_installer.py"]), installer_checks)
                     self.assertEqual(self.names(["scripts/uv.lock"]), shared_checks | installer_checks)
                     self.assertEqual({group.name for group in runner.select_groups([], all_checks=True)[0]},
                                      shared_checks | installer_checks)

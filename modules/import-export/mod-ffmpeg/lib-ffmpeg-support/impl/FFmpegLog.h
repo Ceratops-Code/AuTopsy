@@ -11,6 +11,8 @@
 #pragma once
 
 #include <cstdarg>
+#include <cstdio>
+#include <string>
 
 #include <wx/string.h>
 

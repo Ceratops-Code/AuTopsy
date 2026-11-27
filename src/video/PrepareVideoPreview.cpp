@@ -5,7 +5,14 @@
 #include "ChoosePreviewQuality.h"
 #include "ExportVideoMix.h"
 #include "FileNames.h"
+#ifdef _WIN32
 #include <wx/msw/wrapwin.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <wx/file.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -22,6 +29,7 @@ namespace VideoPreview {
 namespace {
 namespace fs = std::filesystem;
 constexpr auto Signature = "AuTopsy preview cache 1";
+#ifdef _WIN32
 struct CloseHandleDeleter {
    void operator()(void *value) const {
       if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value);
@@ -29,8 +37,11 @@ struct CloseHandleDeleter {
 };
 using Handle = std::unique_ptr<void, CloseHandleDeleter>;
 struct Lease { Handle handle; };
+#else
+struct Lease { wxFile handle; };
+#endif
 std::map<fs::path, std::weak_ptr<const PreparedMedia>> liveMedia;
-fs::path CacheRoot() { return fs::path(FileNames::DataDir().ToStdWstring()) / "_video-previews"; }
+fs::path CacheRoot() { return fs::u8path(FileNames::DataDir().ToStdString(wxConvUTF8)) / "_video-previews"; }
 std::string Read(const fs::path &path) {
    std::ifstream input(path, std::ios::binary);
    return {std::istreambuf_iterator<char>(input), {}};
@@ -41,14 +52,24 @@ void Write(const fs::path &path, const std::string &value) {
    if (!output) throw std::runtime_error("Cannot write a video preview cache record.");
 }
 bool PlainDirectory(const fs::path &path) {
+#ifdef _WIN32
    const auto flags = GetFileAttributesW(path.c_str());
    return flags != INVALID_FILE_ATTRIBUTES && (flags & FILE_ATTRIBUTE_DIRECTORY) &&
       !(flags & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+   std::error_code error;
+   return fs::is_directory(fs::symlink_status(path, error));
+#endif
 }
 bool PlainFile(const fs::path &path) {
+#ifdef _WIN32
    const auto flags = GetFileAttributesW(path.c_str());
    return flags != INVALID_FILE_ATTRIBUTES &&
       !(flags & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
+#else
+   std::error_code error;
+   return fs::is_regular_file(fs::symlink_status(path, error));
+#endif
 }
 // Delete exact producer-owned names only. An unexpected file retains the entry
 // rather than allowing a broad recursive delete of user or live work.
@@ -93,11 +114,19 @@ void CleanPreviewCache()
       const auto owner = path / "_owner";
       if (fs::exists(owner) && (!PlainFile(owner) || Read(owner) != Signature)) continue;
       if (fs::exists(path / "_lease") && !PlainFile(path / "_lease")) continue;
+#ifdef _WIN32
       Handle lease{CreateFileW((path / "_lease").c_str(), GENERIC_READ | GENERIC_WRITE,
          0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};
       const bool live = lease.get() == INVALID_HANDLE_VALUE;
+#else
+      wxFile lease{::open((path / "_lease").c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600)};
+      const bool live = !lease.IsOpened() || ::flock(lease.fd(), LOCK_EX | LOCK_NB) != 0;
+#endif
       if (!live && (!PlainFile(path / "_complete") || !PlainFile(path / "_source"))) {
-         lease.reset(); RemoveEntry(path); continue;
+#ifdef _WIN32
+         lease.reset();
+#endif
+         RemoveEntry(path); continue;
       }
       std::error_code error;
       auto time = fs::last_write_time(path / "_complete", error);
@@ -111,9 +140,14 @@ void CleanPreviewCache()
       const auto group = entry.path.filename().string().substr(0, 25);
       const auto version = ++versions[group];
       if (entry.live || (version <= 3 && retained < 36)) { ++retained; continue; }
+#ifdef _WIN32
       Handle lease{CreateFileW((entry.path / "_lease").c_str(), GENERIC_READ | GENERIC_WRITE,
          0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
       if (lease.get() != INVALID_HANDLE_VALUE) { lease.reset(); RemoveEntry(entry.path); }
+#else
+      wxFile lease{::open((entry.path / "_lease").c_str(), O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)};
+      if (lease.IsOpened() && ::flock(lease.fd(), LOCK_EX | LOCK_NB) == 0) RemoveEntry(entry.path);
+#endif
    }
    for (auto it = liveMedia.begin(); it != liveMedia.end();)
       if (it->second.expired()) it = liveMedia.erase(it); else ++it;
@@ -125,20 +159,33 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
    if (!std::isfinite(duration) || duration <= 0)
       throw std::runtime_error("Video preview requires a finite source duration.");
    const auto scaleFilter = PreviewQualityScaleFilter(maximumHeight);
-   const auto sourcePath = fs::absolute(fs::path(source.ToStdWstring()));
+   const auto sourcePath = fs::absolute(fs::u8path(source.ToStdString(wxConvUTF8)));
+#ifdef _WIN32
    Handle sourceFile{CreateFileW(sourcePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
       nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
    BY_HANDLE_FILE_INFORMATION info{};
    if (sourceFile.get() == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(sourceFile.get(), &info))
       throw std::runtime_error("Cannot read the source video for preview.");
-   const auto sourceName = wxString(sourcePath.wstring());
+#else
+   wxFile sourceFile{::open(sourcePath.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK)};
+   struct stat info{};
+   if (!sourceFile.IsOpened() || ::fstat(sourceFile.fd(), &info) != 0 || !S_ISREG(info.st_mode))
+      throw std::runtime_error("Cannot read the source video for preview.");
+#endif
+   const auto sourceName = wxString(sourcePath.native());
    const auto utf8 = sourceName.ToUTF8();
    const std::string canonical{utf8.data(), utf8.length()};
    std::ostringstream revision;
+#ifdef _WIN32
    revision << std::hex << info.dwVolumeSerialNumber << '-' << info.nFileIndexHigh << '-'
       << info.nFileIndexLow << '-' << info.ftLastWriteTime.dwHighDateTime << '-'
       << info.ftLastWriteTime.dwLowDateTime << '-' << info.nFileSizeHigh << '-'
-      << info.nFileSizeLow << '-' << int(lightweight);
+      << info.nFileSizeLow;
+#else
+   revision << std::hex << info.st_dev << '-' << info.st_ino << '-' << info.st_mtim.tv_sec
+      << '-' << info.st_mtim.tv_nsec << '-' << info.st_size;
+#endif
+   revision << '-' << int(lightweight);
    if (lightweight && maximumHeight != 540) revision << "-p" << std::dec << maximumHeight;
    const auto identity = canonical + '\n' + revision.str() + "\nrecipe=1";
    const auto root = CacheRoot();
@@ -156,9 +203,15 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
    if (fs::exists(leasePath) && !PlainFile(leasePath))
       throw std::runtime_error("The preview cache lease is not a regular file.");
    auto lease = std::make_shared<Lease>();
+#ifdef _WIN32
    lease->handle.reset(CreateFileW(leasePath.c_str(), GENERIC_READ | GENERIC_WRITE,
       0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
    if (lease->handle.get() == INVALID_HANDLE_VALUE)
+#else
+   const int leaseFd = ::open(leasePath.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+   if (leaseFd >= 0) lease->handle.Attach(leaseFd);
+   if (!lease->handle.IsOpened() || ::flock(lease->handle.fd(), LOCK_EX | LOCK_NB) != 0)
+#endif
       throw std::runtime_error("Another video preview is using this cache entry.");
    const auto owner = path / "_owner";
    if (fs::exists(owner) && (!PlainFile(owner) || Read(owner) != Signature))
@@ -172,9 +225,9 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
          // they do not recover or trust a saved execution checkpoint.
          for (const auto *file : {"_complete", "_building.mp4", "_building.jpg", "_preview.mp4", "_frames.jpg"})
             fs::remove(path / file);
-         const auto buildingVideo = wxString((path / "_building.mp4").wstring());
-         const auto preview = wxString((path / "_preview.mp4").wstring());
-         const auto sheet = wxString((path / "_building.jpg").wstring());
+         const auto buildingVideo = wxString((path / "_building.mp4").native());
+         const auto preview = wxString((path / "_preview.mp4").native());
+         const auto sheet = wxString((path / "_building.jpg").native());
          if (lightweight) {
             if (!VideoExport::RunBundledVideoTool({"-v", "error", "-nostdin", "-n", "-hwaccel", "auto",
                  "-i", sourceName, "-map", "0:v:0", "-an", "-sn", "-dn", "-map_metadata", "-1",
@@ -199,15 +252,17 @@ std::shared_ptr<const PreparedMedia> PrepareVideoMedia(const wxString &source,
       }
       auto result = std::make_shared<PreparedMedia>();
       result->sourcePath = source;
-      result->playbackPath = lightweight ? wxString((path / "_preview.mp4").wstring()) : source;
-      result->contactSheet = wxString((path / "_frames.jpg").wstring());
+      result->playbackPath = lightweight ? wxString((path / "_preview.mp4").native()) : source;
+      result->contactSheet = wxString((path / "_frames.jpg").native());
       result->duration = duration; result->lightweight = lightweight; result->lease = lease;
       liveMedia[path] = result;
       CleanPreviewCache();
       return result;
    }
    catch (...) {
+#ifdef _WIN32
       lease->handle.reset();
+#endif
       if (!complete) RemoveEntry(path);
       throw;
    }
@@ -219,7 +274,11 @@ std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string
 {
    if (!std::isfinite(duration) || duration <= 0 || !render)
       throw std::runtime_error("A rendered picture needs a usable duration and renderer.");
+#ifdef _WIN32
    std::vector<Handle> inputs;
+#else
+   std::vector<std::unique_ptr<wxFile>> inputs;
+#endif
    std::ostringstream identity; identity.imbue(std::locale::classic());
    identity << "picture-transition=1\n" << recipe;
    const char *extension{};
@@ -231,7 +290,8 @@ std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string
    }
    if (kind != RenderedVideoKind::Ordinary) identity << "\ncontainer=" << extension;
    for (const auto &source : sources) {
-      const auto path = fs::absolute(fs::path(wxString::FromUTF8(source).ToStdWstring()));
+      const auto path = fs::absolute(fs::u8path(source));
+#ifdef _WIN32
       Handle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
       BY_HANDLE_FILE_INFORMATION info{};
@@ -240,6 +300,14 @@ std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string
       identity << '\n' << source << ':' << info.dwVolumeSerialNumber << ':' << info.nFileIndexHigh
          << ':' << info.nFileIndexLow << ':' << info.ftLastWriteTime.dwHighDateTime << ':'
          << info.ftLastWriteTime.dwLowDateTime << ':' << info.nFileSizeHigh << ':' << info.nFileSizeLow;
+#else
+      auto file = std::make_unique<wxFile>(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
+      struct stat info{};
+      if (!file->IsOpened() || ::fstat(file->fd(), &info) != 0 || !S_ISREG(info.st_mode))
+         throw std::runtime_error("Cannot read a picture transition source: " + source);
+      identity << '\n' << source << ':' << info.st_dev << ':' << info.st_ino << ':'
+         << info.st_mtim.tv_sec << ':' << info.st_mtim.tv_nsec << ':' << info.st_size;
+#endif
       inputs.push_back(std::move(file));
    }
    const auto value = identity.str();
@@ -256,9 +324,15 @@ std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string
    if (fs::exists(path / "_lease") && !PlainFile(path / "_lease"))
       throw std::runtime_error("The picture cache lease is not a regular file.");
    auto lease = std::make_shared<Lease>();
+#ifdef _WIN32
    lease->handle.reset(CreateFileW((path / "_lease").c_str(), GENERIC_READ | GENERIC_WRITE,
       0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
    if (lease->handle.get() == INVALID_HANDLE_VALUE)
+#else
+   const int leaseFd = ::open((path / "_lease").c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+   if (leaseFd >= 0) lease->handle.Attach(leaseFd);
+   if (!lease->handle.IsOpened() || ::flock(lease->handle.fd(), LOCK_EX | LOCK_NB) != 0)
+#endif
       throw std::runtime_error("Another process is preparing this picture transition.");
    if (fs::exists(path / "_owner") && (!PlainFile(path / "_owner") || Read(path / "_owner") != Signature))
       throw std::runtime_error("The picture cache entry has another owner.");
@@ -271,17 +345,23 @@ std::shared_ptr<const PreparedMedia> PrepareRenderedVideoMedia(const std::string
       if (!complete) {
          fs::remove(path / "_complete"); fs::remove(pending);
          fs::remove(published);
-         render(wxString(pending.wstring()));
+         render(wxString(pending.native()));
          if (!PlainFile(pending) || !fs::file_size(pending))
             throw std::runtime_error("The transition renderer produced no picture.");
          fs::rename(pending, published);
          Write(path / "_source", value); Write(path / "_complete", Signature); complete = true;
       }
       auto result = std::make_shared<PreparedMedia>();
-      result->sourcePath = result->playbackPath = wxString(published.wstring());
+      result->sourcePath = result->playbackPath = wxString(published.native());
       result->duration = duration; result->lease = lease;
       liveMedia[path] = result; CleanPreviewCache(); return result;
    }
-   catch (...) { lease->handle.reset(); if (!complete) RemoveEntry(path); throw; }
+   catch (...) {
+#ifdef _WIN32
+      lease->handle.reset();
+#endif
+      if (!complete) RemoveEntry(path);
+      throw;
+   }
 }
 }

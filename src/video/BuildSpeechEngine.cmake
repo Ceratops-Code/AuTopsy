@@ -37,10 +37,15 @@ function(autopsy_build_speech_engine)
    if(CMAKE_CONFIGURATION_TYPES)
       string(APPEND worker_directory "/$<CONFIG>")
    endif()
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      set(worker_directory "${_DEST}/${_PKGLIB}")
+      install(PROGRAMS "${worker_directory}/autopsy-whisper" DESTINATION "${_PKGLIB}")
+      install(FILES "${worker_directory}/whisper-LICENSE.txt" DESTINATION "${_DATADIR}/doc/${AUDACITY_NAME}")
+   endif()
    add_custom_target(copy-caption-worker
       COMMAND "${CMAKE_COMMAND}" -E make_directory "${worker_directory}"
       COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:whisper-cli>"
-         "${worker_directory}/autopsy-whisper.exe"
+         "${worker_directory}/autopsy-whisper${CMAKE_EXECUTABLE_SUFFIX}"
       COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${autopsy_whisper_SOURCE_DIR}/LICENSE"
          "${worker_directory}/whisper-LICENSE.txt"
       DEPENDS whisper-cli VERBATIM)

@@ -8,8 +8,10 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import time
 from array import array
 from datetime import datetime
@@ -578,7 +580,15 @@ def run_process(arguments, **options):
 
 
 def executable_version(executable):
-    """Read the PE resource before creating a first-run app profile."""
+    """Read the version that the existing executable reports."""
+    if sys.platform.startswith("linux"):
+        command = [str(executable), "--version"]
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+        found = re.search(r"\bAuTopsy v(\d+)\.(\d+)\.(\d+)\b", completed.stdout)
+        if found is None:
+            raise RuntimeError(f"Reading {command!r} exited {completed.returncode}; "
+                               f"stdout: {completed.stdout or '<absent>'}; stderr: {completed.stderr or '<absent>'}")
+        return tuple(map(int, found.groups()))
     version = ctypes.WinDLL("version", use_last_error=True)
     version.GetFileVersionInfoSizeW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p]
     version.GetFileVersionInfoW.argtypes = [

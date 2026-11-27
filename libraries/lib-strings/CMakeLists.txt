@@ -36,3 +36,4 @@ set( LIBRARIES
 audacity_library( lib-strings "${SOURCES}" "${LIBRARIES}"
    "" ""
 )
+target_compile_definitions(lib-strings PRIVATE AUTOPSY_LOCALE_DOMAIN="${AUTOPSY_LOCALE_DOMAIN}")

@@ -325,6 +325,21 @@ def require_test_display_guard(module):
 
 def assert_owned_test_display(pid, include_window=None):
     """Check the child's windows before input/capture; never move another process."""
+    if sys.platform.startswith("linux"):
+        if include_window is not None:
+            raise RuntimeError("This test needs native Windows window controls.")
+        target = os.environ.get("AUTOPSY_TEST_DISPLAY")
+        if not target or target != os.environ.get("DISPLAY"):
+            raise RuntimeError("The private Xvfb display changed.")
+        expected = f"DISPLAY={target}".encode()
+        try:
+            process_environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        except FileNotFoundError:
+            # Quit closes the application as the pipe returns its last reply.
+            return []
+        if expected not in process_environment:
+            raise RuntimeError("The owned application is on another display.")
+        return []
     from ctypes import wintypes as w
 
     deadline = time.monotonic() + 2

@@ -32,7 +32,7 @@ include = [
   "scripts/piped-work/test_run_audacity_consumer.py",
   "scripts/piped-work/prepare_audacity_consumer.py",
   "scripts/piped-work/test_prepare_audacity_consumer.py",
-  "scripts/build/windows/build_video_installer.py",
+  "scripts/build/build_video_installer.py",
   "scripts/build/windows/test_build_video_installer.py",
 ]
 force-exclude = true
@@ -58,7 +58,7 @@ files = [
   "scripts/piped-work/test_run_audacity_consumer.py",
   "scripts/piped-work/prepare_audacity_consumer.py",
   "scripts/piped-work/test_prepare_audacity_consumer.py",
-  "scripts/build/windows/build_video_installer.py",
+  "scripts/build/build_video_installer.py",
   "scripts/build/windows/test_build_video_installer.py",
 ]
 exclude = ["(^|/)\\.venv/"]

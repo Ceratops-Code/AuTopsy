@@ -1,8 +1,8 @@
-"""Build and publish the AuTopsy Windows installer.
+"""Build AuTopsy installers and publish completed Windows releases.
 
 Each checkout has one installer scratch directory. Build removes abandoned
 scratch before compiling and removes its own scratch after success or failure.
-Direct builds publish the EXE in the checkout's Git artifact slot and return
+Direct builds publish the package in the checkout's Git artifact slot and return
 its build data on stdout. Managed output includes the versioned build manifest
 used by the publication adapter.
 """
@@ -31,18 +31,6 @@ SDK_INPUTS = {
         "sha256": "efc719eff3dc5954b4a5efc800632808bcec01cc9034940dd14e5eb7fe9ea633",
         "files": ["include/mpv/client.h", "libmpv-2.dll"],
         "kind": "7z",
-    },
-    "ffmpeg": {
-        # Upstream retains monthly builds for two years; daily builds expire
-        # after fourteen days. Keep this checksum-bound release on that channel.
-        "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-win64-gpl-shared-8.1.zip",
-        "sha256": "3adc00b67118a8c4bdd6624a000e139df283b1eeb8b126fcec4849bd5b778dd4",
-        "files": [
-            "ffmpeg.exe", "ffprobe.exe", "avformat-62.dll", "avcodec-62.dll",
-            "avutil-60.dll", "swresample-6.dll", "swscale-9.dll",
-            "avfilter-11.dll", "avdevice-62.dll", "LICENSE.txt",
-        ],
-        "kind": "zip",
     },
 }
 
@@ -112,7 +100,7 @@ def remove_owned_tree(path: Path, root: Path, *, require_sdk_marker: bool = True
 
 def run_command(arguments: list[str], source: Path, diagnostics: Path, *,
                 operation: str = "Windows installer build", missing_ok: bool = False,
-                target: str | None = None) -> str:
+                target: str | None = None, child_failure: Path | None = None) -> str:
     """Retain child failures; a selected GitHub GET may report expected absence."""
     print("Running " + subprocess.list2cmdline(arguments), file=sys.stderr, flush=True)
     try:
@@ -130,11 +118,34 @@ def run_command(arguments: list[str], source: Path, diagnostics: Path, *,
                 return ""
             if arguments[:3] == ["gh", "release", "view"] and result.stderr.strip() == "release not found":
                 return ""
-        write_json(diagnostics, {
+        failure: dict[str, object] = {
             "operation": operation, "target": target or str(source), "argv": arguments,
             "exit": result.returncode, "stdout": result.stdout or "<absent>",
             "stderr": result.stderr or "<absent>",
-        })
+        }
+        if child_failure is not None:
+            # The installer cleans its scratch tree before returning. Carry the
+            # affected-test and native-test evidence through the existing report.
+            scratch = diagnostics.parent.resolve()
+            child_reports = []
+            for _ in range(2):
+                try:
+                    child_failure = child_failure.resolve()
+                    if not child_failure.is_relative_to(scratch):
+                        break
+                    child = json.loads(child_failure.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    break
+                if not isinstance(child, dict):
+                    break
+                child_reports.append(child)
+                nested = child.get("child_diagnostic_output")
+                if not isinstance(nested, str) or Path(nested) == child_failure:
+                    break
+                child_failure = Path(nested)
+            if child_reports:
+                failure["child_failures"] = child_reports
+        write_json(diagnostics, failure)
         raise RuntimeError(f"Build command exited {result.returncode}; details: {diagnostics}")
     return result.stdout
 
@@ -289,7 +300,7 @@ def compiled_runtime_inputs(source: Path, build: Path, configure: list[str], dep
     paths = run_command(["git", "ls-files", "-z"], source, diagnostics).split("\0")
     excluded_files = {"README.md", "BUILDING.md", "AGENTS.md", "scripts/run_affected_tests.py",
                       "scripts/test_run_affected_tests.py", "scripts/build/windows/test_build_video_installer.py",
-                      "scripts/build/windows/build_video_installer.py"}
+                      "scripts/build/build_video_installer.py"}
     files = {}
     for name in paths:
         if not name or name in excluded_files or name.startswith(("docs/", ".github/", ".ceratops/sdlc/", "scripts/piped-work/")):
@@ -395,20 +406,19 @@ def build_installer(source: Path, build: Path, inno: Path, native_tests: str | N
     cmake = shutil.which("cmake")
     if not cmake:
         raise RuntimeError("CMake is missing from PATH.")
-    mpv, ffmpeg = dependency_root / "_mpv", dependency_root / "_ffmpeg"
+    mpv = dependency_root / "_mpv"
     configure = [
         cmake, "-S", str(source), "-B", str(build), "-G", "Visual Studio 17 2022", "-A", "x64",
         "-DCMAKE_CONFIGURATION_TYPES=Release",
         "-Daudacity_has_tests=ON", "-Daudacity_has_video_preview=ON", "-Daudacity_has_networking=OFF",
         "-Daudacity_has_asio_support=OFF", "-Daudacity_bundle_gplv3=ON",
-        "-Daudacity_video_mpv_sdk=" + str(mpv), "-Daudacity_video_ffmpeg_runtime=" + str(ffmpeg),
+        "-Daudacity_video_mpv_sdk=" + str(mpv),
         "-DINNO_SETUP_COMPILER=" + str(inno),
         "-DPython3_EXECUTABLE:FILEPATH=" + str(get_native_test_python()),
     ]
     checks = [{"name": "fork-fixtures", "result": "passed", "source_revision": revision}]
     package = build / "_artifact"
     prepare_sdk("mpv", SDK_INPUTS["mpv"], dependency_root, source, diagnostics)
-    prepare_sdk("ffmpeg", SDK_INPUTS["ffmpeg"], dependency_root, source, diagnostics)
     run_command(configure, source, diagnostics)
     compiled = reuse_or_compile_runtime(source, build, configure, dependency_inputs, revision, diagnostics)
     ctest = shutil.which("ctest")
@@ -421,7 +431,8 @@ def build_installer(source: Path, build: Path, inno: Path, native_tests: str | N
                "--qualification-level", "beta"]
     if native_tests:
         command.extend(["--native-tests", native_tests])
-    output = run_command(command, source, diagnostics)
+    output = run_command(command, source, diagnostics,
+                         child_failure=build / "_prepackage-results" / "_command-failure.json")
     report = json.loads(output.strip().splitlines()[-1])
     if (report.get("result") != "passed" or report.get("scope") != "prepackage"
             or not {"fork-fixtures", "fork-preview", "fork-project-compatibility"}.issubset(
@@ -654,6 +665,68 @@ def get_installer_build_directory() -> Path:
     return Path(os.environ.get("AUTOPSY_INSTALLER_BUILD_DIR", "build/_windows-installer"))
 
 
+def build_ubuntu_installer(source: Path, build: Path, version: str, artifact_directory: Path | None) -> dict:
+    """Build a DEB and exercise the installed editor on its private hosted desktop."""
+    if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Linux":
+        raise RuntimeError("Run the Ubuntu build and installation checks on the GitHub Ubuntu runner.")
+    build.mkdir(parents=True, exist_ok=True)
+    diagnostics = build / "_build_command_failure.json"
+    revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
+    dirty = run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics)
+    if dirty or revision != os.environ.get("GITHUB_SHA"):
+        raise RuntimeError("Hosted installer source differs from the workflow's checked-out revision.")
+    if run_command(["dpkg", "--print-architecture"], source, diagnostics).strip() != "amd64":
+        raise RuntimeError("The Ubuntu installer requires an amd64 runner.")
+    deb_version = re.sub(r"(?<=\d)(a|b|rc)(?=\d+$)", r"~\1", version)
+    package = build / "_artifact"
+    filename = f"autopsy-editor_{deb_version}_amd64.deb"
+    pending = package / filename
+    run_command(["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
+                 "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=/usr", "-DCMAKE_INSTALL_LIBDIR=lib",
+                 "-Daudacity_has_tests=ON", "-Daudacity_has_video_preview=ON", "-Daudacity_has_networking=OFF",
+                 "-Daudacity_use_ffmpeg=loaded", "-Daudacity_bundle_gplv3=ON", "-Dautopsy_package_ubuntu=ON",
+                 "-Dautopsy_debian_version=" + deb_version, "-DPython3_EXECUTABLE=" + sys.executable],
+                source, diagnostics, operation="Ubuntu installer configuration")
+    run_command(["cmake", "--build", str(build), "--parallel", "2"], source, diagnostics,
+                operation="Ubuntu editor build")
+    run_command(["cpack", "--config", str(build / "CPackConfig.cmake"), "-B", str(package)],
+                source, diagnostics, operation="Ubuntu installer packaging")
+    if not pending.is_file() or pending.stat().st_size == 0:
+        raise RuntimeError("CPack did not produce the expected Ubuntu installer.")
+    run_command(["sudo", "apt-get", "-y", "install", str(pending)], source, diagnostics,
+                operation="Installing the Ubuntu candidate")
+    checks = []
+    try:
+        media = Path("/usr/lib/autopsy-editor")
+        for case in ("fixtures", "video-range-export", "video-export-timing", "video-vfr-export", "video-encoder-boundaries"):
+            output = run_command(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable,
+                                  str(source / "scripts/piped-work/test_fork_features.py"), "--case", case,
+                                  "--executable", "/usr/bin/autopsy-editor", "--work-root", str(build / "_fork-tests"),
+                                  "--ffmpeg", str(media / "ffmpeg"), "--ffprobe", str(media / "ffprobe")],
+                                 source, diagnostics, operation=f"Installed Ubuntu media check {case}")
+            checks.append({"name": case, "result": "passed", "output": output})
+    finally:
+        run_command(["sudo", "dpkg", "--remove", "autopsy-editor"], source, diagnostics,
+                    operation="Removing the installed Ubuntu candidate")
+    if run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip() != revision or run_command(
+            ["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics):
+        raise RuntimeError("Ubuntu installer source changed during the build.")
+    digest = sha256(pending)
+    # CPack owns its staging tree inside scratch. Publish only the checked DEB.
+    for child in package.iterdir():
+        if child == pending:
+            continue
+        if child.is_dir():
+            remove_owned_tree(child, package, require_sdk_marker=False)
+        else:
+            child.unlink()
+    if artifact_directory is not None:
+        os.link(pending, artifact_directory / filename)
+    return {"schema": "autopsy-ubuntu-installer.v1", "source_revision": revision,
+            "product_version": read_product_version(source), "artifact_version": version,
+            "filename": filename, "sha256": digest, "checks": checks}
+
+
 def main() -> None:
     # Explicit input wins; otherwise inspect standard installation locations.
     # Tool discovery never installs software or edits the user's PATH.
@@ -669,7 +742,7 @@ def main() -> None:
                             str(Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
                                 / "Inno Setup 6/ISCC.exe"))
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[3])
+    parser.add_argument("--source-dir", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--build-dir", type=Path, help="Existing build for tests or preview publication.")
     parser.add_argument("--version", help="Artifact version selected by the SDLC build.")
     parser.add_argument("--receipt-file", type=Path, help="Write the completed installer result to this file.")
@@ -693,8 +766,12 @@ def main() -> None:
         parser.error("--version is supplied by the SDLC build")
     if args.receipt_file and (args.test_existing_build or args.publish_installer or args.install_accepted):
         parser.error("--receipt-file applies only when building the installer")
-    if sys.platform != "win32":
-        parser.error("The Windows installer requires a Windows build host.")
+    windows = sys.platform == "win32"
+    ubuntu = sys.platform.startswith("linux")
+    if not windows and not ubuntu:
+        parser.error("Use a Windows or Ubuntu build host.")
+    if not windows and (args.test_existing_build or args.publish_installer or args.install_accepted or args.test_name):
+        parser.error("These separate installer operations require Windows.")
     accepted_installer = None
     accepted_manifest = None
     if args.accepted_artifacts is not None:
@@ -755,7 +832,8 @@ def main() -> None:
     common, registration = Path(git_paths[0]), Path(git_paths[1])
     checkout = "primary" if registration == common else registration.name
     primary = common.parent
-    scratch = primary.parent / "tmp" / primary.name / checkout / "_installer-build" / "windows-installer"
+    package_type = "windows-installer" if windows else "ubuntu-installer"
+    scratch = primary.parent / "tmp" / primary.name / checkout / "_installer-build" / package_type
     version = args.version or read_product_version(source).replace("-autopsy.", "b")
     if not re.fullmatch(r"(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2}(?:(?:a|b|rc)\d+)?", version):
         raise RuntimeError(f"Invalid installer artifact version: {version}")
@@ -764,7 +842,7 @@ def main() -> None:
     else:
         store = common / "ceratops" / "artifacts"
         pool = store / "beta-stable" if git_paths[2] == "release/local" else store / "worktrees" / checkout
-        package = pool / "members" / "packages" / "windows-installer" / version / "native"
+        package = pool / "members" / "packages" / package_type / version / "native"
         if package.resolve() != package or package.is_symlink() or package.is_junction():
             raise RuntimeError(f"Unsafe installer destination: {package}")
     if scratch.resolve() != scratch or scratch.is_symlink() or scratch.is_junction():
@@ -773,13 +851,18 @@ def main() -> None:
     try:
         if args.artifact_directory is None and os.path.lexists(package):
             raise RuntimeError(f"Installer output already exists: {package}")
-        result = build_installer(source, scratch, args.inno_compiler, args.test_name,
-                                 artifact_directory=args.artifact_directory, artifact_version=version)
+        if windows:
+            result = build_installer(source, scratch, args.inno_compiler, args.test_name,
+                                     artifact_directory=args.artifact_directory, artifact_version=version)
+        else:
+            result = build_ubuntu_installer(source, scratch, version, args.artifact_directory)
         if args.receipt_file:
+            artifacts = [{"type": package_type, "path": result["filename"]}]
+            if windows:
+                artifacts.append({"type": "build-manifest", "path": MANIFEST_NAME.format(version=version)})
             report = {"schema": "ceratops-builder-output", "status": "passed",
                       "installationArtifactPath": result["filename"],
-                      "artifacts": [{"type": "windows-installer", "path": result["filename"]},
-                                    {"type": "build-manifest", "path": MANIFEST_NAME.format(version=version)}]}
+                      "artifacts": artifacts}
             args.receipt_file.write_text(json.dumps(report) + "\n", encoding="utf-8")
         else:
             package.parent.mkdir(parents=True, exist_ok=True)
@@ -803,5 +886,5 @@ if __name__ == "__main__":
     try:
         main()
     except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
-        print(f"Windows installer build failed: {error}", file=sys.stderr)
+        print(f"AuTopsy installer operation failed: {error}", file=sys.stderr)
         sys.exit(1)

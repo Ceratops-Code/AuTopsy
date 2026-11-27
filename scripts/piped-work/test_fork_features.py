@@ -1418,7 +1418,8 @@ def main():
     if args.list_native_cases:
         if set(sessions.NATIVE_CASES) & set(sessions.MODULE_REGISTERED_NATIVE_CASES) or len(sessions.NATIVE_CASES) != len(set(sessions.NATIVE_CASES)):
             parser.error("Native cases need different registration owners and unique central names.")
-        cases = (*sessions.NATIVE_CASES, *(sessions.RECORDING_CASES if os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE") else ()))
+        cases = (sessions.UBUNTU_NATIVE_CASES if sys.platform.startswith("linux") else
+                 (*sessions.NATIVE_CASES, *(sessions.RECORDING_CASES if os.environ.get("AUTOPSY_TEST_RECORDING_DEVICE") else ())))
         print(";".join(cases))
         return
     if args.case == "preview-soak":

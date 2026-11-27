@@ -118,7 +118,7 @@ SourceRange GetSourceRange(AudacityProject &project, Track *source)
 }
 std::string ReadSubtitle(const wxString &path)
 {
-   const std::filesystem::path native{path.ToStdWstring()};
+   const auto native = std::filesystem::u8path(path.ToStdString(wxConvUTF8));
    if (!std::filesystem::is_regular_file(native) || std::filesystem::file_size(native) > MaximumCaptionFileBytes)
       throw std::runtime_error("Choose a subtitle file smaller than eight MiB.");
    std::ifstream file(native, std::ios::binary);

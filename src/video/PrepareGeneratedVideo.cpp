@@ -169,10 +169,10 @@ PreparedGeneratedVideo PrepareGeneratedVideo(
       return VideoPreview::PrepareRenderedVideoMedia("static-picture:" + content.imagePath + ':' + content.title +
          ':' + Number(rate) + ':' + std::to_string(count), recipe, sources, window.duration,
          [&](const wxString &output) {
-            ScratchFile scratch{std::filesystem::path(output.ToStdWstring()).parent_path() / "_title.png"};
+            ScratchFile scratch{std::filesystem::u8path(output.ToStdString(wxConvUTF8)).parent_path() / "_title.png"};
             auto image = wxString::FromUTF8(content.imagePath);
             if (content.operation == Operation::Title) {
-               image = wxString(scratch.path.wstring()); SaveTitlePicture(content, width, height, image);
+               image = wxString(scratch.path.native()); SaveTitlePicture(content, width, height, image);
             }
             Run({"-v", "error", "-nostdin", "-n",
                "-i", image, "-vf", wxString::FromUTF8("trim=end_frame=1,loop=loop=-1:size=1:start=0,setpts=N/(" +
@@ -252,7 +252,7 @@ PreparedGeneratedVideo PrepareGeneratedVideo(
          end = chunk.firstFrame;
       }
    }
-         ScratchFile list{std::filesystem::path(destination.ToStdWstring()).parent_path() / "_concat.txt"};
+         ScratchFile list{std::filesystem::u8path(destination.ToStdString(wxConvUTF8)).parent_path() / "_concat.txt"};
          std::ofstream file(list.path, std::ios::binary); file << "ffconcat version 1.0\n";
          for (const auto &chunk : chunks) {
             auto path = Utf8(chunk->playbackPath); std::replace(path.begin(), path.end(), '\\', '/');
@@ -260,7 +260,7 @@ PreparedGeneratedVideo PrepareGeneratedVideo(
             file << "file '" << escaped << "'\n";
          }
          file.close(); if (!file) throw std::runtime_error("Cannot write the reverse picture input list.");
-         Run({"-v", "error", "-nostdin", "-n", "-f", "concat", "-safe", "0", "-i", wxString(list.path.wstring()),
+         Run({"-v", "error", "-nostdin", "-n", "-f", "concat", "-safe", "0", "-i", wxString(list.path.native()),
             "-an", "-map_metadata", "-1", "-c:v", "copy", "-frames:v", wxString::Format("%lld", count), destination}, parent);
       }, alpha ? VideoPreview::RenderedVideoKind::Transparent : VideoPreview::RenderedVideoKind::Ordinary);
    };

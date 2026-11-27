@@ -13,8 +13,8 @@ if(TARGET Audacity)
       add_test(NAME fork-track-groups COMMAND "${Python3_EXECUTABLE}"
          "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py"
          --executable "$<TARGET_FILE:Audacity>" --work-root "${CMAKE_BINARY_DIR}/_fork-tests"
-         --case track-groups --ffmpeg "${audacity_video_ffmpeg_runtime}/ffmpeg.exe"
-         --ffprobe "${audacity_video_ffmpeg_runtime}/ffprobe.exe")
+          --case track-groups --ffmpeg "$<TARGET_FILE_DIR:Audacity>/ffmpeg.exe"
+          --ffprobe "$<TARGET_FILE_DIR:Audacity>/ffprobe.exe")
       set_tests_properties(fork-track-groups PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
    endif()
 else()

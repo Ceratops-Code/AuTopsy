@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import build_video_installer as builder
 
 
@@ -674,6 +675,17 @@ class InstallerBuildTests(unittest.TestCase):
             self.assertEqual(report["exit"], 7)
             self.assertIn("out", report["stdout"])
             self.assertIn("err", report["stderr"])
+            native_report = root / "_native-failure.json"
+            native_report.write_text(json.dumps({"command": command, "exit_status": 9,
+                                                "stdout": "fixture output", "stderr": "native test failure"}))
+            test_report = root / "_command-failure.json"
+            test_report.write_text(json.dumps({"child_diagnostic_output": str(native_report)}))
+            for _ in range(2):
+                with self.assertRaises(RuntimeError):
+                    builder.run_command(command, root, diagnostics, child_failure=test_report)
+                failure = json.loads(diagnostics.read_text())
+                self.assertEqual(failure["exit"], 7)
+                self.assertEqual(failure["child_failures"][1]["stderr"], "native test failure")
 
     def test_release_lookup_accepts_only_expected_absence(self):
         with tempfile.TemporaryDirectory(prefix="_release-", dir=os.environ.get("AUTOPSY_TEST_TEMP_ROOT")) as temporary:

@@ -1237,6 +1237,10 @@ else()
    endif()
 
    # Create the desktop file
+   set(AUTOPSY_DESKTOP_ENVIRONMENT "env GDK_BACKEND=x11 UBUNTU_MENUPROXY=0")
+   if(autopsy_package_ubuntu)
+      set(AUTOPSY_DESKTOP_ENVIRONMENT "env UBUNTU_MENUPROXY=0")
+   endif()
    configure_file( audacity.desktop.in ${_INTDIR}/audacity.desktop )
 
    if(${_OPT}has_url_schemes_support)
@@ -1437,17 +1441,17 @@ else()
                FILES_MATCHING PATTERN "*.so*" )
 
       install( FILES "${_INTDIR}/audacity.desktop"
-               DESTINATION "${_DATADIR}/applications" )
+               DESTINATION "${_DATADIR}/applications" RENAME "${AUTOPSY_INSTALL_ID}.desktop" )
 
       if(${_OPT}has_url_schemes_support)
          install( FILES "${_INTDIR}/audacity-url-handler.desktop"
-                  DESTINATION "${_DATADIR}/applications" )
+                  DESTINATION "${_DATADIR}/applications" RENAME "${AUTOPSY_INSTALL_ID}-url-handler.desktop" )
       endif()
 
       install( FILES "${topdir}/LICENSE.txt" "${topdir}/README.md"
                DESTINATION "${_DATADIR}/doc/${AUDACITY_NAME}" )
       install( FILES "${_SRCDIR}/audacity.xml"
-               DESTINATION "${_DATADIR}/mime/packages" )
+               DESTINATION "${_DATADIR}/mime/packages" RENAME "${AUTOPSY_INSTALL_ID}.xml" )
 
       if( ${_OPT}has_crashreports )
          if( ${_OPT}crashreport_backend STREQUAL "crashpad" )
@@ -1473,7 +1477,7 @@ endforeach()
 set( GRAPH_EDGES "${GRAPH_EDGES}" PARENT_SCOPE )
 
 # Video decoding and the preview window are isolated from the audio engine.
-if(WIN32)
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
    add_subdirectory(video)
 endif()
 

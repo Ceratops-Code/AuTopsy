@@ -5,7 +5,7 @@ if(TARGET Audacity)
    target_sources(Audacity PRIVATE PlanCursorRecording.h PlanCursorRecording.cpp
       CreateCursorCapture.h CreateCursorCapture.cpp)
    target_sources(Audacity PRIVATE PlanVideoRecording.h PlanVideoRecording.cpp)
-   if(WIN32 AND audacity_has_video_preview)
+   if((WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND audacity_has_video_preview)
       target_sources(Audacity PRIVATE RecordVideoInput.h RecordVideoInput.cpp)
    endif()
    add_unit_test(NAME cursor-recording SOURCES ${_recording_tests})

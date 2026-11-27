@@ -68,8 +68,6 @@ class Profiles:
     base_host_profile_path = None
     options_profile_path = None
 
-    host_profile_paths = []
-
     def __init__(self, args):
         if not os.path.isdir(directories.profiles_dir):
             os.makedirs(directories.profiles_dir)
@@ -96,7 +94,8 @@ class Profiles:
         print('Generating options profile...')
         self.__create_options_profile(args, self.options_profile_path)
 
-        for build_type in ('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel'):
+        self.host_profile_paths = []
+        for build_type in dict.fromkeys(args.build_types or ('Release',)):
             profile_path = os.path.join(directories.profiles_dir, f'host-{build_type.lower()}.profile')
             if not os.path.isfile(profile_path):
                 print(f'Generating host-{build_type.lower()} profile...')
