@@ -36,6 +36,7 @@ class CheckGroup:
     name: str
     inputs: tuple[str, ...]
     target: str | None = None
+    host_platform: str | None = None
 
 
 COMMON_INPUTS = (
@@ -78,7 +79,8 @@ GROUPS = (
     CheckGroup("product-branding-core", (
         "libraries/lib-strings/ApplyProductBranding.*", "libraries/lib-strings/tests/TestProductBranding.cpp"),
         "product-branding-core-test"),
-    CheckGroup("fork-installer-build", ("scripts/build/windows/*.py", "win/Inno_Setup_Wizard/*")),
+    CheckGroup("fork-installer-build", ("scripts/build/windows/*.py", "win/Inno_Setup_Wizard/*"),
+        host_platform="win32"),
     CheckGroup("fork-display-policy", (
         "scripts/piped-work/test_fork_features.py", "scripts/piped-work/run_fork_test_harness.py",
         "scripts/piped-work/pipeclient.py")),
@@ -305,9 +307,10 @@ def select_groups(changed: list[str], all_checks: bool = False) -> tuple[list[Ch
                and not any(matches(path, group.inputs) for group in GROUPS)]
     if unknown and not all_checks:
         raise RuntimeError(f"No portable check owns {unknown!r}; declare inputs or choose --all explicitly.")
+    applicable_groups = [group for group in GROUPS if group.host_platform in (None, sys.platform)]
     if all_checks or any(matches(path, COMMON_INPUTS) for path in changed):
-        return list(GROUPS), native
-    return [group for group in GROUPS if any(matches(path, group.inputs) for path in changed)], native
+        return applicable_groups, native
+    return [group for group in applicable_groups if any(matches(path, group.inputs) for path in changed)], native
 
 
 def select_qualification_baseline(releases: list[dict[str, Any]], level: str) -> dict[str, Any] | None:

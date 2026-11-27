@@ -811,7 +811,15 @@ class SelectionTests(unittest.TestCase):
     def test_shared_headers_and_test_runtime_expand_only_declared_scope(self) -> None:
         self.assertEqual(self.names(["src/video/EditVideoTimeline.h"]),
                          {"video-playback", "video-edits", "video-composition", "video-captions"})
-        self.assertEqual(self.names(["scripts/uv.lock"]), {group.name for group in runner.GROUPS})
+        installer = "fork-installer-build"
+        shared_checks = {group.name for group in runner.GROUPS} - {installer}
+        for host, installer_checks in (("win32", {installer}), ("linux", set())):
+            with self.subTest(host=host), patch.object(runner.sys, "platform", host):
+                for _ in range(2):
+                    self.assertEqual(self.names(["scripts/build/windows/build_video_installer.py"]), installer_checks)
+                    self.assertEqual(self.names(["scripts/uv.lock"]), shared_checks | installer_checks)
+                    self.assertEqual({group.name for group in runner.select_groups([], all_checks=True)[0]},
+                                     shared_checks | installer_checks)
         self.assertEqual(self.names(["README.md", "docs/design.md"]), set())
 
     def test_runner_changes_select_its_own_tests_without_retesting_unchanged_models(self) -> None:

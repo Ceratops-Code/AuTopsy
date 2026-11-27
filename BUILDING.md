@@ -203,7 +203,7 @@ to configure AuTopsy.
    ```text
    $ cd Debug/bin
    $ mkdir "Portable Settings"
-   $ ./audacity
+   $ ./autopsy
    ```
 
 5. Installing AuTopsy
@@ -663,8 +663,8 @@ settings; selecting a package for publication does not schedule desktop tests.
 Every new installer runs `fork-fixtures` after compilation and before packaging,
 without opening AuTopsy. The reported build data records its result and source
 revision. Ceratops reuses accepted builds through its package receipts.
-Portable model and installer-producer tests run in the repository test operation;
-source-only CI does not require an already-built Windows application.
+The repository test operation runs shared model tests on both hosts and includes
+the installer-producer tests on Windows. The checks use source and fixtures.
 The package build operation declares CMake, CTest and the Windows Inno Setup
 compiler (`ISCC.exe`) alongside `uv`. `scripts/pyproject.toml` and `scripts/uv.lock`
 supply the pinned CMake/CTest environment through `uv`; the builder discovers ISCC on PATH or in the standard

@@ -97,11 +97,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
          -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" -p test_run_affected_tests.py)
       set_tests_properties(affected-test-selection PROPERTIES TIMEOUT 180
          ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_selection-tests")
-      add_test(NAME fork-installer-build COMMAND uv run --project
-         "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
-         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows" -p test_build_video_installer.py)
-      set_tests_properties(fork-installer-build PROPERTIES
-         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_installer-tests")
+       if(CMAKE_HOST_WIN32)
+          add_test(NAME fork-installer-build COMMAND uv run --project
+             "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" --locked python -m unittest discover
+             -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build/windows" -p test_build_video_installer.py)
+          set_tests_properties(fork-installer-build PROPERTIES
+             ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_installer-tests")
+       endif()
       add_test(NAME fork-display-policy COMMAND "${Python3_EXECUTABLE}"
          "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/piped-work/test_fork_features.py"
          --case display-policy)
@@ -251,11 +253,13 @@ if(TARGET video-playback-test)
          -s "${CMAKE_SOURCE_DIR}/scripts/piped-work" -p test_prepare_audacity_consumer.py)
       set_tests_properties(fork-audacity-consumer-cache PROPERTIES TIMEOUT 180
          ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_consumer-tests")
-      add_test(NAME fork-installer-build COMMAND uv run --project
-         "${CMAKE_SOURCE_DIR}/scripts" --locked python -m unittest discover
-         -s "${CMAKE_SOURCE_DIR}/scripts/build/windows" -p test_build_video_installer.py)
-      set_tests_properties(fork-installer-build PROPERTIES
-         ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_installer-tests")
+       if(CMAKE_HOST_WIN32)
+          add_test(NAME fork-installer-build COMMAND uv run --project
+             "${CMAKE_SOURCE_DIR}/scripts" --locked python -m unittest discover
+             -s "${CMAKE_SOURCE_DIR}/scripts/build/windows" -p test_build_video_installer.py)
+          set_tests_properties(fork-installer-build PROPERTIES
+             ENVIRONMENT "AUTOPSY_TEST_TEMP_ROOT=${CMAKE_BINARY_DIR}/_installer-tests")
+       endif()
        add_test(NAME fork-display-policy COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_SOURCE_DIR}/scripts/piped-work/test_fork_features.py" --case display-policy)
        add_test(NAME fork-worker-lifecycle COMMAND "${Python3_EXECUTABLE}"
