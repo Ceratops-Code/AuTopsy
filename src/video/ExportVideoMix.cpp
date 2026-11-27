@@ -1027,8 +1027,9 @@ bool EncodeVideoExport(const std::vector<fs::path> &inputs, const std::vector<bo
       }
       else {
          const auto encoderArguments = VideoEncoderArguments(settings);
-         const auto *encoder = avcodec_find_encoder_by_name(encoderArguments.at(1).c_str());
-         if (!encoder) throw std::runtime_error("The selected video encoder is unavailable.");
+         const auto &encoderName = encoderArguments.at(1);
+         const auto *encoder = avcodec_find_encoder_by_name(encoderName.c_str());
+         if (!encoder) throw std::runtime_error("FFmpeg encoder " + encoderName + " is unavailable.");
          pictureEncoder.reset(avcodec_alloc_context3(encoder));
          if (!pictureEncoder) throw std::runtime_error("FFmpeg could not allocate the video encoder.");
          pictureEncoder->width = av_buffersink_get_w(pictureSink);

@@ -252,6 +252,8 @@ class AudacityConan(ConanFile):
             ffmpeg.with_libx264 = True
             ffmpeg.with_libx265 = True
             ffmpeg.with_libsvtav1 = True
+            if self.settings.os in ("Windows", "Linux") and self.settings.arch == "x86_64":
+                ffmpeg.with_nvcodec = True
             # ConanCenter marks its GPL build nonredistributable when either
             # external AAC or TLS support is enabled. AuTopsy uses native AAC
             # and supplies local media paths and device inputs.
