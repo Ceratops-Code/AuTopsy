@@ -1379,6 +1379,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--work-root", type=Path)
+    parser.add_argument("--installed", action="store_true",
+                        help="Record acceptance for an installed app separately from a build.")
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--case", choices=(*sessions.NATIVE_CASES, *sessions.MODULE_REGISTERED_NATIVE_CASES,
                                              *sessions.RECORDING_CASES, "display-policy", "worker-lifecycle"))

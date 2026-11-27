@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 MANIFEST_NAME = "AuTopsy-{version}-build-manifest.json"
+WINDOWS_INSTALL_FLAGS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
 OWNER = "AuTopsy Windows video dependencies 1"
 _process_job: int | None = None
 SDK_INPUTS = {
@@ -458,6 +459,22 @@ def build_installer(source: Path, build: Path, inno: Path, native_tests: str | N
         raise RuntimeError("The installer filename differs from the embedded product version.")
     if sha256(installer) != descriptor["sha256"]:
         raise RuntimeError("The packaged installer differs from its declared identity.")
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_OS") == "Windows":
+        # This is a disposable GitHub desktop. Exercise the installed files,
+        # including DLL resolution, before the installer can be uploaded.
+        installed = Path(os.environ.get("ProgramW6432") or os.environ["ProgramFiles"]) / "AuTopsy"
+        if os.path.lexists(installed):
+            raise RuntimeError(f"The hosted Windows smoke test requires an unused install location: {installed}")
+        run_command([str(installer), *WINDOWS_INSTALL_FLAGS], source, diagnostics,
+                    operation="Installing the hosted Windows candidate", target=str(installed))
+        case = "video-export-timing"
+        output = run_command([sys.executable, str(source / "scripts/piped-work/test_fork_features.py"),
+                              "--case", case, "--executable", str(installed / "AuTopsy.exe"),
+                              "--work-root", str(build / "_fork-tests"), "--installed",
+                              "--ffmpeg", str(installed / "ffmpeg.exe"), "--ffprobe", str(installed / "ffprobe.exe")],
+                             source, diagnostics, operation=f"Installed Windows media check {case}")
+        checks.append({"name": f"installed-{case}", "result": "passed", "output": output,
+                       "source_revision": revision})
     final_revision = run_command(["git", "rev-parse", "HEAD"], source, diagnostics).strip()
     final_dirty = bool(run_command(["git", "status", "--porcelain", "--untracked-files=no"], source, diagnostics).strip())
     final_changes = run_command(["git", "diff", "--binary", "HEAD", "--"], source, diagnostics)
@@ -801,7 +818,7 @@ def main() -> None:
     if args.install_accepted:
         if accepted_installer is None:
             parser.error("Installation requires the accepted package.")
-        command = [str(accepted_installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+        command = [str(accepted_installer), *WINDOWS_INSTALL_FLAGS]
         installed = subprocess.run(command, cwd=args.source_dir, capture_output=True, text=True, errors="replace")
         if installed.returncode:
             raise RuntimeError(f"Installing {command!r} exited {installed.returncode}; "

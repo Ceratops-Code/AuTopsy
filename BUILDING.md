@@ -226,7 +226,7 @@ The application appears as AuTopsy in the desktop menu. The `autopsy-editor` pac
 
 The SDLC declares the `ubuntu-installer` alongside `windows-installer`. Both use `scripts/build/build_video_installer.py`. Each build uses a disposable `_installer-build` directory for its platform and reports the finished package to Ceratops through the same receipt format. The finished `.deb` goes into the `ubuntu-installer` package slot in the shared Git directory. GitHub uploads the checked package for 14 days.
 
-The Ubuntu job installs the `.deb` and opens that installed editor on a private virtual display. It imports real media files and checks exported MP4 and MKV streams, audio and picture timing, variable frame rates, and the supported encoder presets. On both platforms video export calls Conan's FFmpeg libraries directly. The installers also include the FFmpeg and FFprobe commands used for media preparation, relinking, recording, and the test fixtures.
+The Ubuntu job installs the `.deb` and opens that editor on a private virtual display. It imports real media files and checks exported MP4 and MKV streams, audio and picture timing, variable frame rates, and the supported encoder presets. The hosted Windows installer job also installs its candidate and runs the same audio-import and video-export timing check before uploading the installer. On both platforms video export calls Conan's FFmpeg libraries directly. The installers also include the FFmpeg and FFprobe commands used for media preparation, relinking, recording, and the test fixtures.
 
 ## Advanced
 

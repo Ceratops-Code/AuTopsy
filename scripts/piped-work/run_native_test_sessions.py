@@ -94,6 +94,8 @@ def native_test_inputs(args, executable, module, display, case_api):
                       for name in ("ffmpeg", "ffprobe") if (value := getattr(args, name))},
         },
     }
+    if getattr(args, "installed", False):
+        inputs["execution_scope"]["installed_executable"] = str(executable)
     if args.case in ("video-preview-close", "video-audio-parity", "video-audio-join-links", "video-split-edges", "video-linked-split-edges", "video-clip-edits",
                      "video-linked-clip-edits", "video-compound-render", "video-transport",
                      "video-visibility", "video-clip-mute", "video-speed", "video-speed-storage",
