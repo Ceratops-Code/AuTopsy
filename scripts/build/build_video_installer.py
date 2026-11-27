@@ -704,7 +704,9 @@ def build_ubuntu_installer(source: Path, build: Path, version: str, artifact_dir
                  "-Daudacity_use_ffmpeg=loaded", "-Daudacity_bundle_gplv3=ON", "-Dautopsy_package_ubuntu=ON",
                  "-Dautopsy_debian_version=" + deb_version, "-DPython3_EXECUTABLE=" + sys.executable],
                 source, diagnostics, operation="Ubuntu installer configuration")
-    run_command(["cmake", "--build", str(build), "--parallel", "2"], source, diagnostics,
+    # Keep compiling independent files so one hosted run exposes each
+    # compiler error. A nonzero result still blocks packaging.
+    run_command(["cmake", "--build", str(build), "--parallel", "2", "--", "-k", "0"], source, diagnostics,
                 operation="Ubuntu editor build")
     run_command(["cpack", "--config", str(build / "CPackConfig.cmake"), "-B", str(package)],
                 source, diagnostics, operation="Ubuntu installer packaging")

@@ -409,7 +409,7 @@ public:
    static const ComponentInterfaceSymbol Symbol;
    ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
    TranslatableString GetDescription() const override { return XO("Group selected tracks without mixing their audio."); }
-   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) { visitor.Define(mName, wxT("Name"), wxT("Track Group")); return true; }
+   template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) { visitor.Define(mName, wxT("Name"), wxString{"Track Group"}); return true; }
    bool VisitSettings(SettingsVisitor &visitor) override { return Settings(visitor); }
    bool VisitSettings(ConstSettingsVisitor &visitor) override { return Settings(visitor); }
    bool Apply(const CommandContext &context) override {
@@ -427,7 +427,7 @@ public:
    ComponentInterfaceSymbol GetSymbol() const override { return Symbol; }
    TranslatableString GetDescription() const override { return XO("Set track group visibility or ungroup its tracks."); }
    template<bool Const> bool Settings(SettingsVisitorBase<Const> &visitor) {
-      visitor.Define(mId, wxT("Id"), wxT(""));
+      visitor.Define(mId, wxT("Id"), wxString{});
       visitor.Define(mCollapsed, wxT("Collapsed"), false); visitor.Define(mRemove, wxT("Ungroup"), false); return true;
    }
    bool VisitSettings(SettingsVisitor &visitor) override { return Settings(visitor); }
