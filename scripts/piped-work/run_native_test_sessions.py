@@ -724,7 +724,9 @@ def execute_case(args, root, executable, module, display, kernel, pipe, case_api
             capture_configuration = (f"[AudioIO]\nHost=MME\nRecordingDevice={device['name']}\n"
                 "RecordChannels=1\nLatencyCorrection=0\nSWPlaythrough=0\nDuplex=0\n")
         (profile / "autopsy.cfg").write_text(
-            f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
+            # A private Windows profile must leave file associations alone.
+            ("WantAssociateFiles=0\n" if windows else "")
+            + f"[Version]\nMajor={version_numbers[0]}\nMinor={version_numbers[1]}\nMicro={version_numbers[2]}\n"
             f"[Directories]\nTempDir={audio.as_posix()}\n[GUI]\nShowSplashScreen={int(args.case == 'branding')}\n"
             "[FileFormats]\nMusicFileImportSettingChoice=No\n[Module]\nmod-script-pipe=1\n"
             f"[ModuleDateTime]\nmod-script-pipe={stamp}\n" + placement + capture_configuration,
