@@ -604,7 +604,7 @@ with any distributed build, alongside AuTopsy's existing license material.
 
 Run the same repository-owned builder used by the GitHub-hosted Windows job:
 
-    uv run --project scripts --locked python scripts/build/windows/build_video_installer.py --build-dir .build/_windows-installer
+    uv run --project scripts --locked python scripts/build/windows/build_video_installer.py
 
 Install Visual Studio 2022's C++ workload and Inno Setup 6 first. Use
 `--inno-compiler` for a nondefault compiler location. The builder uses CMake's
@@ -613,40 +613,43 @@ dependencies, including the Windows process-tree wrapper, come from the locked
 `scripts` environment. Repository shell checks also use its pinned
 `shellcheck-py` executable, so a separate ShellCheck installation is unnecessary.
 
-The builder owns `_video-dependencies` under its selected build directory:
-one pinned archive and current SDK per component, private extraction/download
-siblings, and one identity record per SDK. Startup discards only abandoned
-owned staging; successful publication removes staging immediately. Required
-SDK filenames are kept because native linkers and encoders require them.
-A live-worker lock protects cleanup. A Windows job terminates remaining
-extractor/compiler children when their worker exits, including abrupt exits.
+The builder stages CMake outputs, SDK downloads and the installer under
+`<repo-parent>/tmp/<repo>/<checkout>/_installer-build/windows-installer`.
+Each checkout uses its Git worktree name, with `primary` for the main checkout.
+Assume one Windows installer build at a time per checkout. The builder deletes
+its scratch tree on success or failure and clears abandoned scratch on the next
+build. A Windows job stops compiler children when their worker exits.
 
-The packager publishes `package/_installer-x64.json` atomically, naming the
-exact installer and its SHA-256. The builder consumes that descriptor and writes
-one current `package/_build-manifest.json` with the source revision, product
-version, unsigned status, installer hash and pinned dependency identities.
-`resources/autopsy-release.json` supplies the app and installer version; installer
-filenames contain that full identity, and publication refuses a different tag.
-Failure replaces
-`_build_command_failure.json` with the exact invocation, exit and both output
-streams; success removes it. Pending record files are removed on the next call.
-The existing per-architecture installer retention remains current plus two
-predecessors. Building never installs or publishes an application.
+Direct builds publish the EXE to the Git common directory under
+`ceratops/artifacts/worktrees/<checkout>/members/packages/windows-installer/<version>/native`.
+On `release/local`, the pool is `beta-stable/members/packages`.
+The package version maps AuTopsy previews to standard beta versions, such as
+`3.7.10b2` for `3.7.10-autopsy.2`. The installer retains the public version from
+`resources/autopsy-release.json`. If the destination already exists, the build
+fails before compiling and leaves the existing artifact intact. Ceratops owns
+retention when it runs. The builder returns the artifact directory, filename,
+SHA-256 and build details as one JSON document on stdout. Failures report
+child command details on stderr before scratch is removed.
 
 GitHub's `Validate` workflow builds on `windows-2022` when manually
 dispatched with **Build the unsigned Windows installer after the checks**
 enabled (the default), or when a pull request has the `build-windows-installer` label.
 Disable that input for a checks-only manual run, for example
 `gh workflow run validate.yml --ref release/local -f build_installer=false`.
-Its repository checks precede the installer job. After building, it runs the
-same focused native project-compatibility case used locally, against pinned
-portable Audacity consumers. The uploaded unsigned installer and source manifest
-are retained for 14 days; failure details for 7 days.
+Its repository checks precede the installer job. The builder runs its native
+project-compatibility case before packaging, against pinned portable Audacity
+consumers. The workflow saves the build’s JSON stdout for upload with its
+unsigned installer. Both files are retained for 14 days.
 Signing is a separate service approval and is not claimed by this job.
 
 The `deliverables.packages.windows-installer.actions.publish` operation consumes
-the existing accepted installer and `_build-manifest.json` from
-`AUTOPSY_INSTALLER_BUILD_DIR`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
+the accepted installer and `AuTopsy-<version>-build-manifest.json` from Git's common
+`ceratops/artifacts/` store. The Ceratops package build writes both files to
+`{artifact_directory}` and reports their names to `{build_receipt}`.
+Ceratops commits the build receipt and check summary under `.ceratops/build/`.
+App installation runs
+the accepted executable. The public preview version comes from
+`resources/autopsy-release.json`. Set `AUTOPSY_RELEASE_TAG` and `AUTOPSY_RELEASE_NOTES`
 to select the preview tag and a local UTF-8 notes file. The tag names the original
 build revision, including when later test/documentation commits have advanced
 main. The operation creates a draft only when needed, uploads just those two
@@ -657,26 +660,18 @@ acceptance and does not compile or install an application.
 The installer directory setting is independent of the native test-session
 settings; selecting a package for publication does not schedule desktop tests.
 
-Every new installer build runs `fork-fixtures` after compilation and before
-packaging, without opening AuTopsy. The build manifest records its passing result
-and source revision. Repeated builds reuse that accepted installer only when the
-clean source, dependency inputs and installer integrity still match the receipt.
-A descendant commit containing only CI, check or unbundled documentation changes
-also reuses that original installer when its compiled-input record still matches
-the current product files, tools and build settings. `README.md` remains a package
-input. Reuse keeps the original manifest and check identities without configuring,
-compiling, running desktop cases or repackaging. An explicit native test selection
-still requests its checks; missing provenance or changed product inputs requires
-the normal build path.
+Every new installer runs `fork-fixtures` after compilation and before packaging,
+without opening AuTopsy. The reported build data records its result and source
+revision. Ceratops reuses accepted builds through its package receipts.
 Portable model and installer-producer tests run in the repository test operation;
 source-only CI does not require an already-built Windows application.
 The package build operation declares CMake, CTest and the Windows Inno Setup
 compiler (`ISCC.exe`) alongside `uv`. `scripts/pyproject.toml` and `scripts/uv.lock`
 supply the pinned CMake/CTest environment through `uv`; the builder discovers ISCC on PATH or in the standard
 per-user and machine-wide Inno Setup 6 locations. `AUTOPSY_INNO_COMPILER` selects
-an explicit compiler, while `AUTOPSY_INSTALLER_BUILD_DIR` selects the task-owned
-build directory (default `.build/_windows-installer`). The command-line options
-`--inno-compiler` and `--build-dir` override those defaults for direct calls.
+an explicit compiler, and `--inno-compiler` overrides this setting. The separate
+test-only and preview publication modes accept `--build-dir` to select an
+existing build and recognize the `AUTOPSY_INSTALLER_BUILD_DIR` default.
 Both application and portable C++ tests use the single Catch2 3.16.1 pin in
 `cmake-proxies/cmake-modules/AudacityTesting.cmake`, with Catch2's compiled main.
 Setting both `AUTOPSY_VIDEO_BUILD_DIR` and `AUTOPSY_VIDEO_TEST_NAME` selects only
@@ -739,14 +734,13 @@ and original test projects remain in the existing bounded per-case workspace.
 
 For an explicit separate media-check session, `AUTOPSY_VIDEO_BUILD_DIR` selects
 an existing native build, defaulting to
-`.build/_windows-installer`. For a separate desktop test session,
+`build/_windows-installer`. For a separate desktop test session,
 `AUTOPSY_VIDEO_TEST_NAME` selects a CTest case such as `^fork-media$`; empty
 selections fail. The same builder's `--test-existing-build`, `--build-dir` and
 `--test-name` options expose those inputs directly. Test child failures own one
 current `_test_command_failure.json` beside the build; success removes it and
 startup discards its abandoned pending sibling.
-The application's install operation takes `installer_path` from the accepted build
-manifest and runs that installer silently. It installs into Program Files/AuTopsy;
+The application's install operation receives the accepted executable from Ceratops and runs it silently. It installs into Program Files/AuTopsy;
 close the application first. Deployment never copies a source/build tree.
 The media case covers linked video/audio movement and trim/split behavior,
 saved clip flags, relinking, source frame stepping and modern software exports.
@@ -823,7 +817,7 @@ GUI work with the original Windows error.
 An explicitly scoped native session runs only its selected compiled host cases;
 it never records portable passes against core binaries that session did not build.
 
-The runner owns `.build/_core` and `.build/_test-results`. Immutable results retain
+The runner owns `build/_core` and `build/_test-results`. Immutable results retain
 their original IDs and source/test/fixture/lock/executable/runtime/command inputs.
 Matching passing results can be reused unless a newer applicable failure exists;
 source changes during compilation or execution cannot earn a pass. At startup and
@@ -838,7 +832,7 @@ Later test changes do not rebuild or revoke an unchanged accepted installer.
 
 Failed-check responses contain only failed names, short causes, result identities
 and paths to their complete existing receipts. Command-level failures use one
-current `.build/_test-results/_command-failure.json`, written atomically under the
+current `build/_test-results/_command-failure.json`, written atomically under the
 same owner lock; the next successful command phase removes it. A native child
 report is referenced rather than copied into another response. If writing the
 report fails, the response preserves the original invocation, exit and both

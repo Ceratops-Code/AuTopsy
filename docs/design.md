@@ -1237,9 +1237,9 @@ user's responsibility; the product must not delete them to repair a cache.
 | Selected portable project folder | `CollectMediaFiles.cpp`: completed native project, original media copies and `_collection.txt` integrity manifest | Each selected destination is one user-owned archive; repeated matching requests leave it intact; changed/foreign contents are refused |
 | Sibling `_<name>.collecting` and `_<name>.collection.lock` | Collector: one current unpublished archive and exclusive Windows handle | Startup of a fresh collection removes only marked orphaned staging; success/failure removes staging; process exit closes/deletes its lock; pre-existing foreign locks are refused |
 | `_autopsy-video-export-*` beside chosen output | `ExportVideoMix.cpp`: owner marker, mix, filter instructions and pending result | Startup and each export remove abandoned owned work; live owner lock prevents deletion; success/cancel removes staging; one atomic same-volume publication |
-| `.build/_core` | CMake/CTest: portable checks and generated executables | Updated in place on each normal test call; disposable build cache, not an install or product version |
-| `.build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
-| Installer build `package` | `build_video_installer.py`: completed installer and build manifest | Deterministic builder retains its accepted matching output, cleans pending owned build work; a new candidate receives its own content identity |
+| `build/_core` | CMake/CTest: portable checks and generated executables | Updated in place on each normal test call; disposable build cache, not an install or product version |
+| `build/_test-results` | `run_affected_tests.py`: immutable receipts grouped by named check identity | Startup and each publication keep at most three receipts per check; OS lock protects a live worker, pending files cleaned under that lock; one persistent lock file, unrelated files untouched |
+| Windows installer | `build_video_installer.py` writes the executable and manifest to the supplied artifact directory. Standalone CMake callers use their package directory. | Ceratops retains the accepted files in Git’s common artifact store and commits the receipt and check summary under `.ceratops/build/`. Installation and publication use those files. |
 | Test work roots | `test_fork_features.py`: immutable case receipts; `run_native_test_sessions.py`: private app/profile and scenario outputs; `run_audacity_consumer.py`: stock process trees and scratch | Owner-scoped startup/final cleanup; never kill unrelated or installed instances; one app log tail of at most two MiB per scenario; fresh case work replaces previous diagnostics |
 | Test work root `_generated-media` | `prepare_test_media.py`: neutral fixtures and completed caption weights by recipe/tool or speech-worker identity | Current plus two preceding groups per purpose; at most sixteen files, 512 MiB each, 1.5 GiB per group; entry/publication prune groups, incomplete staging is removed, copied inputs cannot mutate the cache |
 | Failure diagnostic payloads, target lifecycle | Each operation's existing owner: evidence for a named unresolved question | Default: persist none; when needed, one unresolved report per operation/target, seven-day expiry, declared finite byte/group limits; matching success removes obsolete failure payloads |
@@ -1251,7 +1251,7 @@ explicit overwrite; they are not cache versions. Operational logs never become
 execution progress. New processes use current state rather than replaying logs.
 
 The affected-test runner uses one atomic current command-failure report under
-`.build/_test-results`, separate from immutable named-check receipts. Public
+`build/_test-results`, separate from immutable named-check receipts. Public
 failures carry short causes and report paths. Native child evidence is referenced
 without copying its streams into another response. Successful completion clears
 the command report; interrupted pending files are cleared under the owner lock.
@@ -1511,7 +1511,7 @@ result, cache publication/copy and cleanup cases; `native-test-results` owns the
 separate immutable-receipt cases. New runner checks can use a marked private
 released executable through `AUTOPSY_TEST_EXECUTABLE` plus the explicit test
 selector. This bypasses compilation and installation and stores its results in
-`.build/_native-runtime-tests`; it cannot attribute portable source passes to
+`build/_native-runtime-tests`; it cannot attribute portable source passes to
 that released binary. The extraction caller removes the private runtime after
 its checks. Generated models retain their application-required filenames, while
 all cache groups and unpublished copies use private underscored names.

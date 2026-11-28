@@ -75,7 +75,7 @@ retirement, interruption, bounded logs and cache publication/copy/cleanup.
 For new runner checks of an unchanged release, SDLC also accepts
 AUTOPSY_TEST_EXECUTABLE and AUTOPSY_VIDEO_TEST_NAME. The executable must be a
 private extracted payload with _test_runtime_owner containing
-"AuTopsy private test runtime 1". Results belong to .build/_native-runtime-tests;
+"AuTopsy private test runtime 1". Results belong to build/_native-runtime-tests;
 this scope never builds or installs an application. The extraction caller owns
 and removes that payload. Ordinary compiled-build checks continue using
 AUTOPSY_VIDEO_BUILD_DIR and AUTOPSY_VIDEO_TEST_NAME.

@@ -1,4 +1,8 @@
-"""Focused process reuse, empty-project, fixture and interruption contracts."""
+"""Focused process reuse, empty-project, fixture and interruption contracts.
+
+Environment fixtures replace Python's mapping without changing inherited process
+settings; cleanup assertions cover empty values and interrupted calls.
+"""
 from __future__ import annotations
 
 import ctypes
@@ -142,13 +146,14 @@ class NativeSessionTests(OwnedTestRoot):
         self.assertEqual([row[2]["case"] for row in native.read_behavior_results(self.root)], ["video-selection"])
 
     def test_reset_requires_new_empty_history_one_project_and_known_preferences(self):
+        self.addCleanup(self.assertEqual, os.environ, dict(os.environ))
         def reply(command, success=True):
             if command.startswith("GetPreference"):
                 return ("No" if "MusicFile" in command else "0") + "\nBatchCommand finished: OK"
             return "BatchCommand finished: OK"
 
         client = SimpleNamespace(send=Mock(side_effect=reply), data=Mock(return_value=[]))
-        with patch.dict(os.environ, AUTOPSY_OWNED_APP_PID="42"), \
+        with patch.object(os, "environ", {**os.environ, 'AUTOPSY_OWNED_APP_PID': "42"}), \
                 patch.object(sessions, "owned_project_windows", return_value=[11]), \
                 patch.object(sessions, "read_history_availability", return_value={"Undo": False, "Redo": False}) as history:
             for _ in range(2):
@@ -167,7 +172,7 @@ class NativeSessionTests(OwnedTestRoot):
             client.send.side_effect = lambda *_args, **_kw: "wrong value"
             with self.assertRaisesRegex(RuntimeError, "preference"):
                 sessions.require_empty_project(client)
-        with patch.dict(os.environ, AUTOPSY_OWNED_APP_PID="42"), \
+        with patch.object(os, "environ", {**os.environ, 'AUTOPSY_OWNED_APP_PID': "42"}), \
                 patch.object(sessions, "owned_project_windows", return_value=[11, 12]), \
                 self.assertRaisesRegex(RuntimeError, "exactly one"):
             sessions.require_empty_project(client)

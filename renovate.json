@@ -6,5 +6,8 @@
     "scripts/package-lock.json",
     "scripts/pyproject.toml",
     "scripts/uv.lock"
+  ],
+  "extends": [
+    "github>Ceratops-Code/renovate-config:org-inherited-config"
   ]
 }
